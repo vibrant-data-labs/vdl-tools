@@ -179,6 +179,7 @@ def expand_search_term_round(
 def expand_search_term(
     topic,
     search_term,
+    prompt_str=None,
     use_cached_result=True,
     max_tokens=10000,
     model="gpt-4.1-mini",
@@ -194,6 +195,8 @@ def expand_search_term(
         The overall topic/domain for the search term expansion
     search_term : str
         The initial search term to expand
+    prompt_str : str, optional
+        The prompt to use for the search term expansion, by default None
     use_cached_result : bool, optional
         Whether to use cached results if available, by default True
     max_tokens : int, optional
@@ -223,7 +226,12 @@ def expand_search_term(
     - Ratio of new terms falls below stopping_threshold
     """
     with get_session() as session:
-        search_term_expansion = SearchTermExpansion(session, topic, model=model)
+        search_term_expansion = SearchTermExpansion(
+            session,
+            topic,
+            prompt_str=prompt_str,
+            model=model
+        )
 
         n_rounds = 0
         total_terms = []
@@ -260,9 +268,23 @@ def expand_search_term(
 if __name__ == "__main__":
     from vdl_tools.shared_tools.database_cache.database_utils import get_session
 
+    # How it works with the default prompt
     terms = expand_search_term(
-        "climate change and health",
-        "asthma",
+        topic="climate change and health",
+        search_term="asthma",
+        use_cached_result=True,
+        max_rounds=20,
+        stopping_threshold=.1,
+        model="gpt-4.1",
+        temperature=0.5,
+    )
+
+
+    # How it works with a specific prompt
+    terms = expand_search_term(
+        prompt_str="Give me related terms to the search term you will see.",
+        topic="climate change and health",
+        search_term="asthma",
         use_cached_result=True,
         max_rounds=20,
         stopping_threshold=.1,
