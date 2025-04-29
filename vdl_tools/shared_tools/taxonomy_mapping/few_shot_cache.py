@@ -7,7 +7,7 @@ from openai import OpenAI, pydantic_function_tool, APIConnectionError
 from pydantic import BaseModel, field_validator
 from typing import Literal, Optional
 
-from vdl_tools.shared_tools.database_cache.models.prompt import PromptResponse
+from vdl_tools.shared_tools.database_cache.database_models.prompt import PromptResponse
 from vdl_tools.shared_tools.openai.openai_api_utils import CLIENT
 from vdl_tools.shared_tools.openai.openai_constants import MODEL_DATA
 from vdl_tools.shared_tools.openai.prompt_response_cache_instructor import InstructorPRC

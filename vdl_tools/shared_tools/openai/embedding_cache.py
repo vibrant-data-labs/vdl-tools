@@ -5,7 +5,7 @@ from more_itertools import chunked
 import numpy as np
 from sqlalchemy.orm import Session
 
-from vdl_tools.shared_tools.database_cache.models.embedding import Embedding
+from vdl_tools.shared_tools.database_cache.database_models.embedding import Embedding
 from vdl_tools.shared_tools.openai.openai_api_utils import get_embedding_response
 from vdl_tools.shared_tools.tools.logger import logger
 

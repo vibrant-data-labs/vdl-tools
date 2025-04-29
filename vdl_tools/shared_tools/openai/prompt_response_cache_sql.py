@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor as ThreadPool
 from sqlalchemy import select, tuple_
 from more_itertools import chunked
 
-from vdl_tools.shared_tools.database_cache.models.prompt import Prompt, PromptResponse
+from vdl_tools.shared_tools.database_cache.database_models.prompt import Prompt, PromptResponse
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 from vdl_tools.shared_tools.openai.openai_api_utils import get_completion
 from vdl_tools.shared_tools.tools.logger import logger
