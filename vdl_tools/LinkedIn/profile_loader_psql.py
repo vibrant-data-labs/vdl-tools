@@ -2,7 +2,7 @@ import json
 
 from more_itertools import chunked
 import pandas as pd
-from vdl_tools.shared_tools.database_cache.models.linkedin_people import LinkedInPerson
+from vdl_tools.shared_tools.database_cache.database_models.linkedin_people import LinkedInPerson
 from vdl_tools.shared_tools.tools.logger import logger
 
 import vdl_tools.linkedin.handlers.coresignal_query as cs_query

@@ -6,7 +6,7 @@ from sqlalchemy import pool
 from alembic import context
 
 
-from vdl_tools.shared_tools.database_cache.models.base import Base
+from vdl_tools.shared_tools.database_cache.database_models.base import Base
 from vdl_tools.shared_tools.database_cache.database_utils import create_engine_from_cfg, get_url
 
 
