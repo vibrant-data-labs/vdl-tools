@@ -129,7 +129,8 @@ def get_text_for_entities(n_tags, entities_texts):
         3. Keep it concise: when possible, avoid phrases longer than two words (e.g., prefer "immersive learning" over "immersive 
         learning experiences", "personalized learning" over "personalized learning experiences", "holistic approaches" over 
         "holistic educational approaches").
-        4. Avoid overly generic terms unless they are critical to the topic.
+        4. Focus on terms that describe *what* the entity does, not *how* they do it. 
+        5. Avoid overly generic terms like "sustainability" or "innovation" unless they are critical to the topic.
         5. Focus on terms that someone might use to search for this type of content online.
 
         Your goal is to provide keywords and phrases that accurately represent the collective content, highlighting the key 
@@ -185,7 +186,9 @@ def get_short_sentence(entities_texts, subject):
     # Steps
     1. Analyze the provided descriptions to identify their shared characteristics.
     2. Summarize these characteristics into a short phrase or up to two very brief phrases. Keep the title under 12 words total.
-    3. Avoid filler words like "empowering", "enhancing," "commitment to," "through philanthropic support," etc. Focus on the essential theme.
+    3. Avoid filler words like "innovative", "innovation", "empowering", "enhancing," "commitment to," "through philanthropic support," etc. Focus on the essential theme.
+    4. Focus on terms that describe *what* the organizations do, not *how* they do it.
+    5. Avoid overly generic terms like "sustainability" or "innovation" unless they are critical to the topic.
 
     # Output Format
     A single, concise phrase or up to two short, clear phrases. 
@@ -218,7 +221,7 @@ def get_one_sentence(entities_texts, subject):
     Examine the provided organization descriptions, focusing on their shared purpose or 
     function in the {subject} sector. Summarize these common characteristics in one or two concise sentences, 
     using clear, specific language that avoids relying on overused words 
-    (e.g., 'empowering' or 'community engagement'). Highlight how each organization addresses 
+    (e.g.,'innovation', 'innovative', 'empowering' or 'community engagement'). Highlight how each organization addresses 
     the needs in {subject}, including the methods, audiences, or fundamental goals they share.
 
     # Steps
