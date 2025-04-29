@@ -15,7 +15,7 @@ class SearchTermExpansionResponse(BaseModel):
 
 
 
-PREAMBLE = """
+PROMPT_TEMPLATE = """
 You are a helpful assistant that expands search terms into a list of related search terms.
 I'm going to give you a search term and you will return a list of related search terms.
 
@@ -84,14 +84,16 @@ class SearchTermExpansion(InstructorPRC):
         self,
         session,
         topic,
+        prompt_str=None,
         response_model=SearchTermExpansionResponse,
         prompt_name="search_term_expansion",
         model="gpt-4.1-mini",
     ):
-        preamble = PREAMBLE % topic
+        if not prompt_str:
+            prompt_str = PROMPT_TEMPLATE % topic
         super().__init__(
             session=session,
-            prompt_str=preamble,
+            prompt_str=prompt_str,
             response_model=response_model,
             prompt_name=prompt_name,
             model=model,
