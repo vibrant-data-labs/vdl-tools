@@ -12,7 +12,7 @@ import vdl_tools.scrape_enrich.scraper.page_scraper as ps
 import vdl_tools.scrape_enrich.scraper.website_processor as wp
 from vdl_tools.shared_tools.web_summarization.make_page_text import make_group_text, MIN_TEXT_LENGTH
 from vdl_tools.shared_tools.tools.logger import logger
-from vdl_tools.shared_tools.database_cache.models.web_scraping import WebPagesScraped, WebPagesParsed
+from vdl_tools.shared_tools.database_cache.database_models.web_scraping import WebPagesScraped, WebPagesParsed
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 from vdl_tools.shared_tools.tools.text_cleaning import clean_scraped_text
 

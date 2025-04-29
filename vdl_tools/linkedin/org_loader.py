@@ -4,7 +4,7 @@ import urllib
 from more_itertools import chunked
 import pandas as pd
 from vdl_tools.scrape_enrich.scraper.scrape_websites import extract_website_name
-from vdl_tools.shared_tools.database_cache.models.linkedin_orgs import LinkedInOrganization
+from vdl_tools.shared_tools.database_cache.database_models.linkedin_orgs import LinkedInOrganization
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 from vdl_tools.shared_tools.tools.logger import logger as log
 from vdl_tools.shared_tools.tools.text_similarity import similar, jaccard_similarity
