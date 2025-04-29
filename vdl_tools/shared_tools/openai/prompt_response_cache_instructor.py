@@ -4,7 +4,7 @@ import logging
 import instructor
 from openai import OpenAI
 
-from vdl_tools.shared_tools.database_cache.models.prompt import PromptResponse
+from vdl_tools.shared_tools.database_cache.database_models.prompt import PromptResponse
 from vdl_tools.shared_tools.openai.prompt_response_cache_sql import PromptResponseCacheSQL
 from vdl_tools.shared_tools.openai.openai_constants import MODEL_DATA
 from vdl_tools.shared_tools.tools.logger import logger

@@ -7,7 +7,7 @@ from sqlalchemy_utils import generic_repr
 
 from sqlalchemy.dialects.postgresql import ARRAY
 
-from vdl_tools.shared_tools.database_cache.models.base import BaseMixin
+from vdl_tools.shared_tools.database_cache.database_models.base import BaseMixin
 
 @generic_repr
 class LinkedInOrganization(BaseMixin):

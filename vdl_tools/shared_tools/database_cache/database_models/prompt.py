@@ -10,7 +10,7 @@ from sqlalchemy import (
 from sqlalchemy_utils import generic_repr
 from sqlalchemy.dialects.postgresql import JSONB
 
-from vdl_tools.shared_tools.database_cache.models.base import BaseMixin
+from vdl_tools.shared_tools.database_cache.database_models.base import BaseMixin
 
 
 PROMPT_RESPONSE_NAMESPACE_TEXT = "PROMPT_RESPONSE_NAMESPACE_TEXT"

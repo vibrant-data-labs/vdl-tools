@@ -6,7 +6,7 @@ from sqlalchemy.orm.session import sessionmaker
 from sqlalchemy_utils import create_database, database_exists, drop_database
 
 from vdl_tools.shared_tools.tools.config_utils import get_configuration
-from vdl_tools.shared_tools.database_cache.models.base import Base
+from vdl_tools.shared_tools.database_cache.database_models.base import Base
 
 from vdl_tools.shared_tools.tools.config_utils import get_configuration
 config = get_configuration()
