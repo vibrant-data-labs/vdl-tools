@@ -1,0 +1,24 @@
+.idea
+.vscode
+.spyproject
+.cache
+.venv/
+dist/
+.mypy_cache
+*.whl
+*.tar.gz
+__pycache__
+.pytest_cache
+data_out
+*.egg-info
+shared-tools/.env
+shared-tools/shared_tools/models
+config.ini
+.DS_Store
+test_scrape
+tw_adaptation_2024/data
+# tag2network sample files
+tag2network/tag2network/Data/Example/Example*
+shared-tools/shared_tools/baseten_models/tw_adaptation_2024/data/model
+google_sheets_token.pickle
+models/

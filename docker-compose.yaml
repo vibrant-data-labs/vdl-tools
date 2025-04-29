@@ -1,0 +1,19 @@
+version: '3'
+services:
+
+  postgres:
+    container_name: vdl-postgres
+    image: postgres:15.1-alpine
+    ports:
+      - "5555:5432"
+    volumes:
+      - ~/vdl-data/postgres:/var/lib/postgresql/data
+      - ./pg_hba.conf:/var/lib/foo/pg_hba.conf
+    env_file: dockerenv.env
+    restart: on-failure
+    networks:
+      - vdl-net
+    command: ["postgres", "-c", "hba_file=/var/lib/foo/pg_hba.conf"]
+
+networks:
+  vdl-net:

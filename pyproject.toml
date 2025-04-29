@@ -1,0 +1,81 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "vdl_tools/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+  "/.github",
+  "/docs",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["vdl_tools"]
+
+[tool.setuptools.dynamic]
+version = {attr = "vdl_tools.__version__"}
+
+[project]
+name = "vdl-tools"
+dynamic = ["version"]
+dependencies = [
+    "alembic>=1.13.1,<2.0.0",
+    "awscli>=1.36.34,<2.0.0",
+    "bokeh>=3.6.1,<4.0.0",
+    "boto3>=1.35.93,<2.0.0",
+    "cairosvg>=2.6.0,<3.0.0",
+    "circlify>=0.15.0,<1.0.0",
+    "datasets>=3.1.0,<4.0.0",
+    "dataclasses_json>=0.6.3,<1.0.0",
+    "geopy>=2.3.0,<3.0.0",
+    "geotext>=0.4.0,<1.0.0",
+    "google-auth-oauthlib>=1.2.1,<2.0.0",
+    "google-cloud-translate>=3.11.0,<4.0.0",
+    "google-api-python-client==2.166.0",
+    "igraph>=0.11.8,<1.0.0",
+    "instructor>=1.7.0,<2.0.0",
+    "jsonlines>=4.0.0,<5.0.0",
+    "jsonschema>=4.17.3,<5.0.0",
+    "markdown>=3.4.1,<4.0.0",
+    "markdown3-newtab>=0.2.0,<1.0.0",
+    "more-itertools>=9.1.0,<10.0.0",
+    "networkx>=3.0,<4.0.0",
+    "nltk>=3.8.1,<4.0.0",
+    "numpy>=1.24.2,<2.0.0",
+    "openai>=1.57.0,<2.0.0",
+    "openpyxl>=3.1.1,<4.0.0",
+    "pandas>=1.5.3,<2.0.0",
+    "plotly>=5.24.1,<6.0.0",
+    "psycopg2-binary>=2.9.9,<3.0.0",
+    "PySocks>=1.7.1,<2.0.0",
+    "pyyaml>=6.0.1,<7.0.0",
+    "regex>=2022.10.31,<2023.0.0",
+    "requests>=2.32.3,<3.0.0",
+    "requests-cache>=0.9.8,<1.0.0",
+    "scikit-learn>=1.2.1,<2.0.0",
+    "scikit-network>=0.33.1,<1.0.0",
+    "scipy>=1.10.1,<2.0.0",
+    "selenium~=4.22.0",
+    "sqlalchemy>=2.0.21,<3.0.0",
+    "sqlalchemy-utils>=0.41.2,<1.0.0",
+    "tiktoken>=0.8.0,<1.0.0",
+    "treelib>=1.7.0,<2.0.0",
+    "torch>=1.13.1,<2.0.0",
+    "transformers>=4.26.1,<5.0.0",
+    "umap>=0.1.1,<1.0.0",
+    "unstructured[all-docs]>=0.16.12,<1.0.0",
+    "url-normalize>=1.4.3,<2.0.0",
+    "webdriver_manager>=4.0.1,<5.0.0",
+    "xlsxwriter>=3.0.9,<4.0.0",
+    "Wikipedia-API>=0.7.1,<1.0.0",
+]
+requires-python = ">=3.10"
+description = "VDL Tools"
+readme = "README.md"
+
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python"
+]

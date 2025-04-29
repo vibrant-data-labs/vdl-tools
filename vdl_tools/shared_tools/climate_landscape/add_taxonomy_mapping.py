@@ -1,0 +1,425 @@
+import pandas as pd
+
+import vdl_tools.shared_tools.project_config as pc
+import vdl_tools.shared_tools.taxonomy_mapping.taxonomy_mapping as tm
+import vdl_tools.shared_tools.taxonomy_mapping.fewshot_examples as fse
+from vdl_tools.shared_tools.tools.logger import logger
+
+
+def add_taxonomy_mapping(
+    df,
+    entity_embeddings,
+    taxonomy,
+    id_col,
+    text_col,
+    name_col='Organization',
+    nmax=5,
+    threshold=90,
+    pct_delta=1,
+    run_fewshot_classification=True,
+    filter_fewshot_classification=True,
+    fewshot_examples=None,
+    use_cached_results=True,
+    max_workers=3,
+    force_parents=True,
+    distribute_funding=True,
+    mapping_name=None
+):
+    logger.info("Starting Taxonomy mapping for %s", mapping_name)
+    if entity_embeddings is None:
+        entity_embeddings = tm.get_or_compute_embeddings(
+            org_df=df,
+            id_col=id_col,
+            text_col=text_col,
+            max_workers=max_workers,
+        )
+
+    all_df, _ = tm.get_entity_categories(
+        df,
+        taxonomy,
+        id_attr=id_col,
+        name_attr=name_col,
+        nmax=nmax,
+        thr=threshold,
+        pct_delta=pct_delta,
+        entity_embeddings=entity_embeddings,
+        max_workers=max_workers,
+        force_parents=force_parents
+    )
+
+    if force_parents:
+        # if force_parents is False, then we need to filter out the rows where the sim is -1
+        # which is the indication that they were forced in
+        forced_in_df = all_df[all_df['sim'] == -1].copy()
+        all_df = all_df[all_df['sim'] > -1].copy()
+
+    if run_fewshot_classification:
+        all_df = tm.run_fewshot_classification(
+            all_df=all_df,
+            id_col=id_col,
+            text_col=text_col,
+            taxonomy=taxonomy,
+            reranked_relevancy_col='reranked_relevancy',
+            use_cached_results=use_cached_results,
+            max_workers=max_workers,
+            examples_dict=fewshot_examples
+        )
+
+        if force_parents:
+            # Only run fewshot classification on the entities that
+            # had no matches after the initial fewshot classification
+            totally_unmatched_uids = (
+                set(forced_in_df[id_col].unique()) -
+                set(all_df[all_df['reranked_relevancy']][id_col].unique())
+            )
+
+            forced_in_df = forced_in_df[forced_in_df[id_col].isin(totally_unmatched_uids)]
+
+            forced_in_df = tm.run_fewshot_classification(
+                all_df=forced_in_df,
+                id_col=id_col,
+                text_col=text_col,
+                taxonomy=taxonomy,
+                reranked_relevancy_col='reranked_relevancy',
+                use_cached_results=use_cached_results,
+                max_workers=max_workers,
+                examples_dict=fewshot_examples
+            )
+            all_df = pd.concat([all_df, forced_in_df])
+
+        if filter_fewshot_classification:
+            filtered_all_df = all_df[all_df['reranked_relevancy'].astype(bool)].copy()
+
+            filtered_all_df = tm.distribute_entity_funding(filtered_all_df, id_col)
+            all_df = all_df.merge(
+                filtered_all_df[['taxonomy_mapping_id', 'FundingFrac']],
+                on='taxonomy_mapping_id',
+                how='left',
+                suffixes=('', '_filtered')
+            )
+            all_df['FundingFrac_filtered'].fillna(0, inplace=True)
+        else:
+            filtered_all_df = all_df.copy()
+    else:
+        filtered_all_df = all_df.copy()
+
+    if distribute_funding:
+        # Remove this column from the output since it is calculated before re-ranking
+        filtered_all_df.pop('FundingFrac')
+        distributed_funding_df = tm.redistribute_funding_fracs(
+            df=filtered_all_df,
+            taxonomy=taxonomy,
+            id_attr=id_col,
+            keepcols=[name_col],
+        )
+    else:
+        distributed_funding_df = None
+
+    if mapping_name:
+        rename = {f'level{tx["level"]}': f'level{tx["level"]}_{mapping_name}' for tx in taxonomy}
+        pct = 'pct_' + mapping_name
+        sim = 'sim_' + mapping_name
+        rename['mapped_category'] = mapping_name
+        rename['pct'] = pct
+        rename['sim'] = sim
+        rename['cat_level'] = 'cat_level_' + mapping_name
+        filtered_all_df = filtered_all_df.rename(columns=rename)
+
+    return filtered_all_df, distributed_funding_df
+
+
+###########################################################
+# OneEarth-specific functions
+
+def validate_one_earth_taxonomy(taxonomy_path):
+    taxonomy = load_one_earth_taxonomy(taxonomy_path)
+
+    all_errors = []
+    for i, level in enumerate(taxonomy):
+        if i == 0:
+            continue
+        level_data = level['data']
+        level_name = level['name']
+
+        prev_level_data = taxonomy[i-1]['data']
+        prev_level_name = taxonomy[i-1]['name']
+
+        # Make sure all previous level names in the current level are present
+        # in the previous level
+        prev_level_names = prev_level_data[prev_level_name].unique()
+        current_parent_names = level_data[prev_level_name].unique()
+        missing_names = set(current_parent_names) - set(prev_level_names)
+
+        if missing_names:
+            all_errors.append(
+                {
+                    'level': i,
+                    'prev_level': i-1,
+                    'level_name': level_name,
+                    'prev_level_name': prev_level_name,
+                    'missing_names': missing_names
+                }
+            )
+
+    if len(all_errors) > 0:
+        errors_strs = []
+        for error in all_errors:
+            errors_strs.append(
+                f"{error['missing_names']} in level {error['level']} "
+                f"in column {error['prev_level_name']} are not present in level "
+                f"{error['prev_level']} in column "
+                f"{error['prev_level_name']}"
+            )
+        full_error_str = "\n".join(errors_strs)
+        raise ValueError(f"Validation failed:\n{full_error_str}")
+
+
+def load_one_earth_taxonomy(taxonomy_path):
+    pillar_df = pd.read_excel(taxonomy_path, sheet_name="Pillars")
+    sub_df = pd.read_excel(taxonomy_path, sheet_name="SubPillars")
+    soln_df = pd.read_excel(taxonomy_path, sheet_name="Solutions")
+    energy_term_df = pd.read_excel(taxonomy_path, sheet_name="Energy").ffill()
+    ag_term_df = pd.read_excel(taxonomy_path, sheet_name="Regenerative Ag").ffill()
+    nature_term_df = pd.read_excel(taxonomy_path, sheet_name="Nature Conservation").ffill()
+
+    # Concatenate sub-term sheets into a single subterm dataframe
+    term_df = pd.concat([energy_term_df, ag_term_df, nature_term_df])
+
+    term_df = term_df[term_df['Exclude'] != 1].copy()
+    term_df.drop(columns=['Exclude'], inplace=True)
+
+    taxonomy = [
+        {'level': 0, 'name': 'Pillar', 'data': pillar_df, 'textattr': 'Definition'},
+        {'level': 1, 'name': 'Sub-Pillar', 'data': sub_df, 'textattr': 'Definition'},
+        {'level': 2, 'name': 'Solution', 'data': soln_df, 'textattr': 'Definition'},
+        {'level': 3, 'name': 'ST_Name', 'data': term_df, 'textattr': 'ST_Description'}
+    ]
+    return taxonomy
+
+
+def load_one_earth_intersectional(taxonomy_path):
+    it_df = pd.read_excel(taxonomy_path, sheet_name="Intersec.Theme").ffill()
+    it_df['Sub-Term'] = it_df['Name'] + ': ' + it_df['Sub-Term']
+    it0_df = it_df[['Name', 'New Definition']].drop_duplicates()
+    taxonomy = [
+        {'level': 0, 'name': 'Name', 'data': it0_df, 'textattr': 'New Definition'},
+        {'level': 1, 'name': 'Sub-Term', 'data': it_df, 'textattr': 'Sub-Term Definition'},
+        ]
+    return taxonomy
+
+
+def load_one_earth_falsesolns(taxonomy_path):
+    fs_df = pd.read_excel(taxonomy_path, sheet_name="False Solutions").ffill()
+    fs_df['Sub-Term'] = fs_df['Solution'] + ': ' + fs_df['Sub-Term']
+    fs0_df = fs_df[['Solution', 'Definition']].drop_duplicates()
+    taxonomy = [
+        {'level': 0, 'name': 'Solution', 'data': fs0_df, 'textattr': 'Definition'},
+        {'level': 1, 'name': 'Sub-Term', 'data': fs_df, 'textattr': 'Sub-Definition'},
+        ]
+    return taxonomy
+
+
+def add_one_earth_taxonomy(
+    df,
+    id_col,
+    text_col,
+    name_col='Organization',
+    run_fewshot_classification=True,
+    filter_fewshot_classification=True,
+    use_cached_results=True,
+    paths=None,
+    max_workers=3,
+    force_parents=True,
+    add_intersectional=True,
+    add_falsesolns=True,
+    mapping_name="one_earth_category"
+):
+    paths = paths or pc.get_paths()
+    if filter_fewshot_classification and not run_fewshot_classification:
+        raise ValueError("Cannot filter few shot classification if it is not run")
+
+    entity_embeddings = tm.get_or_compute_embeddings(
+        org_df=df,
+        id_col=id_col,
+        text_col=text_col,
+        max_workers=max_workers
+    )
+
+    taxonomy = load_one_earth_taxonomy(paths["one_earth_taxonomy"])
+
+    # add main taxonomy mapping
+    all_df, distr_df = add_taxonomy_mapping(
+        df,
+        entity_embeddings,
+        taxonomy,
+        id_col,
+        text_col,
+        name_col=name_col,
+        run_fewshot_classification=run_fewshot_classification,
+        filter_fewshot_classification=filter_fewshot_classification,
+        fewshot_examples=None,
+        use_cached_results=use_cached_results,
+        force_parents=force_parents,
+        mapping_name=mapping_name
+    )
+
+    # reduce the number of columns in the output
+    original_columns = set(df.columns)
+    # Keep all the new columns
+    new_columns = list(all_df.columns.difference(original_columns))
+    keep_columns = [id_col, name_col, text_col] + new_columns
+    all_df[keep_columns].to_json(paths["one_earth_taxonomy_mapping_results"], orient='records')
+    if distr_df is not None:
+        # make directory if it doesn't exist
+        paths["oe_tax_mapping_distributed_funding_results"].parent.mkdir(parents=True, exist_ok=True)
+        distr_df.to_json(paths["oe_tax_mapping_distributed_funding_results"], orient='records')
+
+    if mapping_name:
+        pct = 'pct_' + mapping_name
+        sim = 'sim_' + mapping_name
+        cols = [mapping_name, f'cat_level_{mapping_name}'] + [f'level{tx["level"]}_{mapping_name}' for tx in taxonomy]
+    else:
+        pct = 'pct'
+        sim = 'sim'
+        cols = ['mapped_category', 'cat_level'] + [f'level{tx["level"]}' for tx in taxonomy]
+    new_df = tm.add_mapping_to_orgs(df, all_df, id_col, pct=pct, sim=sim, cats=cols)
+
+    if add_intersectional:
+        # add intersctional themes mapping
+        mapping_name = "Intersectional"
+        pct = 'pct_' + mapping_name
+        sim = 'sim_' + mapping_name
+        it_taxonomy = load_one_earth_intersectional(paths["one_earth_taxonomy"])
+        it_all_df, _ = add_taxonomy_mapping(
+            df,
+            entity_embeddings,
+            it_taxonomy,
+            id_col,
+            text_col,
+            name_col=name_col,
+            run_fewshot_classification=run_fewshot_classification,
+            filter_fewshot_classification=filter_fewshot_classification,
+            fewshot_examples=fse.intersectional_fewshot_examples,
+            use_cached_results=use_cached_results,
+            max_workers=3,
+            force_parents=False,
+            distribute_funding=False,
+            mapping_name=mapping_name
+        )
+        new_df = tm.add_mapping_to_orgs(new_df, it_all_df, id_col, pct=pct, sim=sim,
+                                        cats=[mapping_name, f'level0_{mapping_name}', f'level1_{mapping_name}'])
+
+    if add_falsesolns:
+        # add false solutions mapping
+        mapping_name = "FalseSolns"
+        pct = 'pct_' + mapping_name
+        sim = 'sim_' + mapping_name
+        fs_taxonomy = load_one_earth_falsesolns(paths["one_earth_taxonomy"])
+        fs_all_df, _ = add_taxonomy_mapping(
+            df,
+            entity_embeddings,
+            fs_taxonomy,
+            id_col,
+            text_col,
+            name_col=name_col,
+            run_fewshot_classification=run_fewshot_classification,
+            filter_fewshot_classification=filter_fewshot_classification,
+            fewshot_examples=fse.falsesolns_fewshot_examples,
+            use_cached_results=use_cached_results,
+            max_workers=3,
+            force_parents=False,
+            distribute_funding=False,
+            mapping_name=mapping_name
+        )
+        new_df = tm.add_mapping_to_orgs(new_df, fs_all_df, id_col, pct=pct, sim=sim,
+                                        cats=[mapping_name, f'level0_{mapping_name}', f'level1_{mapping_name}'])
+
+    return new_df
+
+
+def add_tailwind_taxonomy(
+    df,
+    id_col,
+    text_col,
+    name_col='Organization',
+    run_fewshot_classification=True,
+    filter_fewshot_classification=True,
+    use_cached_results=True,
+    paths=None,
+    max_workers=3,
+    mapping_name="tailwind_category"
+):
+
+    paths = paths or pc.get_paths()
+    if filter_fewshot_classification and not run_fewshot_classification:
+        raise ValueError("Cannot filter few shot classification if it is not run")
+
+    theme_df = pd.read_excel(paths["tailwind_taxonomy"], sheet_name="Themes")
+    sector_df = pd.read_excel(paths["tailwind_taxonomy"], sheet_name="Sectors")
+    examples_df = pd.read_excel(paths["tailwind_taxonomy"], sheet_name="Examples")
+
+    # add prefix to the columns and combine sector-examples to be unique
+    prefix = 'TW-'
+    theme_df['Theme'] = prefix + theme_df['Theme']
+    sector_df['Theme'] = prefix + sector_df['Theme']
+    sector_df['Sector'] = prefix + sector_df['Sector']
+    examples_df['Theme'] = prefix + examples_df['Theme']
+    examples_df['Sector'] = prefix + examples_df['Sector']
+    examples_df['Examples'] = examples_df['Sector'] + '-' + examples_df['Examples']
+
+    taxonomy = [
+        {'level': 0, 'name': 'Theme', 'data': theme_df, 'textattr': 'Theme Definition'},
+        {'level': 1, 'name': 'Sector', 'data': sector_df, 'textattr': 'revised_definition'},
+        {'level': 2, 'name': 'Examples', 'data': examples_df, 'textattr': 'gpt_definition'},
+        ]
+
+    entity_embeddings = tm.get_or_compute_embeddings(
+        org_df=df,
+        id_col=id_col,
+        text_col=text_col,
+        max_workers=max_workers
+    )
+
+    # add main taxonomy mapping
+    all_df, distr_df = add_taxonomy_mapping(
+        df,
+        entity_embeddings,
+        taxonomy,
+        id_col,
+        text_col,
+        name_col=name_col,
+        nmax=5,
+        threshold=90,
+        pct_delta=2,
+        run_fewshot_classification=run_fewshot_classification,
+        filter_fewshot_classification=filter_fewshot_classification,
+        fewshot_examples=None,
+        use_cached_results=use_cached_results,
+        mapping_name=mapping_name
+    )
+
+    all_df.to_json(paths["tailwind_taxonomy_mapping_results"], orient='records')
+    # reduce the number of columns in the output
+    original_columns = set(df.columns)
+    # Keep all the new columns
+    new_columns = list(all_df.columns.difference(original_columns))
+    keep_columns = [id_col, name_col, text_col] + new_columns
+    all_df[keep_columns].to_json(paths["tailwind_taxonomy_mapping_results"], orient='records')
+    if distr_df is not None:
+        # make directory if it doesn't exist
+        paths["tw_tax_mapping_distributed_funding_results"].parent.mkdir(parents=True, exist_ok=True)
+        distr_df.to_json(paths["tw_tax_mapping_distributed_funding_results"], orient='records')
+
+    if mapping_name:
+        pct = 'pct_' + mapping_name
+        sim = 'sim_' + mapping_name
+        cols = [mapping_name, f'cat_level_{mapping_name}'] + [f'level{tx["level"]}_{mapping_name}'
+                                                              for tx in taxonomy]
+    else:
+        pct = 'pct'
+        sim = 'sim'
+        cols = ['mapped_category', 'cat_level'] + [f'level{tx["level"]}' for tx in taxonomy]
+
+    new_df = tm.add_mapping_to_orgs(df, all_df, id_col, pct=pct, sim=sim, cats=cols)
+
+    return new_df

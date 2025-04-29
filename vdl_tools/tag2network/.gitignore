@@ -1,0 +1,9 @@
+*.pyc
+.spyproject
+/build/
+
+/dist/
+/*.egg-info
+tag2network/.DS_Store
+.DS_Store
+*.bak

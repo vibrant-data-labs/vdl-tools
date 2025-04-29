@@ -1,0 +1,17 @@
+*.pyc
+*.spyproject
+.spyproject/*.*
+.vscode
+.mypy_cache
+.env
+*.env
+*.code-workspace
+archive
+network
+__pycache__
+#projects # elb projects
+projects/private
+
+/dist/
+/*.egg-info
+.DS_Store

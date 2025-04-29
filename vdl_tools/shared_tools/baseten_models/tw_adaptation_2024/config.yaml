@@ -1,0 +1,24 @@
+environment_variables: {}
+external_package_dirs: []
+model_metadata: {}
+model_name: tw_adaptation_2024
+python_version: py310
+requirements:
+  - torch==2.0.1
+  - transformers==4.30.0
+  - pandas==1.5.3
+  - datasets==2.14.6
+  - boto3==1.34.144
+resources:
+  accelerator: null
+  cpu: '1'
+  memory: 2Gi
+  use_gpu: false
+secrets: {}
+system_packages: []
+
+secrets:
+  aws_access_key_id: null
+  aws_secret_access_key: null
+  aws_region: null
+  aws_bucket: null
