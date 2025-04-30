@@ -1,9 +1,5 @@
 import boto3
-import json
 import sys
-from io import BytesIO
-from tempfile import NamedTemporaryFile
-from transformers import PretrainedConfig, PreTrainedModel
 import pathlib as pl
 
 from vdl_tools.shared_tools.tools.config_utils import get_configuration
