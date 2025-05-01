@@ -7,6 +7,7 @@ from .web_scraping import ( #pylint: disable=no-name-in-module
     WebPagesScraped,
     WebPagesParsed
 )
+from .netzero.startup import Startup #pylint: disable=no-name-in-module
 
 __all__ = (
     "Embedding",
@@ -14,6 +15,7 @@ __all__ = (
     "LinkedInPerson",
     "Prompt",
     "PromptResponse",
+    "Startup",
     "WebPagesScraped",
     "WebPagesParsed",
 )

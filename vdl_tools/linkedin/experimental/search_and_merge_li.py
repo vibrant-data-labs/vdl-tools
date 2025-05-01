@@ -8,7 +8,7 @@ from vdl_tools.scrape_enrich.scraper.direct_loader import HEADERS
 from vdl_tools.scrape_enrich.scraper.scrape_websites import SINGLE_PAGE_WEBSITES
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 from vdl_tools.shared_tools.tools.logger import logger
-from vdl_tools.LinkedIn.org_loader import get_organizations_by_search, scrape_organizations_psql
+from vdl_tools.linkedin.org_loader import get_organizations_by_search, scrape_organizations_psql
 
 
 def get_final_redirect(url):
