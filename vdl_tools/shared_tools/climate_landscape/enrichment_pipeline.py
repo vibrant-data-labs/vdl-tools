@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 # from common: commonly used functions
-from vdl_tools.LinkedIn import org_loader as li
+from vdl_tools.linkedin import org_loader as li
 from vdl_tools.linkedin.utils.linkedin_url import extract_linkedin_id
 from vdl_tools.scrape_enrich.combine_crunchbase_candid_linkedin import combine_cb_cd_li
 from vdl_tools.scrape_enrich.scraper.scrape_websites import extract_website_name, scrape_websites_psql

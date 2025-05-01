@@ -192,7 +192,7 @@ def load_one_earth_taxonomy(taxonomy_path):
         {'level': 0, 'name': 'Pillar', 'data': pillar_df, 'textattr': 'Definition'},
         {'level': 1, 'name': 'Sub-Pillar', 'data': sub_df, 'textattr': 'Definition'},
         {'level': 2, 'name': 'Solution', 'data': soln_df, 'textattr': 'Definition'},
-        {'level': 3, 'name': 'ST_Name', 'data': term_df, 'textattr': 'ST_Description'}
+        {'level': 3, 'name': 'Sub-Term', 'data': term_df, 'textattr': 'Sub-Term Definition'}
     ]
     return taxonomy
 
@@ -200,9 +200,9 @@ def load_one_earth_taxonomy(taxonomy_path):
 def load_one_earth_intersectional(taxonomy_path):
     it_df = pd.read_excel(taxonomy_path, sheet_name="Intersec.Theme").ffill()
     it_df['Sub-Term'] = it_df['Name'] + ': ' + it_df['Sub-Term']
-    it0_df = it_df[['Name', 'New Definition']].drop_duplicates()
+    it0_df = it_df[['Name', 'Definition']].drop_duplicates()
     taxonomy = [
-        {'level': 0, 'name': 'Name', 'data': it0_df, 'textattr': 'New Definition'},
+        {'level': 0, 'name': 'Name', 'data': it0_df, 'textattr': 'Definition'},
         {'level': 1, 'name': 'Sub-Term', 'data': it_df, 'textattr': 'Sub-Term Definition'},
         ]
     return taxonomy
@@ -214,7 +214,7 @@ def load_one_earth_falsesolns(taxonomy_path):
     fs0_df = fs_df[['Solution', 'Definition']].drop_duplicates()
     taxonomy = [
         {'level': 0, 'name': 'Solution', 'data': fs0_df, 'textattr': 'Definition'},
-        {'level': 1, 'name': 'Sub-Term', 'data': fs_df, 'textattr': 'Sub-Definition'},
+        {'level': 1, 'name': 'Sub-Term', 'data': fs_df, 'textattr': 'Sub-Term Definition'},
         ]
     return taxonomy
 

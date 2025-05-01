@@ -332,6 +332,9 @@ def scrape_websites_psql(
                 existing_parsed_data = [x.to_dict() for x in existing_parsed]
                 parsed_key_to_num_errors = {x.cleaned_home_key: (x.num_errors or 0) for x in existing_parsed}
                 existing_parsed_keys = parsed_key_to_num_errors
+            else:
+                existing_parsed_keys = {}
+                parsed_key_to_num_errors = {}
 
             # URLs that need processing (not in WebPagesParsed)
             urls_to_process = [
