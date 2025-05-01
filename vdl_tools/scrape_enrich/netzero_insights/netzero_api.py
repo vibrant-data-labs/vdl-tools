@@ -6,8 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from vdl_tools.shared_tools.tools.logger import logger
 from vdl_tools.scrape_enrich.netzero_insights.filters import (
-    Sorting, MainFilter, StartupFilter, DealFilter, InvestorFilter,
-    ContactFilter, InvestorContactFilter, TagFilter, create_filter_dict
+    Sorting, MainFilter,
 )
 
 from vdl_tools.shared_tools.database_cache.database_models import Startup
@@ -161,7 +160,7 @@ class NetZeroAPI:
     def _search_entities(
         self,
         endpoint: str,
-        filter: Optional[Union[MainFilter, DealFilter, InvestorFilter]] = None,
+        filter: Optional[Union[MainFilter]] = None,
         sorting: Optional[Sorting] = None,
         limit: Optional[int] = None,
         offset: int = 0,
@@ -266,7 +265,7 @@ class NetZeroAPI:
 
     def search_deals(
         self,
-        filter: Optional[DealFilter] = None,
+        filter: Optional[MainFilter] = None,
         sorting: Optional[Sorting] = None,
         limit: Optional[int] = None,
         offset: int = 0,
@@ -286,7 +285,7 @@ class NetZeroAPI:
 
     def search_investors(
         self,
-        filter: Optional[InvestorFilter] = None,
+        filter: Optional[MainFilter] = None,
         sorting: Optional[Sorting] = None,
         limit: Optional[int] = None,
         offset: int = 0,
