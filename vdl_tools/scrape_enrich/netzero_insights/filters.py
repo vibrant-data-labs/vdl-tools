@@ -1,70 +1,59 @@
-from dataclasses import dataclass, field
+from pydantic import BaseModel
 from typing import Dict, List, Optional, Union
 from datetime import datetime
 
 
-@dataclass
-class Sorting:
+
+class Sorting(BaseModel):
     """Sorting criteria for API requests."""
     field: str
     order: str = "asc"  # "asc" or "desc"
 
 
-@dataclass
-class MainFilter:
-    """Main filter structure for API requests."""
-    limit: Optional[int] = None
-    offset: int = 0
-    include: Dict = field(default_factory=dict)
-    exclude: Dict = field(default_factory=dict)
-    sorting: Optional[Sorting] = None
 
-
-@dataclass
-class StartupFilter:
+class StartupFilter(BaseModel):
     """Filter criteria for startups."""
-    searchable_locations: Optional[List[int]] = None
+    searchableLocations: Optional[List[int]] = None
     stages: Optional[List[int]] = None
     fundings: Optional[List[int]] = None
-    employees_from: Optional[int] = None
-    employees_to: Optional[int] = None
-    fundings_from: Optional[int] = None
-    fundings_to: Optional[int] = None
+    employeesFrom: Optional[int] = None
+    employeesTo: Optional[int] = None
+    fundingsFrom: Optional[int] = None
+    fundingsTo: Optional[int] = None
     tags: Optional[List[int]] = None
-    tags_mode: Optional[str] = None  # "AND" or "OR"
+    tagsMode: Optional[str] = None  # "AND" or "OR"
     trls: Optional[List[int]] = None
-    financial_stage_ids: Optional[List[int]] = None
+    financialStageIDs: Optional[List[int]] = None
     sustainabilities: Optional[List[int]] = None
-    founded_dates: Optional[List[Dict[str, str]]] = None
-    acquisition_date_from: Optional[str] = None
-    acquisition_date_to: Optional[str] = None
-    founded_dates_from: Optional[str] = None
-    founded_dates_to: Optional[str] = None
-    raised_date_from: Optional[str] = None
-    raised_date_to: Optional[str] = None
-    last_round_dates: Optional[List[Dict[str, str]]] = None
-    last_round_dates_from: Optional[str] = None
-    last_round_dates_to: Optional[str] = None
-    number_of_round_from: Optional[int] = None
-    number_of_round_to: Optional[int] = None
-    funding_types: Optional[List[Dict[str, str]]] = None
+    foundedDates: Optional[List[Dict[str, str]]] = None
+    acquisitionDateFrom: Optional[str] = None
+    acquisitionDateTo: Optional[str] = None
+    foundedDatesFrom: Optional[str] = None
+    foundedDatesTo: Optional[str] = None
+    raisedDateFrom: Optional[str] = None
+    raisedDateTo: Optional[str] = None
+    lastRoundDates: Optional[List[Dict[str, str]]] = None
+    lastRoundDatesFrom: Optional[str] = None
+    lastRoundDatesTo: Optional[str] = None
+    numberOfRoundFrom: Optional[int] = None
+    numberOfRoundTo: Optional[int] = None
+    fundingTypes: Optional[List[Dict[str, str]]] = None
     sdgs: Optional[List[int]] = None
     wildcards: Optional[List[str]] = None
     wildcardsFields: Optional[List[Dict[str, str]]] = None
     investors: Optional[List[int]] = None
-    last_funding_types: Optional[List[Dict[str, str]]] = None
-    last_fundings_from: Optional[List[int]] = None
-    last_fundings_to: Optional[List[int]] = None
-    patent_search: Optional[List[str]] = None
-    patents_status: Optional[List[Dict[str, str]]] = None
-    application_date_from: Optional[str] = None
-    application_date_to: Optional[str] = None
-    granted_date_from: Optional[str] = None
-    granted_date_to: Optional[str] = None
+    lastFundingTypes: Optional[List[Dict[str, str]]] = None
+    lastFundingsFrom: Optional[List[int]] = None
+    lastFundingsTo: Optional[List[int]] = None
+    patentSearch: Optional[List[str]] = None
+    patentsStatus: Optional[List[Dict[str, str]]] = None
+    applicationDateFrom: Optional[str] = None
+    applicationDateTo: Optional[str] = None
+    grantedDateFrom: Optional[str] = None
+    grantedDateTo: Optional[str] = None
 
 
-@dataclass
-class DealFilter:
+class DealFilter(BaseModel):
     """Filter criteria for deals."""
     acquisition_date_from: Optional[str] = None
     acquisition_date_to: Optional[str] = None
@@ -85,49 +74,71 @@ class DealFilter:
     exit_stages: Optional[List[int]] = None
 
 
-@dataclass
-class InvestorFilter:
+class InvestorFilter(BaseModel):
     """Filter criteria for investors."""
-    investor_type_ids: Optional[List[int]] = None
-    include_other_investor_types: Optional[bool] = None
-    investor_deals_from: Optional[int] = None
-    investor_deals_to: Optional[int] = None
-    investor_searchable_locations: Optional[List[int]] = None
-    investor_regions: Optional[List[int]] = None
-    co_investors: Optional[List[int]] = None
+    investorTypeIDs: Optional[List[int]] = None
+    includeOtherInvestorTypes: Optional[bool] = None
+    investorDealsFrom: Optional[int] = None
+    investorDealsTo: Optional[int] = None
+    investorSearchableLocations: Optional[List[int]] = None
+    investorRegions: Optional[List[int]] = None
+    coInvestors: Optional[List[int]] = None
     investments: Optional[List[int]] = None
-    investor_ids: Optional[List[int]] = None
-    investor_founded_dates_from: Optional[str] = None
-    investor_founded_dates_to: Optional[str] = None
+    investorIDs: Optional[List[int]] = None
+    investorFoundedDatesFrom: Optional[str] = None
+    investorFoundedDatesTo: Optional[str] = None
 
 
-@dataclass
-class ContactFilter:
+class ContactFilter(BaseModel):
     """Filter criteria for contacts."""
     client_id: int
     decision_maker: Optional[bool] = None
     role_id: Optional[int] = None
 
 
-@dataclass
-class InvestorContactFilter:
+class InvestorContactFilter(BaseModel):
     """Filter criteria for investor contacts."""
     investor_id: int
     decision_maker: Optional[bool] = None
     role_id: Optional[int] = None
 
 
-@dataclass
-class TagFilter:
+class TagFilter(BaseModel):
     """Filter criteria for tags."""
     name: Optional[str] = None
     type: Optional[List[str]] = None  # ["Technology", "Market", etc.]
 
 
-def create_filter_dict(filter_obj: Union[StartupFilter, DealFilter, InvestorFilter, ContactFilter, InvestorContactFilter, TagFilter]) -> Dict:
-    """Convert a filter object to a dictionary for API requests."""
-    filter_dict = {}
-    for field, value in filter_obj.__dict__.items():
-        if value is not None:
-            filter_dict[field] = value
-    return filter_dict 
+class MainFilter(BaseModel):
+    """Main filter structure for API requests."""
+    limit: Optional[int] = None
+    offset: int = 0
+    include: Optional[StartupFilter | dict] = {}
+    exclude: Optional[StartupFilter | dict] = {}
+    investorInclude: Optional[InvestorFilter | dict] = {}
+    investorExclude: Optional[InvestorFilter | dict] = {}
+    fundingRoundInclude: Optional[DealFilter | dict] = {}
+    fundingRoundExclude: Optional[DealFilter | dict] = {}
+    sorting: Optional[Sorting] = None
+
+
+def create_filter_dict(filter_obj: MainFilter) -> Dict:
+    """Recursively convert a filter object to a dictionary for API requests removing None values"""
+    filter_dict = filter_obj.model_dump()
+    filter_dict = filter_none_values(filter_dict)
+    return filter_dict
+
+
+def filter_none_values(filter_dict: Dict, new_dict: Dict = {}) -> Dict:
+    new_dict = new_dict or {}
+    """Remove None values from a nested dictionary"""
+    for key, value in filter_dict.items():
+        if isinstance(value, dict):
+            filter_none_values(value, new_dict)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    filter_none_values(item, new_dict)
+        else:
+            new_dict[key] = value
+    return new_dict
