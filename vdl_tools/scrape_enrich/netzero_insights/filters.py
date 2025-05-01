@@ -40,7 +40,7 @@ class StartupFilter(BaseModel):
     fundingTypes: Optional[List[Dict[str, str]]] = None
     sdgs: Optional[List[int]] = None
     wildcards: Optional[List[str]] = None
-    wildcardsFields: Optional[List[Dict[str, str]]] = None
+    wildcardsFields: Optional[List[str]] = None
     investors: Optional[List[int]] = None
     lastFundingTypes: Optional[List[Dict[str, str]]] = None
     lastFundingsFrom: Optional[List[int]] = None

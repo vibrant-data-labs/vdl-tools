@@ -76,29 +76,29 @@ def get_companies_details(
 
 
 if __name__ == "__main__":
-    # companies = search_companies(
-    #     include_keywords=["ocean"],
-    #     use_sandbox=False,
-    #     limit=500,
-    # )
+    ocean_search = search_companies(
+        include_keywords=["ocean"],
+        use_sandbox=False,
+        limit=500,
+    )
 
     USE_SANDBOX = False
     READ_FROM_CACHE = True
     WRITE_TO_CACHE = True
 
-    grantham_investor_ids = [6121, 9939, 33402]
-    grantham_companies = search_companies(
-        include_investors=grantham_investor_ids,
-        use_sandbox=USE_SANDBOX,
-        limit=500,
-    )
+    # grantham_investor_ids = [6121, 9939, 33402]
+    # grantham_companies = search_companies(
+    #     include_investors=grantham_investor_ids,
+    #     use_sandbox=USE_SANDBOX,
+    #     limit=500,
+    # )
 
-    grantham_company_ids = [company["clientID"] for company in grantham_companies['results']]
+    # grantham_company_ids = [company["clientID"] for company in grantham_companies['results']]
 
-    companies = get_companies_details(
-        company_ids=grantham_company_ids,
-        use_sandbox=USE_SANDBOX,
-        read_from_cache=READ_FROM_CACHE,
-        write_to_cache=WRITE_TO_CACHE,
-    )
+    # companies = get_companies_details(
+    #     company_ids=grantham_company_ids,
+    #     use_sandbox=USE_SANDBOX,
+    #     read_from_cache=READ_FROM_CACHE,
+    #     write_to_cache=WRITE_TO_CACHE,
+    # )
 

@@ -158,19 +158,21 @@ class NetZeroAPI:
             write_to_cache = self.write_to_cache
         return read_from_cache, write_to_cache
 
-    def search_startups(
+    def _search_entities(
         self,
-        main_filter: MainFilter = None,
+        endpoint: str,
+        filter: Optional[Union[MainFilter, DealFilter, InvestorFilter]] = None,
         sorting: Optional[Sorting] = None,
         limit: Optional[int] = None,
         offset: int = 0,
         page_size: int = 100,
         max_pages: Optional[int] = None
-    ) -> Union[Dict, Generator[Dict, None, None]]:
-        """Get a list of startups matching the specified criteria.
+    ) -> Dict:
+        """Base method for searching entities.
 
         Args:
-            filter: Filter criteria for startups
+            endpoint: The API endpoint to call (e.g., 'companies', 'fundingRounds', 'investors')
+            filter: Filter criteria for the entities
             sorting: Sorting criteria
             limit: Maximum number of results to return (None for all results)
             offset: Number of results to skip
@@ -178,16 +180,18 @@ class NetZeroAPI:
             max_pages: Maximum number of pages to fetch (None for all pages)
 
         Returns:
-            If limit is specified: Dict containing count and list of matching startups
-            If limit is None: Generator yielding Dicts containing results for each page
+            Dict containing:
+                - total_count: Total number of available results
+                - count: Number of results in this response
+                - results: List of matching entities
         """
-        logger.info(f"Fetching startups with offset={offset}")
-        main_filter = main_filter or MainFilter()
+        logger.info(f"Fetching {endpoint} with offset={offset}")
 
-        if sorting:
-            main_filter.sorting = sorting
-
-        payload = main_filter.model_dump()
+        # Handle different filter types
+        if isinstance(filter, MainFilter):
+            payload = filter.model_dump()
+            if sorting:
+                payload["sorting"] = sorting.model_dump()
 
         if limit is not None and limit < 100:
             # Single request with limit
@@ -197,47 +201,68 @@ class NetZeroAPI:
             })
             try:
                 response = self.session.post(
-                    f"{self.base_url}/companies",
+                    f"{self.base_url}/{endpoint}",
                     json=payload,
                     headers={"Content-Type": "application/json"}
                 )
                 response.raise_for_status()
                 data = response.json()
-                logger.info(f"Successfully fetched {len(data.get('results', []))} startups")
-                data = {
+                logger.info(f"Successfully fetched {len(data.get('results', []))} {endpoint}")
+                return {
                     "total_count": data.get("count", 0),
                     "count": len(data.get("results", [])),
                     "results": data.get("results", [])
                 }
-                return data
             except requests.exceptions.RequestException as e:
-                logger.error(f"Failed to fetch startups: {str(e)}")
+                logger.error(f"Failed to fetch {endpoint}: {str(e)}")
                 raise
         else:
             if limit is not None:
                 max_pages = limit // page_size
             # Paginated requests
-            paginated_companies = self._paginate(
-                endpoint="companies",
+            paginated_results = self._paginate(
+                endpoint=endpoint,
                 payload=payload,
                 page_size=page_size,
                 max_pages=max_pages
             )
+
             count_in_result = 0
             results = []
             total_count = None
-            for page in paginated_companies:
+
+            for page in paginated_results:
                 if total_count is None:
                     total_count = page.get("count", 0)
                 page_results = page.get("results", [])
                 results.extend(page_results)
                 count_in_result += len(page_results)
+
             return {
                 "total_count": total_count,
                 "count": count_in_result,
                 "results": results
             }
 
+    def search_startups(
+        self,
+        main_filter: MainFilter = None,
+        sorting: Optional[Sorting] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        page_size: int = 100,
+        max_pages: Optional[int] = None
+    ) -> Union[Dict, Generator[Dict, None, None]]:
+        """Get a list of startups matching the specified criteria."""
+        return self._search_entities(
+            endpoint="companies",
+            filter=main_filter,
+            sorting=sorting,
+            limit=limit,
+            offset=offset,
+            page_size=page_size,
+            max_pages=max_pages
+        )
 
     def search_deals(
         self,
@@ -248,54 +273,36 @@ class NetZeroAPI:
         page_size: int = 100,
         max_pages: Optional[int] = None
     ) -> Union[Dict, Generator[Dict, None, None]]:
-        """Get a list of deals matching the specified criteria.
+        """Get a list of deals matching the specified criteria."""
+        return self._search_entities(
+            endpoint="fundingRounds",
+            filter=filter,
+            sorting=sorting,
+            limit=limit,
+            offset=offset,
+            page_size=page_size,
+            max_pages=max_pages
+        )
 
-        Args:
-            filter: Filter criteria for deals
-            sorting: Sorting criteria
-            limit: Maximum number of results to return (None for all results)
-            offset: Number of results to skip
-            page_size: Number of items per page when using pagination
-            max_pages: Maximum number of pages to fetch (None for all pages)
-            
-        Returns:
-            If limit is specified: Dict containing count and list of matching deals
-            If limit is None: Generator yielding Dicts containing results for each page
-        """
-        logger.info(f"Fetching deals with offset={offset}")
-        payload = {
-            "include": create_filter_dict(filter) if filter else {},
-            "exclude": {},
-            "sorting": sorting.__dict__ if sorting else None
-        }
-
-        if limit is not None:
-            # Single request with limit
-            payload.update({
-                "limit": limit,
-                "offset": offset
-            })
-            try:
-                response = self.session.post(
-                    f"{self.base_url}/fundingRounds",
-                    json=payload,
-                    headers={"Content-Type": "application/json"}
-                )
-                response.raise_for_status()
-                data = response.json()
-                logger.info(f"Successfully fetched {len(data.get('results', []))} deals")
-                return data
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Failed to fetch deals: {str(e)}")
-                raise
-        else:
-            # Paginated requests
-            return self._paginate(
-                endpoint="fundingRounds",
-                payload=payload,
-                page_size=page_size,
-                max_pages=max_pages
-            )
+    def search_investors(
+        self,
+        filter: Optional[InvestorFilter] = None,
+        sorting: Optional[Sorting] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        page_size: int = 100,
+        max_pages: Optional[int] = None
+    ) -> Union[Dict, Generator[Dict, None, None]]:
+        """Get a list of investors matching the specified criteria."""
+        return self._search_entities(
+            endpoint="investors",
+            filter=filter,
+            sorting=sorting,
+            limit=limit,
+            offset=offset,
+            page_size=page_size,
+            max_pages=max_pages
+        )
 
     def _get_detail(
         self,
@@ -343,63 +350,7 @@ class NetZeroAPI:
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to fetch {endpoint} details for ID {id}: {str(e)}")
             raise
-
-    def search_investors(
-        self,
-        filter: Optional[InvestorFilter] = None,
-        sorting: Optional[Sorting] = None,
-        limit: Optional[int] = None,
-        offset: int = 0,
-        page_size: int = 100,
-        max_pages: Optional[int] = None
-    ) -> Union[Dict, Generator[Dict, None, None]]:
-        """Get a list of investors matching the specified criteria.
-        Args:
-            filter: Filter criteria for investors
-            sorting: Sorting criteria
-            limit: Maximum number of results to return (None for all results)
-            offset: Number of results to skip
-            page_size: Number of items per page when using pagination
-            max_pages: Maximum number of pages to fetch (None for all pages)
-        Returns:
-            If limit is specified: Dict containing count and list of matching investors
-            If limit is None: Generator yielding Dicts containing results for each page
-        """
-        logger.info(f"Fetching investors with offset={offset}")
-        payload = {
-            "include": create_filter_dict(filter) if filter else {},
-            "exclude": {},
-            "sorting": sorting.__dict__ if sorting else None
-        }
-
-        if limit is not None:
-            # Single request with limit
-            payload.update({
-                "limit": limit,
-                "offset": offset
-            })
-            try:
-                response = self.session.post(
-                    f"{self.base_url}/investors",
-                    json=payload,
-                    headers={"Content-Type": "application/json"}
-                )
-                response.raise_for_status()
-                data = response.json()
-                logger.info(f"Successfully fetched {len(data.get('results', []))} investors")
-                return data
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Failed to fetch investors: {str(e)}")
-                raise
-        else:
-            # Paginated requests
-            return self._paginate(
-                endpoint="investors",
-                payload=payload,
-                page_size=page_size,
-                max_pages=max_pages
-            )
-
+    
     def get_startup_detail(
         self,
         startup_id: int,
