@@ -1,9 +1,7 @@
 import requests
 import aiohttp
 import asyncio
-from typing import Dict, List, Optional, Union, Generator, TypeVar, Type
-from dataclasses import dataclass
-from datetime import datetime
+from typing import Dict, List, Optional, Union, Generator, Type
 from vdl_tools.shared_tools.tools.logger import logger
 from vdl_tools.scrape_enrich.netzero_insights.filters import (
     Sorting, MainFilter,

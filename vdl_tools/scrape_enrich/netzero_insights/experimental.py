@@ -7,6 +7,24 @@ from vdl_tools.scrape_enrich.netzero_insights.filters import MainFilter, Startup
 config = get_configuration()
 
 
+def get_netzero_api(
+    use_sandbox: bool = True,
+    read_from_cache: bool = True,
+    write_to_cache: bool = True,
+):
+    if use_sandbox:
+        password = config.get("netzero_insights", "password_sandbox")
+    else:
+        password = config.get("netzero_insights", "password")
+    return NetZeroAPI(
+        username=config.get("netzero_insights", "username"),
+        password=password,
+        use_sandbox=use_sandbox,
+        read_from_cache=read_from_cache,
+        write_to_cache=write_to_cache,
+    )
+
+
 def search_companies(
     include_keywords: list[str] = None,
     exclude_keywords: list[str] = None,
@@ -14,11 +32,13 @@ def search_companies(
     exclude_investors: list[int] = None,
     limit: int = 100,
     use_sandbox: bool = False,
+    read_from_cache: bool = True,
+    write_to_cache: bool = True,
 ):
-    netzero_api = NetZeroAPI(
-        username=config.get("netzero_insights", "username"),
-        password=config.get("netzero_insights", "password"),
+    netzero_api = get_netzero_api(
         use_sandbox=use_sandbox,
+        read_from_cache=read_from_cache,
+        write_to_cache=write_to_cache,
     )
     include_keywords = include_keywords or []
     exclude_keywords = exclude_keywords or []
@@ -76,29 +96,28 @@ def get_companies_details(
 
 
 if __name__ == "__main__":
-    ocean_search = search_companies(
-        include_keywords=["ocean"],
-        use_sandbox=False,
-        limit=500,
-    )
+    # ocean_search = search_companies(
+    #     include_keywords=["ocean"],
+    #     use_sandbox=False,
+    #     limit=500,
+    # )
 
     USE_SANDBOX = False
     READ_FROM_CACHE = True
     WRITE_TO_CACHE = True
 
-    # grantham_investor_ids = [6121, 9939, 33402]
-    # grantham_companies = search_companies(
-    #     include_investors=grantham_investor_ids,
-    #     use_sandbox=USE_SANDBOX,
-    #     limit=500,
-    # )
+    grantham_investor_ids = [6121, 9939, 33402]
+    grantham_companies = search_companies(
+        include_investors=grantham_investor_ids,
+        use_sandbox=USE_SANDBOX,
+        limit=500,
+    )
 
-    # grantham_company_ids = [company["clientID"] for company in grantham_companies['results']]
+    grantham_company_ids = [company["clientID"] for company in grantham_companies['results']]
 
-    # companies = get_companies_details(
-    #     company_ids=grantham_company_ids,
-    #     use_sandbox=USE_SANDBOX,
-    #     read_from_cache=READ_FROM_CACHE,
-    #     write_to_cache=WRITE_TO_CACHE,
-    # )
-
+    companies = get_companies_details(
+        company_ids=grantham_company_ids,
+        use_sandbox=USE_SANDBOX,
+        read_from_cache=READ_FROM_CACHE,
+        write_to_cache=WRITE_TO_CACHE,
+    )
