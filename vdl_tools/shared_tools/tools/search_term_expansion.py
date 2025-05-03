@@ -85,6 +85,7 @@ class SearchTermExpansion(InstructorPRC):
         session,
         topic,
         prompt_str=None,
+        prompt_id=None,
         response_model=SearchTermExpansionResponse,
         prompt_name="search_term_expansion",
         model="gpt-4.1-mini",
@@ -97,6 +98,7 @@ class SearchTermExpansion(InstructorPRC):
             response_model=response_model,
             prompt_name=prompt_name,
             model=model,
+            prompt_id=prompt_id,
         )
         self.topic = topic
 
@@ -179,6 +181,7 @@ def expand_search_term_round(
 def expand_search_term(
     topic,
     search_term,
+    prompt_id=None,
     prompt_str=None,
     use_cached_result=True,
     max_tokens=10000,
@@ -230,6 +233,7 @@ def expand_search_term(
             session,
             topic,
             prompt_str=prompt_str,
+            prompt_id=prompt_id,
             model=model
         )
 
