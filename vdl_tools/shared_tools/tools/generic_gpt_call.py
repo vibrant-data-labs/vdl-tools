@@ -36,4 +36,33 @@ def get_gpt_response(
             use_cached_result=use_cached_result,
             **kwargs
         )
-        return [response[key]['response_text'] for key in response]
+        return {k: v['response_text'] for k,v in response.items()}
+
+
+if __name__ == "__main__":
+    from vdl_tools.shared_tools.tools.generic_gpt_call import get_gpt_response
+    translations_texts = ['me llamo eric y mi colego es Zein', "je m'appl zein'"]
+    translation_prompt = "You are an expert translator. Translate the following into English"
+    translations = get_gpt_response(translations_texts, prompt_str=translation_prompt)
+    print(f"*****\nTranslating\n{translations}\n*****")
+
+
+    location_detection_texts = ["Paris Hilton stayed at the Ritz Carlton in Bangkok", "Zein went to the Eiffel Tower in Paris"]
+    location_detection_prompt = """
+    You are an expert location detector. Detect the locations of the following text.
+    Only return the locations, no other text. Think step by step.
+    * Find the nouns that are locations
+    * For each noun, check if it is a city, country, or landmark
+    * If it is a city or country, return the city or country
+    * If it is a landmark, return the landmark
+    * If it is not a location, return None
+    * Make sure it's not a person's name or a company name or other proper noun
+    """
+    locations = get_gpt_response(
+        location_detection_texts,
+        prompt_str=location_detection_prompt,
+        model="4.1-mini",
+        use_cached_result=False,
+    )
+    print(f"*****\nLocation detection\n{locations}\n*****")
+
