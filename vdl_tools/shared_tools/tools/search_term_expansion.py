@@ -8,7 +8,7 @@ from vdl_tools.shared_tools.database_cache.database_utils import get_session
 class SearchTerm(BaseModel):
     term: str = Field(description="The search term")
     chain_of_thought: str = Field(description="The chain of thought process for the search term")
-    confidence: float = Field(description="The confidence that the new term is related to the input search term")
+    # confidence: float = Field(description="The confidence that the new term is related to the input search term")
 
 class SearchTermExpansionResponse(BaseModel):
     expanded_search_terms: list[SearchTerm]
