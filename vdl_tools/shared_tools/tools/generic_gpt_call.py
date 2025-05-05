@@ -22,10 +22,10 @@ def get_gpt_response(
         )
         if isinstance(items, list):
             if isinstance(items[0], str):
-                keys_items = [(f"{prc.prompt.id}-{i}", item) for i, item in enumerate(items)]
+                keys_items = [(f"{prc.prompt.id}-{prc.prompt.create_text_id(item)}", item) for i, item in enumerate(items)]
             else:
                 keys_items = items
-        elif isinstance(items, dict):   
+        elif isinstance(items, dict):
             keys_items = list(items.items())
         else:
             raise ValueError("items must be a list or a dict")
@@ -61,7 +61,7 @@ if __name__ == "__main__":
     locations = get_gpt_response(
         location_detection_texts,
         prompt_str=location_detection_prompt,
-        model="4.1-mini",
+        model="gpt-4.1-mini",
         use_cached_result=False,
     )
     print(f"*****\nLocation detection\n{locations}\n*****")
