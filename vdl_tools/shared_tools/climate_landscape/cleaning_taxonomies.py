@@ -9,28 +9,28 @@ def _join_cols(x):
     return results
 
 
-def split_out_levers_of_change(subpillars_list):
-    levers_of_change = []
-    clean_subpillars = []
-    if not subpillars_list:
-        return None, None
-    for subpillar in subpillars_list:
-        # There is one named Root Node Science and Technology
-        if subpillar.startswith("Root Node "):
-            levers_of_change.append(subpillar.strip("Root Node ").strip())
-        elif subpillar.startswith("Root "):
-            levers_of_change.append(subpillar.strip("Root ").strip())
-
-        # Don't need to include Cross-Cutting Subpillars
-        elif subpillar.startswith("Cross-Cutting "):
-            continue
-        else:
-            clean_subpillars.append(subpillar)
-    if not levers_of_change:
-        levers_of_change = None
-    if not clean_subpillars:
-        clean_subpillars = None
-    return levers_of_change, clean_subpillars
+#def split_out_levers_of_change(subpillars_list):
+#    levers_of_change = []
+#    clean_subpillars = []
+#    if not subpillars_list:
+#        return None, None
+#    for subpillar in subpillars_list:
+#        # There is one named Root Node Science and Technology
+#        if subpillar.startswith("Root Node "):
+#            levers_of_change.append(subpillar.strip("Root Node ").strip())
+#        elif subpillar.startswith("Root "):
+#            levers_of_change.append(subpillar.strip("Root ").strip())
+#
+#        # Don't need to include Cross-Cutting Subpillars
+#        elif subpillar.startswith("Cross-Cutting "):
+#            continue
+#        else:
+#            clean_subpillars.append(subpillar)
+#    if not levers_of_change:
+#        levers_of_change = None
+#    if not clean_subpillars:
+#        clean_subpillars = None
+#    return levers_of_change, clean_subpillars
 
 
 def combine_one_earth_tags(ndf):
@@ -44,10 +44,11 @@ def combine_one_earth_tags(ndf):
             "level0_one_earth_category": "One Earth Pillar",
             "level1_one_earth_category": "One Earth Sub-Pillar",
             "level2_one_earth_category": "One Earth Solution",
+            "all_level0_Levers": 'One Earth Levers of Change'
         }
     )
 
-    ndf['One Earth Levers of Change'], ndf['One Earth Sub-Pillars'] = zip(*ndf['One Earth Sub-Pillars'].apply(split_out_levers_of_change))
+    # ndf['One Earth Levers of Change'], ndf['One Earth Sub-Pillars'] = zip(*ndf['One Earth Sub-Pillars'].apply(split_out_levers_of_change))
 
     cols = ['One Earth Pillars', 'One Earth Sub-Pillars']
     ndf['One Earth Pillars & Sub-Pillars'] = ndf[cols].apply(_join_cols, axis=1)

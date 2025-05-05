@@ -363,7 +363,6 @@ def add_one_earth_taxonomy(
         mapping_name = "Levers"
         pct = 'pct_' + mapping_name
         sim = 'sim_' + mapping_name
-        # loc_taxonomy = load_one_earth_levers(paths["one_earth_taxonomy"])
         loc_taxonomy = load_one_earth_hierarchical_levers(paths["one_earth_levers"])
         loc_all_df, _ = add_taxonomy_mapping(
             df,
@@ -381,8 +380,11 @@ def add_one_earth_taxonomy(
             distribute_funding=False,
             mapping_name=mapping_name
         )
-        new_df = tm.add_mapping_to_orgs(new_df, loc_all_df, id_col, pct=pct, sim=sim,
-                                        cats=[mapping_name, f'level0_{mapping_name}'])
+        cols = [mapping_name, f'cat_level_{mapping_name}'] + [f'level{tx["level"]}_{mapping_name}'
+                                                              for tx in loc_taxonomy]
+        new_df = tm.add_mapping_to_orgs(new_df, loc_all_df, id_col, pct=pct, sim=sim, cats=cols)
+        #new_df = tm.add_mapping_to_orgs(new_df, loc_all_df, id_col, pct=pct, sim=sim,
+        #                                cats=[mapping_name, f'level0_{mapping_name}'])
 
     return new_df
 
