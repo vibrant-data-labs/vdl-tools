@@ -187,6 +187,8 @@ def load_one_earth_taxonomy(taxonomy_path):
 
     term_df = term_df[term_df['Exclude'] != 1].copy()
     term_df.drop(columns=['Exclude'], inplace=True)
+    # subterms must be unique but raw subterms are sometimes repeated in different solutions
+    term_df['Sub-Term'] = term_df['Sub-Term'] + ' (' + term_df['Solution'] + ')'
 
     taxonomy = [
         {'level': 0, 'name': 'Pillar', 'data': pillar_df, 'textattr': 'Definition'},
@@ -219,6 +221,27 @@ def load_one_earth_falsesolns(taxonomy_path):
     return taxonomy
 
 
+def load_one_earth_levers(taxonomy_path):
+    loc_df = pd.read_excel(taxonomy_path, sheet_name="LOC").ffill()
+    loc0_df = loc_df[['Name', 'Definition']].drop_duplicates()
+    taxonomy = [
+        {'level': 0, 'name': 'Name', 'data': loc0_df, 'textattr': 'Definition'},
+        ]
+    return taxonomy
+
+
+def load_one_earth_hierarchical_levers(oe_levers_path):
+    l0_df = pd.read_excel(oe_levers_path, sheet_name="Level0").ffill()
+    l1_df = pd.read_excel(oe_levers_path, sheet_name="Level1").ffill()
+    l2_df = pd.read_excel(oe_levers_path, sheet_name="Level2").ffill()
+    taxonomy = [
+        {'level': 0, 'name': 'Level0', 'data': l0_df, 'textattr': 'Definition'},
+        {'level': 1, 'name': 'Level1', 'data': l1_df, 'textattr': 'Definition'},
+        {'level': 2, 'name': 'Level2', 'data': l2_df, 'textattr': 'Definition'},
+        ]
+    return taxonomy
+
+
 def add_one_earth_taxonomy(
     df,
     id_col,
@@ -232,6 +255,7 @@ def add_one_earth_taxonomy(
     force_parents=True,
     add_intersectional=True,
     add_falsesolns=True,
+    add_levers_of_change=True,
     mapping_name="one_earth_category"
 ):
     paths = paths or pc.get_paths()
@@ -333,6 +357,34 @@ def add_one_earth_taxonomy(
         )
         new_df = tm.add_mapping_to_orgs(new_df, fs_all_df, id_col, pct=pct, sim=sim,
                                         cats=[mapping_name, f'level0_{mapping_name}', f'level1_{mapping_name}'])
+
+    if add_levers_of_change:
+        # add levers of change mapping
+        mapping_name = "Levers"
+        pct = 'pct_' + mapping_name
+        sim = 'sim_' + mapping_name
+        loc_taxonomy = load_one_earth_hierarchical_levers(paths["one_earth_levers"])
+        loc_all_df, _ = add_taxonomy_mapping(
+            df,
+            entity_embeddings,
+            loc_taxonomy,
+            id_col,
+            text_col,
+            name_col=name_col,
+            run_fewshot_classification=run_fewshot_classification,
+            filter_fewshot_classification=filter_fewshot_classification,
+            fewshot_examples=fse.falsesolns_fewshot_examples,
+            use_cached_results=use_cached_results,
+            max_workers=3,
+            force_parents=False,
+            distribute_funding=False,
+            mapping_name=mapping_name
+        )
+        cols = [mapping_name, f'cat_level_{mapping_name}'] + [f'level{tx["level"]}_{mapping_name}'
+                                                              for tx in loc_taxonomy]
+        new_df = tm.add_mapping_to_orgs(new_df, loc_all_df, id_col, pct=pct, sim=sim, cats=cols)
+        #new_df = tm.add_mapping_to_orgs(new_df, loc_all_df, id_col, pct=pct, sim=sim,
+        #                                cats=[mapping_name, f'level0_{mapping_name}'])
 
     return new_df
 

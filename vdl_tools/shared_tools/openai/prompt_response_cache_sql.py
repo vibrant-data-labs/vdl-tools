@@ -63,6 +63,9 @@ class PromptResponseCacheSQL():
         prompt -> `prompt_text` -> `id` (via prompt_manager)
         """
 
+        if prompt and isinstance(prompt, dict):
+            prompt = Prompt(**prompt)
+
         all_prompts = load_prompts(self.session)
         if prompt and isinstance(prompt, Prompt):
             logger.info("Prompt object passed, using that")
@@ -74,6 +77,11 @@ class PromptResponseCacheSQL():
 
             if prompt_id and prompt_id != prompt.id:
                 logger.warning("Given prompt_id and prompt.prompt_id are different")
+        elif prompt_id:
+            logger.info("Retrieving by prompt_id")
+            temp_prompt = all_prompts.get(prompt_id)
+            if not temp_prompt:
+                raise Exception(f"No prompt for {prompt_id} found in registry")
 
         elif prompt_str:
             logger.warning("prompt_str passed, using that to create a prompt")
@@ -324,6 +332,9 @@ class PromptResponseCacheSQL():
         if not given_ids_texts:
             logger.warning("No given_ids_texts passed")
             return {}
+
+        # Remove duplicates
+        given_ids_texts = list(set([(x[0], x[1]) for x in given_ids_texts]))
 
         if use_cached_result:
             found_rows, unfound_ids_errors = self.get_prompt_response_obj_bulk(given_ids_texts)

@@ -27,6 +27,7 @@ class InstructorPRC(PromptResponseCacheSQL):
         prompt_str,
         response_model,
         prompt_name=None,
+        prompt_id=None,
         model="gpt-4.1-mini",
     ):
         # If None or "" is passed in
@@ -35,6 +36,7 @@ class InstructorPRC(PromptResponseCacheSQL):
             session=session,
             prompt_str=prompt_str_w_schema,
             prompt_name=prompt_name,
+            prompt_id=prompt_id,
         )
         self.prompt_text = prompt_str
         self.response_model = response_model
