@@ -22,10 +22,10 @@ from google.oauth2 import service_account
 
 
 def translate_text(
-    target,
-    text,
-    print=False,
-    cred="<path to json cred file",
+        text,
+        target="en",
+        print=False,
+        cred="<path to json cred file",
 ):
     """Translates text into the target language.
     Target must be an ISO 639-1 language code.
@@ -71,7 +71,7 @@ def translate_cols(df, textcols, target="en"):
         df[col + "_en"] = df.apply(
             lambda x: x[col]
             if x[col] == ""
-            else translate_text(target, x[col])["translatedText"],
+            else translate_text(x[col], target=target)["translatedText"],
             axis=1,
         )
         df[col + "_en"] = df[col + "_en"].apply(
