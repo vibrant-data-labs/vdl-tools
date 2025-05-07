@@ -23,7 +23,6 @@ def add_taxonomy_mapping(
     max_workers=3,
     force_parents=True,
     distribute_funding=True,
-    distribute_funding_across_levels=False,
     mapping_name=None
 ):
     logger.info("Starting Taxonomy mapping for %s", mapping_name)
@@ -112,7 +111,6 @@ def add_taxonomy_mapping(
             taxonomy=taxonomy,
             id_attr=id_col,
             keepcols=[name_col],
-            across_levels=distribute_funding_across_levels,
         )
     else:
         distributed_funding_df = None
@@ -258,7 +256,6 @@ def add_one_earth_taxonomy(
     add_intersectional=True,
     add_falsesolns=True,
     add_levers_of_change=True,
-    distribute_funding_across_levels=False,
     mapping_name="one_earth_category"
 ):
     paths = paths or pc.get_paths()
@@ -287,7 +284,6 @@ def add_one_earth_taxonomy(
         fewshot_examples=None,
         use_cached_results=use_cached_results,
         force_parents=force_parents,
-        distribute_funding_across_levels=distribute_funding_across_levels,
         mapping_name=mapping_name,
     )
 
