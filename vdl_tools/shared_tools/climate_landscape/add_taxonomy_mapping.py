@@ -83,7 +83,7 @@ def add_taxonomy_mapping(
                 reranked_relevancy_col='reranked_relevancy',
                 use_cached_results=use_cached_results,
                 max_workers=max_workers,
-                examples_dict=fewshot_examples
+                examples_dict=fewshot_examples,
             )
             all_df = pd.concat([all_df, forced_in_df])
 
@@ -284,7 +284,7 @@ def add_one_earth_taxonomy(
         fewshot_examples=None,
         use_cached_results=use_cached_results,
         force_parents=force_parents,
-        mapping_name=mapping_name
+        mapping_name=mapping_name,
     )
 
     # reduce the number of columns in the output
@@ -399,7 +399,7 @@ def add_tailwind_taxonomy(
     use_cached_results=True,
     paths=None,
     max_workers=3,
-    mapping_name="tailwind_category"
+    mapping_name="tailwind_category",
 ):
 
     paths = paths or pc.get_paths()
