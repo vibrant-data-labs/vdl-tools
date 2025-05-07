@@ -2,7 +2,7 @@ import asyncio
 from vdl_tools.shared_tools.tools.config_utils import get_configuration
 from vdl_tools.scrape_enrich.netzero_insights.netzero_api import NetZeroAPI
 from vdl_tools.scrape_enrich.netzero_insights.filters import MainFilter, StartupFilter, InvestorFilter
-
+from vdl_tools.shared_tools.tools.logger import logger
 
 config = get_configuration()
 
@@ -32,14 +32,10 @@ def search_companies(
     exclude_investors: list[int] = None,
     limit: int = 100,
     use_sandbox: bool = False,
-    read_from_cache: bool = True,
-    write_to_cache: bool = True,
+    netzero_api: NetZeroAPI = None,
 ):
-    netzero_api = get_netzero_api(
-        use_sandbox=use_sandbox,
-        read_from_cache=read_from_cache,
-        write_to_cache=write_to_cache,
-    )
+    netzero_api = netzero_api or get_netzero_api(use_sandbox=use_sandbox)
+
     include_keywords = include_keywords or []
     exclude_keywords = exclude_keywords or []
     include_keywords_phrases = [f'"{keyword}"' for keyword in include_keywords]
@@ -81,16 +77,56 @@ def get_companies_details(
     use_sandbox: bool = False,
     read_from_cache: bool = True,
     write_to_cache: bool = True,
+    netzero_api: NetZeroAPI = None,
 ):
-    netzero_api = NetZeroAPI(
-        username=config.get("netzero_insights", "username"),
-        password=config.get("netzero_insights", "password"),
+    netzero_api = netzero_api or get_netzero_api(
         use_sandbox=use_sandbox,
         read_from_cache=read_from_cache,
         write_to_cache=write_to_cache,
     )
 
     companies = asyncio.run(netzero_api.get_startup_details(company_ids))
+
+    return companies
+
+
+def search_get_companies_details(
+    include_keywords: list[str] = None,
+    exclude_keywords: list[str] = None,
+    include_investors: list[int] = None,
+    exclude_investors: list[int] = None,
+    use_sandbox: bool = False,
+    read_from_cache: bool = True,
+    write_to_cache: bool = True,
+    limit: int = 100,
+):
+    # Get the netzero api client and share it with the other functions
+    netzero_api = get_netzero_api(
+        use_sandbox=use_sandbox,
+        read_from_cache=read_from_cache,
+        write_to_cache=write_to_cache,
+    )
+
+    search_results = search_companies(
+        include_keywords=include_keywords,
+        exclude_keywords=exclude_keywords,
+        include_investors=include_investors,
+        exclude_investors=exclude_investors,
+        use_sandbox=use_sandbox,
+        netzero_api=netzero_api,
+        limit=limit,
+    )
+
+    company_ids = [company["clientID"] for company in search_results['results']]
+    logger.info(f"Found {len(company_ids)} companies")
+
+    companies = get_companies_details(
+        company_ids=company_ids,
+        use_sandbox=use_sandbox,
+        read_from_cache=read_from_cache,
+        write_to_cache=write_to_cache,
+        netzero_api=netzero_api,
+    )
 
     return companies
 

@@ -44,9 +44,12 @@ class NetZeroAPI:
         self.password = password
         self.session = requests.Session()
         self.base_url = SANDBOX_BASE_URL if use_sandbox else PROD_BASE_URL
-        self._authenticate()
         self.read_from_cache = read_from_cache
         self.write_to_cache = write_to_cache
+        self.use_sandbox = use_sandbox
+        self.verify = not use_sandbox
+
+        self._authenticate()
 
     def _authenticate(self) -> None:
         """Authenticate with the API and store the session cookie."""
@@ -59,7 +62,7 @@ class NetZeroAPI:
                     "password": self.password
                 },
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
-                verify=True
+                verify=self.verify,
             )
             response.raise_for_status()
             logger.info("Successfully authenticated with NetZero API")
@@ -71,7 +74,7 @@ class NetZeroAPI:
         """Logout from the API session."""
         logger.info("Logging out from NetZero API")
         try:
-            response = self.session.get(f"{self.base_url}/security/logout")
+            response = self.session.get(f"{self.base_url}/security/logout", verify=self.verify)
             response.raise_for_status()
             logger.info("Successfully logged out from NetZero API")
         except requests.exceptions.RequestException as e:
@@ -115,7 +118,8 @@ class NetZeroAPI:
                 response = self.session.post(
                     f"{self.base_url}/{endpoint}",
                     json=current_payload,
-                    headers={"Content-Type": "application/json"}
+                    headers={"Content-Type": "application/json"},
+                    verify=self.verify,
                 )
                 response.raise_for_status()
                 data = response.json()
@@ -200,7 +204,8 @@ class NetZeroAPI:
                 response = self.session.post(
                     f"{self.base_url}/{endpoint}",
                     json=payload,
-                    headers={"Content-Type": "application/json"}
+                    headers={"Content-Type": "application/json"},
+                    verify=self.verify,
                 )
                 response.raise_for_status()
                 data = response.json()
@@ -334,7 +339,10 @@ class NetZeroAPI:
                     return entity.to_dict()
 
         try:
-            response = self.session.get(f"{self.base_url}/{endpoint}/{id}")
+            response = self.session.get(
+                f"{self.base_url}/{endpoint}/{id}",
+                verify=self.verify,
+            )
             response.raise_for_status()
             data = response.json()
             logger.info(f"Successfully fetched details for {endpoint} {id}")
@@ -439,7 +447,11 @@ class NetZeroAPI:
         # Fetch remaining entities from API
         async def fetch_entity(session: aiohttp.ClientSession, id: int) -> Dict:
             try:
-                async with session.get(f"{self.base_url}/{endpoint}/{id}", cookies=cookies) as response:
+                async with session.get(
+                    f"{self.base_url}/{endpoint}/{id}",
+                    cookies=cookies,
+                    ssl=self.verify,
+                ) as response:
                     response.raise_for_status()
                     data = await response.json()
                     return id, data
