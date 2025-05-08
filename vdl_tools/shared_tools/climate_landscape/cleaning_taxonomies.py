@@ -1,5 +1,5 @@
 from vdl_tools.shared_tools.tools.logger import logger
-
+import re
 
 def _join_cols(x):
     results = []
@@ -97,3 +97,49 @@ def combine_one_earth_intersectional_themes(ndf):
     return ndf
 
 
+def clean_pillars_and_subpillar_categories(df):
+    df['level0_one_earth_category'] = df['level0_one_earth_category'].str.replace("Cross-Cutting (Root Node)",
+                                                                                    "Cross-Cutting")
+    df['level0_one_earth_category'] = df['level0_one_earth_category'].str.replace("No_Level_0", "No One Earth Match")
+    df['level1_one_earth_category'] = df['level1_one_earth_category'].apply(
+        lambda x: None if "No_Level_1_" in x else x)
+    df['level1_one_earth_category'] = df['level1_one_earth_category'].str.replace('Industries & Services: ', '',
+                                                                                    regex=False)
+    df['level1_one_earth_category'] = df['level1_one_earth_category'].str.replace('Industries & Services',
+                                                                                    'Industries & Services Cross-Cutting',
+                                                                                    regex=False)
+    df['level1_one_earth_category'] = df['level1_one_earth_category'].str.replace('Cross-Cutting Nature',
+                                                                                    'Nature Cross-Cutting', regex=False)
+    df['level1_one_earth_category'] = df['level1_one_earth_category'].str.replace('Cross-Cutting Regen. Ag.',
+                                                                                    'Regen. Ag. Cross-Cutting',
+                                                                                    regex=False)
+    df['level1_one_earth_category'] = df['level1_one_earth_category'].str.replace('Cross-Cutting Energy',
+                                                                                    'Energy Cross-Cutting', regex=False)
+    return df
+
+
+def rename_one_earth_crosscutting_tags(df):
+    logger.info('renaming one earth crosscutting tags')
+    tax_tag_cols = [
+        'all_level0_one_earth_category',
+        'all_level1_one_earth_category',
+        'all_level2_one_earth_category',
+                ]
+    rename_dict = {
+        " (Root Node)": '',
+        'Cross-Cutting Nature': 'Nature Cross-Cutting',
+        'Cross-Cutting Regen. Ag.': 'Regen. Ag. Cross-Cutting',
+        'Cross-Cutting Energy': 'Energy Cross-Cutting',
+        'Industries & Services: ': '',
+        'Industries & Services': 'Industries & Services Cross-Cutting',
+    }
+    for col in tax_tag_cols:
+        # rename values
+        for k, v in rename_dict.items():
+            # fill empty cells with empty list
+            df[col] = df[col].apply(lambda x: x if isinstance(x, list) else [])
+            # strip of empty strings
+            df[col] = df[col].apply(lambda x: [tag for tag in x if tag != ''])
+            # replace the key with the value
+            df[col] = df[col].apply(lambda x: [tag.replace(k, v) for tag in x] if isinstance(x, list) else x)
+    return df

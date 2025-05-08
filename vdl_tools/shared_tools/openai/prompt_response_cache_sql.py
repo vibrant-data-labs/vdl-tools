@@ -333,8 +333,12 @@ class PromptResponseCacheSQL():
             logger.warning("No given_ids_texts passed")
             return {}
 
-        # Remove duplicates
-        given_ids_texts = list(set([(x[0], x[1]) for x in given_ids_texts]))
+        # Remove duplicates when the text is a string
+        # Sometimes it's a dict like with taxonmy mapping
+        if isinstance(given_ids_texts[0][1], str):
+            given_ids_texts = list(set([(x[0], x[1]) for x in given_ids_texts]))
+        else:
+            given_ids_texts = given_ids_texts
 
         if use_cached_result:
             found_rows, unfound_ids_errors = self.get_prompt_response_obj_bulk(given_ids_texts)

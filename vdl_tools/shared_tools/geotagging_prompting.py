@@ -126,6 +126,7 @@ Once extracted, you should add the most likely region and country if it doesn't 
 Sometimes the location is a country. In this case, don't add city or state_region.
 Sometimes the location is a state_region. In this case, don't add city.
 If the location is a city, please try to add the most likely state_region and country. However, if you don't know the state_region, add null.
+If the location is not in English, please translate it to English and return all results in English. If you cannot translate it, add null.
 If you cannot extract the location, add null.
 
 ---

@@ -244,6 +244,9 @@ def run_cluster_layout(nw, nodes_df, dists=None, maxdist=5, cluster_attr='Cluste
     clus_nodes = nodes_df.groupby(cluster_attr)
     subgraphs = {clus: nw.subgraph(cdf.index.to_list()) for clus, cdf in clus_nodes}
     # compute sizing scale factor for each cluster
+    if size_attr is not None and nodes_df[size_attr].min() < 0:
+        print("Warning: you cannot use a size_attr with minimum < 0; setting size_attr to None")
+        size_attr = None
     if size_attr is not None:
         mean_size = nodes_df[size_attr].mean()
         clus_scale = {clus: cdf[size_attr].mean() / mean_size for clus, cdf in clus_nodes}
