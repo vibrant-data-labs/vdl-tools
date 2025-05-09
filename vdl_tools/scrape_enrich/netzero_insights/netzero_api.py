@@ -1,3 +1,5 @@
+
+import os
 import requests
 import aiohttp
 import asyncio
@@ -81,6 +83,38 @@ class NetZeroAPI:
             logger.error(f"Failed to logout from NetZero API: {str(e)}")
             raise
 
+    def _get(
+        self,
+        endpoint: str,
+        params: Dict,
+        headers: Dict = None
+    ) -> Dict:
+        """Get a resource from the API."""
+        response = self.session.get(
+            os.path.join(self.base_url, endpoint),
+            params=params,
+            verify=self.verify,
+            headers=headers,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def _post(
+        self,
+        endpoint: str,
+        payload: Dict,
+        headers: Dict = None
+    ) -> Dict:
+        """Post a resource to the API."""
+        response = self.session.post(
+            os.path.join(self.base_url, endpoint),
+            json=payload,
+            verify=self.verify,
+            headers=headers,
+        )
+        response.raise_for_status()
+        return response.json()
+
     def _paginate(
         self,
         endpoint: str,
@@ -115,14 +149,11 @@ class NetZeroAPI:
             })
 
             try:
-                response = self.session.post(
-                    f"{self.base_url}/{endpoint}",
-                    json=current_payload,
+                data = self._post(
+                    endpoint=endpoint,
+                    payload=current_payload,
                     headers={"Content-Type": "application/json"},
-                    verify=self.verify,
                 )
-                response.raise_for_status()
-                data = response.json()
                 # Get total count on first page
                 if total_count is None:
                     total_count = data.get("count", 0)
@@ -201,14 +232,11 @@ class NetZeroAPI:
                 "offset": offset
             })
             try:
-                response = self.session.post(
-                    f"{self.base_url}/{endpoint}",
-                    json=payload,
+                data = self._post(
+                    endpoint=endpoint,
+                    payload=payload,
                     headers={"Content-Type": "application/json"},
-                    verify=self.verify,
                 )
-                response.raise_for_status()
-                data = response.json()
                 logger.info(f"Successfully fetched {len(data.get('results', []))} {endpoint}")
                 return {
                     "total_count": data.get("count", 0),
@@ -339,12 +367,9 @@ class NetZeroAPI:
                     return entity.to_dict()
 
         try:
-            response = self.session.get(
-                f"{self.base_url}/{endpoint}/{id}",
-                verify=self.verify,
+            data = self._get(
+                endpoint=f"{endpoint}/{id}",
             )
-            response.raise_for_status()
-            data = response.json()
             logger.info(f"Successfully fetched details for {endpoint} {id}")
             entity = model_class(**data)
             if write_to_cache:
@@ -531,3 +556,33 @@ class NetZeroAPI:
             read_from_cache=read_from_cache,
             write_to_cache=write_to_cache
         )
+
+
+    def get_taxonomy_children(self, parent_id: int) -> List[Dict]:
+        """Get taxonomy for a specific parent ID."""
+        payload = {
+            'onlyVisible': True,
+            'onlyAdvancedFilters': False,
+            'mainFilter': {
+                'include': {},
+                'exclude': {},
+                'fundingRoundInclude': {},
+                'fundingRoundExclude': {},
+                'investorInclude': {},
+                'investorExclude': {},
+            },
+            'onlySearchable': True
+        }
+        return self._post(
+            endpoint=f"taxonomy/graph/{parent_id}",
+            payload=payload
+        )
+
+    def get_taxonomy_children_recursive(self, parent_id: int, limit: int = 10, current_depth: int = 0) -> List[Dict]:
+        """Get taxonomy for a specific parent ID and all its children."""
+        children = self.get_taxonomy_children(parent_id)
+        for child in children:
+            if current_depth >= limit:
+                break
+            child['children'] = self.get_taxonomy_children_recursive(child['id'], limit, current_depth + 1)
+        return children
