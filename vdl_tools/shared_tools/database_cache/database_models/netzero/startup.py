@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, JSON
+from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, JSON, BigInteger
 from vdl_tools.shared_tools.database_cache.database_models.base import BaseMixin
 from sqlalchemy_utils import generic_repr
 
@@ -69,8 +69,8 @@ class Startup(BaseMixin):
     fundingRange = Column(String)
     fundingRangeUSD = Column(String)
     fundingRangeIDUSD = Column(Integer)
-    lastRoundAmount = Column(Integer)
-    lastRoundAmountUSD = Column(Integer)
+    lastRoundAmount = Column(BigInteger)
+    lastRoundAmountUSD = Column(BigInteger)
     lastRoundAmountString = Column(String)
     lastRoundAmountStringUSD = Column(String)
     lastRoundType = Column(String)
@@ -87,7 +87,7 @@ class Startup(BaseMixin):
     dealsLastReviewer = Column(String)
 
     # Revenue information
-    revenueEuro = Column(Integer)
+    revenueEuro = Column(BigInteger)
     revenueYear = Column(Integer)
     revenuesRangeID = Column(Integer)
     linkedInRevenuesRangeID = Column(Integer)

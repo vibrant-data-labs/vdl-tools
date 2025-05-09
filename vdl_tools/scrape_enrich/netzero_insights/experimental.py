@@ -25,33 +25,48 @@ def get_netzero_api(
     )
 
 
-def search_companies(
+def create_search_filter(
     include_keywords: list[str] = None,
     exclude_keywords: list[str] = None,
     include_investors: list[int] = None,
     exclude_investors: list[int] = None,
-    limit: int = 100,
-    use_sandbox: bool = False,
-    netzero_api: NetZeroAPI = None,
-):
-    netzero_api = netzero_api or get_netzero_api(use_sandbox=use_sandbox)
+    include_taxonomy_items: list[int] = None,
+    exclude_taxonomy_items: list[int] = None,
+) -> MainFilter:
 
     include_keywords = include_keywords or []
     exclude_keywords = exclude_keywords or []
     include_keywords_phrases = [f'"{keyword}"' for keyword in include_keywords]
     exclude_keywords_phrases = [f'-"{keyword}"' for keyword in exclude_keywords]
 
+    startup_include_filter = None
+    startup_exclude_filter = None
+
     main_filter = MainFilter()
     if include_keywords:
         startup_include_filter = StartupFilter()
         startup_include_filter.wildcards = [" ".join(include_keywords_phrases)]
         startup_include_filter.wildcardsFields = ["pitchLine", "description"]
+
+    if include_taxonomy_items:
+        startup_include_filter = startup_include_filter or StartupFilter()
+        startup_include_filter.taxonomyItems = include_taxonomy_items
+        startup_include_filter.taxonomyItemsMode = "OR"
+
+    if startup_include_filter:
         main_filter.include = startup_include_filter
 
     if exclude_keywords:
         startup_exclude_filter = StartupFilter()
         startup_exclude_filter.wildcards = [" ".join(exclude_keywords_phrases)]
         startup_exclude_filter.wildcardsFields = ["pitchLine", "description"]
+
+    if exclude_taxonomy_items:
+        startup_exclude_filter = startup_exclude_filter or StartupFilter()
+        startup_exclude_filter.taxonomyItems = exclude_taxonomy_items
+        startup_exclude_filter.taxonomyItemsMode = "OR"
+
+    if startup_exclude_filter:
         main_filter.exclude = startup_exclude_filter
 
     if include_investors:
@@ -63,6 +78,18 @@ def search_companies(
         investor_exclude_filter = InvestorFilter()
         investor_exclude_filter.investorIDs = exclude_investors
         main_filter.investorExclude = investor_exclude_filter
+
+    return main_filter
+
+
+def search_companies(
+    limit: int = 100,
+    use_sandbox: bool = False,
+    netzero_api: NetZeroAPI = None,
+    **filter_kwargs,
+):
+    netzero_api = netzero_api or get_netzero_api(use_sandbox=use_sandbox)
+    main_filter = create_search_filter(**filter_kwargs)
 
     companies = netzero_api.search_startups(
         main_filter=main_filter,
@@ -91,14 +118,11 @@ def get_companies_details(
 
 
 def search_get_companies_details(
-    include_keywords: list[str] = None,
-    exclude_keywords: list[str] = None,
-    include_investors: list[int] = None,
-    exclude_investors: list[int] = None,
     use_sandbox: bool = False,
     read_from_cache: bool = True,
     write_to_cache: bool = True,
     limit: int = 100,
+    **kwargs,
 ):
     # Get the netzero api client and share it with the other functions
     netzero_api = get_netzero_api(
@@ -108,13 +132,10 @@ def search_get_companies_details(
     )
 
     search_results = search_companies(
-        include_keywords=include_keywords,
-        exclude_keywords=exclude_keywords,
-        include_investors=include_investors,
-        exclude_investors=exclude_investors,
         use_sandbox=use_sandbox,
         netzero_api=netzero_api,
         limit=limit,
+        **kwargs,
     )
 
     company_ids = [company["clientID"] for company in search_results['results']]
@@ -151,9 +172,17 @@ if __name__ == "__main__":
 
     grantham_company_ids = [company["clientID"] for company in grantham_companies['results']]
 
-    companies = get_companies_details(
+    grantham_companies = get_companies_details(
         company_ids=grantham_company_ids,
         use_sandbox=USE_SANDBOX,
         read_from_cache=READ_FROM_CACHE,
         write_to_cache=WRITE_TO_CACHE,
+    )
+
+
+    ocean_taxonomy_items = [241, 242, 252, 382, 471, 518, 645, 1089, 1268, 1488, 1610, 1828, 2036]
+    ocean_taxonomy_companies = search_get_companies_details(
+        include_taxonomy_items=ocean_taxonomy_items,
+        use_sandbox=USE_SANDBOX,
+        limit=None,
     )

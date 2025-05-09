@@ -22,6 +22,8 @@ class StartupFilter(BaseModel):
     fundingsTo: Optional[int] = None
     tags: Optional[List[int]] = None
     tagsMode: Optional[str] = None  # "AND" or "OR"
+    taxonomyItems: Optional[List[int]] = None
+    taxonomyItemsMode: Optional[str] = None  # "AND" or "OR"
     trls: Optional[List[int]] = None
     financialStageIDs: Optional[List[int]] = None
     sustainabilities: Optional[List[int]] = None
