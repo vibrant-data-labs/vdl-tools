@@ -274,6 +274,13 @@ class NetZeroAPI:
                 "results": results
             }
 
+    def get_startup_count(self, main_filter: MainFilter = None) -> int:
+        """Get the total number of startups matching the specified criteria."""
+        return self._post(
+            endpoint="getStartupCount",
+            payload=main_filter.model_dump() if main_filter else {},
+        )["count"]
+
     def search_startups(
         self,
         main_filter: MainFilter = None,

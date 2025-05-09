@@ -152,37 +152,30 @@ def search_get_companies_details(
     return companies
 
 
+def get_startup_count(
+    use_sandbox: bool = False,
+    netzero_api: NetZeroAPI = None,
+    **filter_kwargs,
+):
+    netzero_api = netzero_api or get_netzero_api(use_sandbox=use_sandbox)
+    main_filter = create_search_filter(**filter_kwargs)
+    return netzero_api.get_startup_count(main_filter)
+
+
 if __name__ == "__main__":
-    # ocean_search = search_companies(
+    USE_SANDBOX = True
+    READ_FROM_CACHE = True
+    WRITE_TO_CACHE = False
+
+    # ocean_search = search_get_companies_details(
     #     include_keywords=["ocean"],
-    #     use_sandbox=False,
-    #     limit=500,
+    #     use_sandbox=USE_SANDBOX,
+    #     read_from_cache=READ_FROM_CACHE,
+    #     write_to_cache=WRITE_TO_CACHE,
+    #     limit=10,
     # )
 
-    USE_SANDBOX = False
-    READ_FROM_CACHE = True
-    WRITE_TO_CACHE = True
-
-    grantham_investor_ids = [6121, 9939, 33402]
-    grantham_companies = search_companies(
-        include_investors=grantham_investor_ids,
+    print(get_startup_count(
+        include_keywords=["ocean"],
         use_sandbox=USE_SANDBOX,
-        limit=500,
-    )
-
-    grantham_company_ids = [company["clientID"] for company in grantham_companies['results']]
-
-    grantham_companies = get_companies_details(
-        company_ids=grantham_company_ids,
-        use_sandbox=USE_SANDBOX,
-        read_from_cache=READ_FROM_CACHE,
-        write_to_cache=WRITE_TO_CACHE,
-    )
-
-
-    ocean_taxonomy_items = [241, 242, 252, 382, 471, 518, 645, 1089, 1268, 1488, 1610, 1828, 2036]
-    ocean_taxonomy_companies = search_get_companies_details(
-        include_taxonomy_items=ocean_taxonomy_items,
-        use_sandbox=USE_SANDBOX,
-        limit=None,
-    )
+    ))
