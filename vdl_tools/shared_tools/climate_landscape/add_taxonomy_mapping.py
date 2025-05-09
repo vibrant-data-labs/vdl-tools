@@ -395,9 +395,13 @@ def add_one_earth_taxonomy(
         )
         cols = [mapping_name, f'cat_level_{mapping_name}'] + [f'level{tx["level"]}_{mapping_name}'
                                                               for tx in loc_taxonomy]
-        new_df = tm.add_mapping_to_orgs(new_df, loc_all_df, id_col, pct=pct, sim=sim, cats=cols)
+        # save mapping results to json
+        new_columns = list(loc_all_df.columns.difference(original_columns))
+        keep_columns = [id_col, name_col, text_col] + new_columns
+        loc_all_df[keep_columns].to_json(paths["one_earth_taxonomy_levers_results"], orient='records')
         #new_df = tm.add_mapping_to_orgs(new_df, loc_all_df, id_col, pct=pct, sim=sim,
         #                                cats=[mapping_name, f'level0_{mapping_name}'])
+        new_df = tm.add_mapping_to_orgs(new_df, loc_all_df, id_col, pct=pct, sim=sim, cats=cols)
 
     return new_df
 

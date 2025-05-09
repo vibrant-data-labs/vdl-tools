@@ -563,8 +563,8 @@ def add_mapping_to_orgs(
     sim='sim',
     cats=['mapped_category', 'cat_level', 'level0', 'level1', 'level2', 'level3']
 ):
-    def _set_with_no_nones(series):
-        return list(set([x for x in series if x is not None]))
+    def _set_with_str(series):
+        return list(set([x for x in series if x]))
 
     temp_df = map_df[[id_attr, pct, sim] + cats]
 
@@ -573,7 +573,7 @@ def add_mapping_to_orgs(
     }
     for cat in cats:
         if cat.startswith('level'):
-            agg_dict[cat] = _set_with_no_nones
+            agg_dict[cat] = _set_with_str
 
     temp_df_agged = temp_df.groupby(id_attr).agg(agg_dict).reset_index()
 
