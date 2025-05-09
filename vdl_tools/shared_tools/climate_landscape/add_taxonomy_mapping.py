@@ -174,6 +174,19 @@ def validate_one_earth_taxonomy(taxonomy_path):
         raise ValueError(f"Validation failed:\n{full_error_str}")
 
 
+def load_netzero_taxonomy(taxonomy_path, max_depth=5):
+    taxonomy = []
+    for i in range(max_depth + 1):
+        df = pd.read_excel(taxonomy_path, sheet_name=f"level_{i}").drop_duplicates(subset=[f'level_{i}'])
+        taxonomy.append({
+            'level': i,
+            'name': f"level_{i}",
+            'data': df,
+            'textattr': 'description'
+        })
+    return taxonomy
+
+
 def load_one_earth_taxonomy(taxonomy_path):
     pillar_df = pd.read_excel(taxonomy_path, sheet_name="Pillars")
     sub_df = pd.read_excel(taxonomy_path, sheet_name="SubPillars")
@@ -382,9 +395,13 @@ def add_one_earth_taxonomy(
         )
         cols = [mapping_name, f'cat_level_{mapping_name}'] + [f'level{tx["level"]}_{mapping_name}'
                                                               for tx in loc_taxonomy]
-        new_df = tm.add_mapping_to_orgs(new_df, loc_all_df, id_col, pct=pct, sim=sim, cats=cols)
+        # save mapping results to json
+        new_columns = list(loc_all_df.columns.difference(original_columns))
+        keep_columns = [id_col, name_col, text_col] + new_columns
+        loc_all_df[keep_columns].to_json(paths["one_earth_taxonomy_levers_results"], orient='records')
         #new_df = tm.add_mapping_to_orgs(new_df, loc_all_df, id_col, pct=pct, sim=sim,
         #                                cats=[mapping_name, f'level0_{mapping_name}'])
+        new_df = tm.add_mapping_to_orgs(new_df, loc_all_df, id_col, pct=pct, sim=sim, cats=cols)
 
     return new_df
 
@@ -472,6 +489,72 @@ def add_tailwind_taxonomy(
         sim = 'sim'
         cols = ['mapped_category', 'cat_level'] + [f'level{tx["level"]}' for tx in taxonomy]
 
+    new_df = tm.add_mapping_to_orgs(df, all_df, id_col, pct=pct, sim=sim, cats=cols)
+
+    return new_df
+
+def add_netzero_taxonomy(
+    df,
+    id_col,
+    text_col,
+    name_col='Organization',
+    run_fewshot_classification=True,
+    filter_fewshot_classification=True,
+    use_cached_results=True,
+    paths=None,
+    max_workers=3,
+    force_parents=True,
+    mapping_name="netzero_category",
+    max_depth=5
+):
+    paths = paths or pc.get_paths()
+    if filter_fewshot_classification and not run_fewshot_classification:
+        raise ValueError("Cannot filter few shot classification if it is not run")
+
+    entity_embeddings = tm.get_or_compute_embeddings(
+        org_df=df,
+        id_col=id_col,
+        text_col=text_col,
+        max_workers=max_workers
+    )
+
+    taxonomy = load_netzero_taxonomy(paths["netzero_taxonomy"], max_depth=max_depth)
+
+    # add main taxonomy mapping
+    all_df, distr_df = add_taxonomy_mapping(
+        df,
+        entity_embeddings,
+        taxonomy,
+        id_col,
+        text_col,
+        name_col=name_col,
+        run_fewshot_classification=run_fewshot_classification,
+        filter_fewshot_classification=filter_fewshot_classification,
+        fewshot_examples=None,
+        use_cached_results=use_cached_results,
+        force_parents=force_parents,
+        mapping_name=mapping_name,
+    )
+
+    # reduce the number of columns in the output
+    original_columns = set(df.columns)
+    # Keep all the new columns
+    new_columns = list(all_df.columns.difference(original_columns))
+    keep_columns = [id_col, name_col, text_col] + new_columns
+    all_df[keep_columns].to_json(paths["netzero_taxonomy_mapping_results"], orient='records')
+    if distr_df is not None:
+        # make directory if it doesn't exist
+        paths["netzero_tax_mapping_distributed_funding_results"].parent.mkdir(parents=True, exist_ok=True)
+        distr_df.to_json(paths["netzero_tax_mapping_distributed_funding_results"], orient='records')
+
+    if mapping_name:
+        pct = 'pct_' + mapping_name
+        sim = 'sim_' + mapping_name
+        cols = [mapping_name, f'cat_level_{mapping_name}'] + [f'level{tx["level"]}_{mapping_name}' for tx in taxonomy]
+    else:
+        pct = 'pct'
+        sim = 'sim'
+        cols = ['mapped_category', 'cat_level'] + [f'level{tx["level"]}' for tx in taxonomy]
     new_df = tm.add_mapping_to_orgs(df, all_df, id_col, pct=pct, sim=sim, cats=cols)
 
     return new_df
