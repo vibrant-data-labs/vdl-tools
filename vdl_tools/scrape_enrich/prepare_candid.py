@@ -4,7 +4,6 @@ import vdl_tools.shared_tools.project_config as pc
 import vdl_tools.shared_tools.common_functions as cf  # from common directory: commonly used functions
 
 paths = pc.get_paths()
-config = pc.get_project_config()
 
 # %% 
 def __add_funding_by_year(df_cd: pd.DataFrame):
