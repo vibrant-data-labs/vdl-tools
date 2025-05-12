@@ -31,7 +31,6 @@ class BuildNWParams:
     labelcol: str = 'Name'   # attribute to use for mappr player node labels
     clusName: str = "Keyword Theme"  # name of clusters
     size_attr: str = None  # "Relative Funding" - if None, then sized by number of nodes
-    remove_links: bool = False  # remove links for openmappr performance
     n_tags: int = 3  # number of tags to keep in cluster names
     minTags: int = 1  # minimum number of tags an entity must have
     removeSingletons: bool = True  # remove tags that only occur in one entity (these can't inform linking)
@@ -52,7 +51,6 @@ class BuildEmbeddingNWParams:
     uid: str = 'uid'
     textcol: str = "Summary"
     nw_name: str = None
-    remove_links: bool = False
     tagcols_nodata: list = field(default_factory=list)  # tag columns to replace empty with 'no data'
     add_nodata: bool = False  # for columns in tagcols_nodata, add the words 'no data' when nan
     layout_params: object = field(default_factory=ln.ClusterLayoutParams)  # None for no layout
