@@ -174,7 +174,11 @@ def validate_one_earth_taxonomy(taxonomy_path):
         raise ValueError(f"Validation failed:\n{full_error_str}")
 
 
-def load_netzero_taxonomy(taxonomy_path, max_depth=5):
+def load_netzero_taxonomy(
+    taxonomy_path,
+    max_depth=5,
+    aggregate_extra_levels=True,
+):
     taxonomy = []
     for i in range(max_depth + 1):
         df = pd.read_excel(taxonomy_path, sheet_name=f"level_{i}").drop_duplicates(subset=[f'level_{i}'])
@@ -184,6 +188,58 @@ def load_netzero_taxonomy(taxonomy_path, max_depth=5):
             'data': df,
             'textattr': 'description'
         })
+
+    if not aggregate_extra_levels:
+        return taxonomy
+
+    last_df = None
+    current_level = max_depth + 1
+    reached_max = False
+
+    while not reached_max:
+        try:
+            df = pd.read_excel(taxonomy_path, sheet_name=f"level_{current_level}").drop_duplicates(subset=[f'level_{current_level}'])
+        except ValueError:
+            reached_max = True
+            break
+        if last_df is None:
+            last_df = df
+        else:
+            last_df = last_df.merge(df, right_on='parent_id', left_on=f'id_level_{current_level - 1}', how='left', suffixes=('', f'_level_{current_level}'))
+        last_df.rename(columns={
+            'id': f'id_level_{current_level}',
+            'description': f'description_level_{current_level}'
+        }, inplace=True)
+        current_level += 1
+
+    stacked_dfs = []
+    for i in range(max_depth + 1, current_level):
+        mini_df = last_df[[
+            f'id_level_{i}',
+            f'level_{i}',
+            # Always have the column of the first level after the max depth
+            'parent_id',
+            f"level_{max_depth}",
+            f'description_level_{i}'
+        ]].copy()
+        mini_df = mini_df[mini_df[f'description_level_{i}'].notnull()]
+
+        mini_df.rename(columns={
+            f'level_{i}': f'level_{max_depth + 1}',
+            f'description_level_{i}': 'description',
+            f'id_level_{i}': 'id',
+        }, inplace=True)
+        stacked_dfs.append(mini_df)
+
+    subterm_df = pd.concat(stacked_dfs)
+    subterm_df.drop_duplicates(subset=['id'], inplace=True)
+    taxonomy.append({
+        'level': max_depth + 1,
+        'name': f'level_{max_depth + 1}',
+        'data': subterm_df,
+        'textattr': 'description'
+    })
+
     return taxonomy
 
 
