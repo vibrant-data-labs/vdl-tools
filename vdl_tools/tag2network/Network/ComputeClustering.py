@@ -11,11 +11,12 @@ from vdl_tools.tag2network.Network.ClusteringProperties import basicClusteringPr
 @dataclass
 class ClusteringParams:
     method: str = 'louvain'
+    resolution: float = 1.0        # leiden resolution parameter
     merge_tiny: bool = False
     name_prefix: str = 'Cluster'
     reassign_size_ratio: int = 10  # size ratio between big and small (if small is less than 10% of big, reassign)
-    reassign_top_n: int = 5  # top n most similar clusters to check for reassignment
-    reassign_max_size: int = 40  # if cluster is bigger than that don't re-assign it (even if size ratio is met)
+    reassign_top_n: int = 5        # top n most similar clusters to check for reassignment
+    reassign_max_size: int = 40    # if cluster is bigger than that don't re-assign it (even if size ratio is met)
 
 
 def addLouvainClusters(nodesdf, nw, clusterLevel=0, prefix='Cluster'):
@@ -64,7 +65,7 @@ def addLouvainClusters(nodesdf, nw, clusterLevel=0, prefix='Cluster'):
         nodesdf[grp].fillna('No Cluster', inplace=True)
 
 
-def addLeidenClusters(nodesdf, nw, prefix='Cluster'):
+def addLeidenClusters(nodesdf, nw, resolution=1.0, prefix='Cluster'):
     """
     Compute and add Leiden clusters to node dataframe
     One of linksdf and nw must not be None
@@ -85,7 +86,7 @@ def addLeidenClusters(nodesdf, nw, prefix='Cluster'):
 
     print("Computing Leiden clustering")
     gg = ig.Graph.from_networkx(nw)
-    comm = gg.community_leiden(objective_function='modularity', n_iterations=-1)
+    comm = gg.community_leiden(objective_function='modularity', resolution_parameter=resolution, n_iterations=-1)
     clus = comm.subgraphs()
     nodesdf[prefix] = None
     for idx, subg in enumerate(clus):
@@ -168,7 +169,7 @@ def add_clustering(nodesdf, linksdf=None, nw=None, sims=None, params=ClusteringP
     if isinstance(nw, nx.DiGraph):
         nw = nx.Graph(nw)
     if params.method == 'leiden':
-        addLeidenClusters(nodesdf, nw, prefix=params.name_prefix)
+        addLeidenClusters(nodesdf, nw, prefix=params.name_prefix, resolution=params.resolution)
     elif params.method == 'louvain':
         addLouvainClusters(nodesdf, nw, prefix=params.name_prefix)
     else:
