@@ -198,6 +198,10 @@ def load_netzero_taxonomy(
     current_level = max_depth + 1
     reached_max = False
 
+    # Aggregate extra levels into a single level
+    # Start with joining the last level to the next level using parent_ids
+    # This will give us a mapping from the max_depth + 1 ids all the way to the last
+    # Potential level in the hierarchy
     while not reached_max:
         try:
             df = pd.read_excel(taxonomy_path, sheet_name=f"level_{current_level}").drop_duplicates(subset=[f'level_{current_level}'])
@@ -214,6 +218,9 @@ def load_netzero_taxonomy(
         }, inplace=True)
         current_level += 1
 
+    # Now that they are all joined, we can unstack the dfs so each "level" is a new set of rows
+    # We will then concatenate them all together at the end
+    # Make sure the "parent_id" is taken from the max_depth level
     stacked_dfs = []
     for i in range(max_depth + 1, current_level):
         mini_df = last_df[[
@@ -226,6 +233,8 @@ def load_netzero_taxonomy(
         ]].copy()
         mini_df = mini_df[mini_df[f'description_level_{i}'].notnull()]
 
+        # Rename the columns to be the max_depth + 1 level to simulate the collapsing
+        # of the extra levels
         mini_df.rename(columns={
             f'level_{i}': f'level_{max_depth + 1}',
             f'description_level_{i}': 'description',
@@ -233,6 +242,7 @@ def load_netzero_taxonomy(
         }, inplace=True)
         stacked_dfs.append(mini_df)
 
+    # Concatenate all the dfs together
     subterm_df = pd.concat(stacked_dfs)
     subterm_df.drop_duplicates(subset=['id'], inplace=True)
     max_depth_col = f'level_{max_depth}'
