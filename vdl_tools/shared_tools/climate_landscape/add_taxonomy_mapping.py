@@ -23,7 +23,8 @@ def add_taxonomy_mapping(
     max_workers=3,
     force_parents=True,
     distribute_funding=True,
-    mapping_name=None
+    mapping_name=None,
+    max_distr_funding_level=2,
 ):
     logger.info("Starting Taxonomy mapping for %s", mapping_name)
     if entity_embeddings is None:
@@ -111,6 +112,7 @@ def add_taxonomy_mapping(
             taxonomy=taxonomy,
             id_attr=id_col,
             keepcols=[name_col],
+            max_level=max_distr_funding_level,
         )
     else:
         distributed_funding_df = None
@@ -174,7 +176,11 @@ def validate_one_earth_taxonomy(taxonomy_path):
         raise ValueError(f"Validation failed:\n{full_error_str}")
 
 
-def load_netzero_taxonomy(taxonomy_path, max_depth=5):
+def load_netzero_taxonomy(
+    taxonomy_path,
+    max_depth=5,
+    aggregate_extra_levels=True,
+):
     taxonomy = []
     for i in range(max_depth + 1):
         df = pd.read_excel(taxonomy_path, sheet_name=f"level_{i}").drop_duplicates(subset=[f'level_{i}'])
@@ -184,6 +190,75 @@ def load_netzero_taxonomy(taxonomy_path, max_depth=5):
             'data': df,
             'textattr': 'description'
         })
+
+    if not aggregate_extra_levels:
+        return taxonomy
+
+    last_df = None
+    current_level = max_depth + 1
+    reached_max = False
+
+    # Aggregate extra levels into a single level
+    # Start with joining the last level to the next level using parent_ids
+    # This will give us a mapping from the max_depth + 1 ids all the way to the last
+    # Potential level in the hierarchy
+    while not reached_max:
+        try:
+            df = pd.read_excel(taxonomy_path, sheet_name=f"level_{current_level}").drop_duplicates(subset=[f'level_{current_level}'])
+        except ValueError:
+            reached_max = True
+            break
+        if last_df is None:
+            last_df = df
+        else:
+            last_df = last_df.merge(df, right_on='parent_id', left_on=f'id_level_{current_level - 1}', how='left', suffixes=('', f'_level_{current_level}'))
+        last_df.rename(columns={
+            'id': f'id_level_{current_level}',
+            'description': f'description_level_{current_level}'
+        }, inplace=True)
+        current_level += 1
+
+    # Now that they are all joined, we can unstack the dfs so each "level" is a new set of rows
+    # We will then concatenate them all together at the end
+    # Make sure the "parent_id" is taken from the max_depth level
+    stacked_dfs = []
+    for i in range(max_depth + 1, current_level):
+        mini_df = last_df[[
+            f'id_level_{i}',
+            f'level_{i}',
+            # Always have the column of the first level after the max depth
+            'parent_id',
+            f"level_{max_depth}",
+            f'description_level_{i}'
+        ]].copy()
+        mini_df = mini_df[mini_df[f'description_level_{i}'].notnull()]
+
+        # Rename the columns to be the max_depth + 1 level to simulate the collapsing
+        # of the extra levels
+        mini_df.rename(columns={
+            f'level_{i}': f'level_{max_depth + 1}',
+            f'description_level_{i}': 'description',
+            f'id_level_{i}': 'id',
+        }, inplace=True)
+        stacked_dfs.append(mini_df)
+
+    # Concatenate all the dfs together
+    subterm_df = pd.concat(stacked_dfs)
+    subterm_df.drop_duplicates(subset=['id'], inplace=True)
+    max_depth_col = f'level_{max_depth}'
+    max_depth_plus_one_col = f'level_{max_depth + 1}'
+    # Rename to ensure unique names
+    subterm_df[max_depth_plus_one_col] = subterm_df.apply(
+        lambda x: f"{x[max_depth_col]} - {x[max_depth_plus_one_col]}",
+        axis=1,
+    )
+    taxonomy.append({
+        'level': max_depth + 1,
+        'name': f'level_{max_depth + 1}',
+        'data': subterm_df,
+        'textattr': 'description'
+    })
+
     return taxonomy
 
 
@@ -505,9 +580,16 @@ def add_netzero_taxonomy(
     max_workers=3,
     force_parents=True,
     mapping_name="netzero_category",
-    max_depth=5
+    max_depth=5,
+    taxonomy_path=None,
+    results_path=None,
+    distributed_funding_results_path=None,
 ):
     paths = paths or pc.get_paths()
+    taxonomy_path = taxonomy_path or paths["netzero_taxonomy"]
+    results_path = results_path or paths["netzero_taxonomy_mapping_results"]
+    distributed_funding_results_path = distributed_funding_results_path or paths["netzero_tax_mapping_distributed_funding_results"]
+
     if filter_fewshot_classification and not run_fewshot_classification:
         raise ValueError("Cannot filter few shot classification if it is not run")
 
@@ -518,7 +600,7 @@ def add_netzero_taxonomy(
         max_workers=max_workers
     )
 
-    taxonomy = load_netzero_taxonomy(paths["netzero_taxonomy"], max_depth=max_depth)
+    taxonomy = load_netzero_taxonomy(taxonomy_path, max_depth=max_depth)
 
     # add main taxonomy mapping
     all_df, distr_df = add_taxonomy_mapping(
@@ -534,6 +616,7 @@ def add_netzero_taxonomy(
         use_cached_results=use_cached_results,
         force_parents=force_parents,
         mapping_name=mapping_name,
+        max_distr_funding_level=5,
     )
 
     # reduce the number of columns in the output
@@ -541,11 +624,11 @@ def add_netzero_taxonomy(
     # Keep all the new columns
     new_columns = list(all_df.columns.difference(original_columns))
     keep_columns = [id_col, name_col, text_col] + new_columns
-    all_df[keep_columns].to_json(paths["netzero_taxonomy_mapping_results"], orient='records')
+    all_df[keep_columns].to_json(results_path, orient='records')
     if distr_df is not None:
         # make directory if it doesn't exist
-        paths["netzero_tax_mapping_distributed_funding_results"].parent.mkdir(parents=True, exist_ok=True)
-        distr_df.to_json(paths["netzero_tax_mapping_distributed_funding_results"], orient='records')
+        distributed_funding_results_path.parent.mkdir(parents=True, exist_ok=True)
+        distr_df.to_json(distributed_funding_results_path, orient='records')
 
     if mapping_name:
         pct = 'pct_' + mapping_name
