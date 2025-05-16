@@ -37,14 +37,14 @@ def get_url(
     )
 
 
-def create_engine_from_cfg(config=None):
+def create_engine_from_cfg(config=None, database=None):
     config = config or get_configuration()
     url = get_url(
         host=config["postgres"]["host"],
         port=config["postgres"]["port"],
         user=config["postgres"]["user"],
         password=config["postgres"]["password"],
-        database=config["postgres"]["database"],
+        database=database or config["postgres"]["database"],
     )
     return create_engine(url)
 
@@ -79,12 +79,12 @@ def recreate_db(config=None):
 
 
 @contextmanager
-def get_session(config=None, session=None):
+def get_session(config=None, session=None, database=None):
     """Provide a transactional scope around a series of operations."""
     config = config or get_configuration()
 
     if not session:
-        session = Session(bind=create_engine_from_cfg(config))
+        session = Session(bind=create_engine_from_cfg(config, database))
     try:
         yield session
 

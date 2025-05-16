@@ -8,6 +8,7 @@ from .web_scraping import ( #pylint: disable=no-name-in-module
     WebPagesParsed
 )
 from .netzero.startup import Startup #pylint: disable=no-name-in-module
+from .netzero.startup_funding_rounds import StartupFundingRounds #pylint: disable=no-name-in-module
 
 __all__ = (
     "Embedding",
@@ -16,6 +17,7 @@ __all__ = (
     "Prompt",
     "PromptResponse",
     "Startup",
+    "StartupFundingRounds",
     "WebPagesScraped",
     "WebPagesParsed",
 )

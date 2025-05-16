@@ -33,6 +33,32 @@ def create_search_filter(
     include_taxonomy_items: list[int] = None,
     exclude_taxonomy_items: list[int] = None,
 ) -> MainFilter:
+    """Create a search filter for the NetZero Insights API.
+
+    NOTE: `include_keywords` is OR `include_investors` is OR
+    But if you do both, it will be AND between the two.
+
+    Parameters
+    ----------
+    include_keywords : list[str], optional
+        Keywords to search for in startup descriptions and pitch lines
+    exclude_keywords : list[str], optional
+        Keywords to exclude from startup descriptions and pitch lines
+    include_investors : list[int], optional
+        IDs of investors to include in search results
+    exclude_investors : list[int], optional
+        IDs of investors to exclude from search results
+    include_taxonomy_items : list[int], optional
+        IDs of taxonomy items to include in search results
+    exclude_taxonomy_items : list[int], optional
+        IDs of taxonomy items to exclude from search results
+
+    Returns
+    -------
+    MainFilter
+        A configured filter object for searching the NetZero Insights API
+    """
+    
 
     include_keywords = include_keywords or []
     exclude_keywords = exclude_keywords or []
@@ -112,7 +138,7 @@ def get_companies_details(
         write_to_cache=write_to_cache,
     )
 
-    companies = asyncio.run(netzero_api.get_startup_details(company_ids))
+    companies = asyncio.run(netzero_api.get_startups_details(company_ids))
 
     return companies
 

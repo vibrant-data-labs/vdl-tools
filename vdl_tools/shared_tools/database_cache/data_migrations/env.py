@@ -1,3 +1,4 @@
+import os
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config
@@ -64,7 +65,8 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
-    connectable = create_engine_from_cfg()
+    database = os.environ.get("DATABASE")
+    connectable = create_engine_from_cfg(database=database)
 
     with connectable.connect() as connection:
         context.configure(

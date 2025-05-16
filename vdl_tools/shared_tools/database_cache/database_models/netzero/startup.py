@@ -5,7 +5,11 @@ from sqlalchemy_utils import generic_repr
 
 @generic_repr
 class Startup(BaseMixin):
-    __tablename__ = 'startups'
+    """
+    Model for a startup in the NetZero Insights database.
+    GET /getStartup/[clientID]
+    """
+    __tablename__ = 'startups_nzi'
 
     # Primary and unique identifiers
     id = Column(Integer, primary_key=True)
