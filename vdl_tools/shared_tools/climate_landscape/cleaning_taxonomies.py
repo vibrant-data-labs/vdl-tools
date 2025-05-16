@@ -9,28 +9,6 @@ def _join_cols(x):
     return results
 
 
-#def split_out_levers_of_change(subpillars_list):
-#    levers_of_change = []
-#    clean_subpillars = []
-#    if not subpillars_list:
-#        return None, None
-#    for subpillar in subpillars_list:
-#        # There is one named Root Node Science and Technology
-#        if subpillar.startswith("Root Node "):
-#            levers_of_change.append(subpillar.strip("Root Node ").strip())
-#        elif subpillar.startswith("Root "):
-#            levers_of_change.append(subpillar.strip("Root ").strip())
-#
-#        # Don't need to include Cross-Cutting Subpillars
-#        elif subpillar.startswith("Cross-Cutting "):
-#            continue
-#        else:
-#            clean_subpillars.append(subpillar)
-#    if not levers_of_change:
-#        levers_of_change = None
-#    if not clean_subpillars:
-#        clean_subpillars = None
-#    return levers_of_change, clean_subpillars
 
 
 def combine_one_earth_tags(ndf):
@@ -159,4 +137,19 @@ def rename_one_earth_crosscutting_tags(df):
             df[col] = df[col].apply(lambda x: [tag for tag in x if tag != ''])
             # replace the key with the value
             df[col] = df[col].apply(lambda x: [tag.replace(k, v) for tag in x] if isinstance(x, list) else x)
+    return df
+
+def clean_no_level_1(df,
+                     taxonomy="one_earth",
+                     level=1
+                     ):
+    level = str(level)
+    logger.info(f'cleaning no level {level} tags')
+    # clean no level 1 categories
+    df[f'level{level}_{taxonomy}_category'] = df[f'level{level}_{taxonomy}_category'].apply(
+        lambda x: None if "No_Level_1_" in x else x)
+    # clean no level 0 tags
+    df[f'all_level{level}_{taxonomy}_category'] = df[f'level{level}_{taxonomy}_category'].apply(
+        lambda x: [tag for tag in x if "No_Level_{level}_" not in tag] if isinstance(x, list) else x)
+
     return df
