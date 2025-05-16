@@ -28,8 +28,9 @@ def get_organization_locations_from_response(response):
     # See where this was a {"metadatas": None} so if so, make sure it will be a list
     location_metadatas = response_locations.get('metadatas', []) or []
     for location_metadata in location_metadatas:
-        location = location_metadata["entity"]
-        organization_locations.append(location)
+        location = location_metadata.get("entity")
+        if location:
+            organization_locations.append(location)
     return organization_locations
 
 
