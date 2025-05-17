@@ -11,7 +11,7 @@ def _join_cols(x):
 
 
 
-def combine_one_earth_tags(ndf):
+def combine_one_earth_solution_tags(ndf):
     logger.info('combining one earth tags')
     # rename and join solution and sub-pillar tags from lists
     ndf = ndf.rename(
@@ -22,7 +22,7 @@ def combine_one_earth_tags(ndf):
             "level0_one_earth_category": "One Earth Pillar",
             "level1_one_earth_category": "One Earth Sub-Pillar",
             "level2_one_earth_category": "One Earth Solution",
-            "all_level0_Levers": 'One Earth Levers of Change'
+            'all_level0_FalseSolns': 'One Earth False Solutions',
         }
     )
 
@@ -33,9 +33,20 @@ def combine_one_earth_tags(ndf):
     oe_cols = ['One Earth Pillars',
                'One Earth Sub-Pillars',
                'One Earth Solutions',
-               'all_level0_FalseSolns'
+               'One Earth False Solutions',
                ]
     ndf['One Earth Tags'] = ndf[oe_cols].apply(_join_cols, axis=1)
+    return ndf
+
+def clean_one_earth_levers_of_change(ndf):
+    logger.info('renaming one earth levers of change')
+    # rename and join solution and sub-pillar tags from lists
+    ndf = ndf.rename(
+        columns={
+            "level0_Levers": "One Earth Lever of Change",
+            "all_level0_Levers": 'One Earth Levers of Change',
+        }
+    )
     return ndf
 
 
@@ -139,15 +150,15 @@ def rename_one_earth_crosscutting_tags(df):
             df[col] = df[col].apply(lambda x: [tag.replace(k, v) for tag in x] if isinstance(x, list) else x)
     return df
 
-def clean_no_level_1(df,
+def clean_no_level(df,
                      taxonomy="one_earth",
-                     level=1
+                     level=1  # e.g., 1 for No_Level_1
                      ):
     level = str(level)
     logger.info(f'cleaning no level {level} tags')
     # clean no level 1 categories
     df[f'level{level}_{taxonomy}_category'] = df[f'level{level}_{taxonomy}_category'].apply(
-        lambda x: None if "No_Level_1_" in x else x)
+        lambda x: None if f"No_Level_{level}_" in x else x)
     # clean no level 0 tags
     df[f'all_level{level}_{taxonomy}_category'] = df[f'level{level}_{taxonomy}_category'].apply(
         lambda x: [tag for tag in x if "No_Level_{level}_" not in tag] if isinstance(x, list) else x)
