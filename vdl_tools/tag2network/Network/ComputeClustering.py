@@ -11,7 +11,7 @@ from vdl_tools.tag2network.Network.ClusteringProperties import basicClusteringPr
 @dataclass
 class ClusteringParams:
     method: str = 'louvain'
-    resolution: float = 1.0        # leiden resolution parameter
+    resolution: float = 1.0        # leiden resolution parameter, if list then compute multiple levels
     merge_tiny: bool = False
     name_prefix: str = 'Cluster'
     reassign_size_ratio: int = 10  # size ratio between big and small (if small is less than 10% of big, reassign)
