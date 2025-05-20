@@ -102,6 +102,7 @@ def addLeidenClusters(nodesdf, nw, resolution=1.0, prefix='Cluster', min_clus_si
             nodes = subg.vs['_nx_name']
             ndf.loc[nodes, _prefix] = f"{_prefix}_{idx}"
 
+    clusters = []
     if type(resolution) is list:
         prior_clus = None
         for idx, res in enumerate(resolution):
@@ -128,9 +129,12 @@ def addLeidenClusters(nodesdf, nw, resolution=1.0, prefix='Cluster', min_clus_si
                 ndf = pd.concat(all_dfs)
                 # add results into the main dataframe
                 nodesdf[_new_clus] = ndf[_new_clus]
+            clusters.append(_new_clus)
             prior_clus = _new_clus
     else:
         _leiden_helper(nodesdf, nw, resolution, prefix)
+        clusters.append(prefix)
+    return clusters
 
 
 def add_cluster_metrics(nodesdf, nw, groupVars):
@@ -208,9 +212,10 @@ def add_clustering(nodesdf, linksdf=None, nw=None, sims=None, params=ClusteringP
     if isinstance(nw, nx.DiGraph):
         nw = nx.Graph(nw)
     if params.method == 'leiden':
-        addLeidenClusters(nodesdf, nw, prefix=params.name_prefix, resolution=params.resolution)
+        clusters = addLeidenClusters(nodesdf, nw, prefix=params.name_prefix, resolution=params.resolution)
     elif params.method == 'louvain':
         addLouvainClusters(nodesdf, nw, prefix=params.name_prefix)
+        clusters = [params.name_prefix]
     else:
         return
     if sims is not None and params.merge_tiny:
@@ -220,5 +225,5 @@ def add_clustering(nodesdf, linksdf=None, nw=None, sims=None, params=ClusteringP
                                           max_size=params.reassign_max_size,
                                           )
         # recompute cluster metrics
-        add_cluster_metrics(nodesdf, nw, [params.name_prefix])
-    return nodesdf
+#        add_cluster_metrics(nodesdf, nw, [params.name_prefix])
+    return nodesdf, clusters

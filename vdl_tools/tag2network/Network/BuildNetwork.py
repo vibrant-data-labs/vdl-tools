@@ -281,8 +281,8 @@ def buildNetworkFromNodesAndEdges(nodesdf, edgesdf, sims=None, directed=True,
     # add clusters and attributes
     nw = buildNetworkX(edgesdf, directed=directed)
     if clus_params is not None:
-        nodesdf = cc.add_clustering(nodesdf, nw=nw, sims=sims, params=clus_params)
-        addNetworkAttributes(nodesdf, nw=nw)
+        nodesdf, clusters = cc.add_clustering(nodesdf, nw=nw, sims=sims, params=clus_params)
+        addNetworkAttributes(nodesdf, nw=nw, groupVars=clusters)
     # add layout
     if layout_params is not None:
         ln.add_layout(nodesdf, nw=nw, params=layout_params)
