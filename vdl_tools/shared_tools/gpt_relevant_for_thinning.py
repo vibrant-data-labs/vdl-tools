@@ -39,7 +39,7 @@ EMBEDDING_ENCODING = "cl100k_base"
 
 DEFAULT_SYSTEM_PROMPT = "You are a climate change expert."
 DEFAULT_PROMPT_FORMAT = (
-    "Categorize the following company descriptions as either pertinent (1) or irrelevant (0) to addressing the climate crisis: %s -> \n#"
+    "Categorize the following company descriptions as either pertinent (1) or irrelevant (0) to addressing the climate crisis: {text} -> \n#"
 )
 
 
@@ -84,7 +84,7 @@ def get_model_pred(
     system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
     prompt_format = prompt_format or DEFAULT_PROMPT_FORMAT
 
-    text = prompt_format % text
+    text = prompt_format.format(text=text)
     response = client.chat.completions.create(
         model=model,
         messages=[
