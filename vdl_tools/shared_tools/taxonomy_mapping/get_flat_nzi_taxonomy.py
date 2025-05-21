@@ -103,7 +103,6 @@ def write_taxonomy_to_excel(taxonomy_df: pd.DataFrame, filename: str):
 
 
 if __name__ == "__main__":
-
     taxonomy = get_taxonomy_children_recursive(ROOT_ID)
     taxonomy_df = get_taxonomy_flat(taxonomy, ROOT_ID, ROOT_NAME, output_file='../shared-data/data/taxonomies/netzero/full_taxonomy_flat.csv')
     write_taxonomy_to_excel(taxonomy_df, '../shared-data/data/taxonomies/netzero/full_taxonomy.xlsx')
