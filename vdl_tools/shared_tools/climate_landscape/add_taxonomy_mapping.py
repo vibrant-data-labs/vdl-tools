@@ -98,7 +98,7 @@ def add_taxonomy_mapping(
                 how='left',
                 suffixes=('', '_filtered')
             )
-            all_df['FundingFrac_filtered'].fillna(0, inplace=True)
+            all_df['FundingFrac_filtered'] = all_df['FundingFrac_filtered'].fillna(0)
         else:
             filtered_all_df = all_df.copy()
     else:
@@ -262,7 +262,9 @@ def load_netzero_taxonomy(
     return taxonomy
 
 
-def load_one_earth_taxonomy(taxonomy_path):
+def load_one_earth_taxonomy(taxonomy_path,
+                            add_geo_engineering=False
+                            ):
     pillar_df = pd.read_excel(taxonomy_path, sheet_name="Pillars")
     sub_df = pd.read_excel(taxonomy_path, sheet_name="SubPillars")
     soln_df = pd.read_excel(taxonomy_path, sheet_name="Solutions")
@@ -272,6 +274,10 @@ def load_one_earth_taxonomy(taxonomy_path):
 
     # Concatenate sub-term sheets into a single subterm dataframe
     term_df = pd.concat([energy_term_df, ag_term_df, nature_term_df])
+    if add_geo_engineering:
+        # add terms for geo-engineering pillar
+        geo_term_df = pd.read_excel(taxonomy_path, sheet_name="Geo-Engineering").ffill()
+        term_df = pd.concat([term_df, geo_term_df])
 
     term_df = term_df[term_df['Exclude'] != 1].copy()
     term_df.drop(columns=['Exclude'], inplace=True)
@@ -344,9 +350,20 @@ def add_one_earth_taxonomy(
     add_intersectional=True,
     add_falsesolns=True,
     add_levers_of_change=True,
-    mapping_name="one_earth_category"
+    mapping_name="one_earth_category",
+    taxonomy_path=None,
+    results_path=None,
+    distributed_funding_results_path=None,
+    levers_path=None,
+    levers_results_path=None,
 ):
     paths = paths or pc.get_paths()
+    taxonomy_path = taxonomy_path or paths["one_earth_taxonomy"]
+    results_path = results_path or paths["one_earth_taxonomy_mapping_results"]
+    distributed_funding_results_path = distributed_funding_results_path or paths["oe_tax_mapping_distributed_funding_results"]
+    levers_path = levers_path or paths["one_earth_levers"]
+    levers_results_path = levers_results_path or paths["one_earth_taxonomy_levers_results"]
+
     if filter_fewshot_classification and not run_fewshot_classification:
         raise ValueError("Cannot filter few shot classification if it is not run")
 
@@ -357,7 +374,7 @@ def add_one_earth_taxonomy(
         max_workers=max_workers
     )
 
-    taxonomy = load_one_earth_taxonomy(paths["one_earth_taxonomy"])
+    taxonomy = load_one_earth_taxonomy(taxonomy_path)
 
     # add main taxonomy mapping
     all_df, distr_df = add_taxonomy_mapping(
@@ -380,11 +397,11 @@ def add_one_earth_taxonomy(
     # Keep all the new columns
     new_columns = list(all_df.columns.difference(original_columns))
     keep_columns = [id_col, name_col, text_col] + new_columns
-    all_df[keep_columns].to_json(paths["one_earth_taxonomy_mapping_results"], orient='records')
+    all_df[keep_columns].to_json(results_path, orient='records')
     if distr_df is not None:
         # make directory if it doesn't exist
-        paths["oe_tax_mapping_distributed_funding_results"].parent.mkdir(parents=True, exist_ok=True)
-        distr_df.to_json(paths["oe_tax_mapping_distributed_funding_results"], orient='records')
+        distributed_funding_results_path.parent.mkdir(parents=True, exist_ok=True)
+        distr_df.to_json(distributed_funding_results_path, orient='records')
 
     if mapping_name:
         pct = 'pct_' + mapping_name
@@ -397,11 +414,11 @@ def add_one_earth_taxonomy(
     new_df = tm.add_mapping_to_orgs(df, all_df, id_col, pct=pct, sim=sim, cats=cols)
 
     if add_intersectional:
-        # add intersctional themes mapping
+        # add intersectional themes mapping
         mapping_name = "Intersectional"
         pct = 'pct_' + mapping_name
         sim = 'sim_' + mapping_name
-        it_taxonomy = load_one_earth_intersectional(paths["one_earth_taxonomy"])
+        it_taxonomy = load_one_earth_intersectional(taxonomy_path)
         it_all_df, _ = add_taxonomy_mapping(
             df,
             entity_embeddings,
@@ -426,7 +443,7 @@ def add_one_earth_taxonomy(
         mapping_name = "FalseSolns"
         pct = 'pct_' + mapping_name
         sim = 'sim_' + mapping_name
-        fs_taxonomy = load_one_earth_falsesolns(paths["one_earth_taxonomy"])
+        fs_taxonomy = load_one_earth_falsesolns(taxonomy_path)
         fs_all_df, _ = add_taxonomy_mapping(
             df,
             entity_embeddings,
@@ -451,7 +468,7 @@ def add_one_earth_taxonomy(
         mapping_name = "Levers"
         pct = 'pct_' + mapping_name
         sim = 'sim_' + mapping_name
-        loc_taxonomy = load_one_earth_hierarchical_levers(paths["one_earth_levers"])
+        loc_taxonomy = load_one_earth_hierarchical_levers(levers_path)
         loc_all_df, _ = add_taxonomy_mapping(
             df,
             entity_embeddings,
@@ -473,7 +490,7 @@ def add_one_earth_taxonomy(
         # save mapping results to json
         new_columns = list(loc_all_df.columns.difference(original_columns))
         keep_columns = [id_col, name_col, text_col] + new_columns
-        loc_all_df[keep_columns].to_json(paths["one_earth_taxonomy_levers_results"], orient='records')
+        loc_all_df[keep_columns].to_json(levers_results_path, orient='records')
         #new_df = tm.add_mapping_to_orgs(new_df, loc_all_df, id_col, pct=pct, sim=sim,
         #                                cats=[mapping_name, f'level0_{mapping_name}'])
         new_df = tm.add_mapping_to_orgs(new_df, loc_all_df, id_col, pct=pct, sim=sim, cats=cols)

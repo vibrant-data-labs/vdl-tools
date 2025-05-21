@@ -476,7 +476,8 @@ def improve_one_sentences(nodesdf, subject="education", model="o3-mini"):
 def get_cluster_names_from_text(
     nodesdf,
     textcol,
-    clusname,
+    clusattr,
+    clusname,               # column name for the cluster names
     n_tags,
     subject=None,
     n_entities=20,          # int → use top‑k; None → token‑limit fallback
@@ -513,7 +514,6 @@ def get_cluster_names_from_text(
         ids_text_prompts.append((clus, get_text_for_entities(n_tags, cluster_texts)))
         ids_text_sums.append((clus, get_text_for_summaries(cluster_texts, subject)))
 
-
     kw_prompt_name = "keywords_for_cluster"
     if subject:
         kw_prompt_name += f"_{subject.replace(' ', '_').lower()}"
@@ -536,7 +536,6 @@ def get_cluster_names_from_text(
         for clus, resp in raw_kw.items()
     }
     cluster_to_cleaned_keywords = filter_keywords(cluster_id_to_keywords, n_tags)
-
 
     sum_prompt_name = "keyword_cluster_summaries"
     if subject:
@@ -565,7 +564,6 @@ def get_cluster_names_from_text(
     return nodesdf
 
 
-
 def build_embedding_network(
     df, params: bn.BuildEmbeddingNWParams, debug=False, subject=None, n_entities=20
 ):
@@ -583,14 +581,16 @@ def build_embedding_network(
     sims = emb_matrix @ emb_matrix.T
     np.fill_diagonal(sims, 0)
     df.reset_index(drop=True, inplace=True)
-    nodesdf, edgesdf = bn.buildSimilarityNetwork(df, sims.copy(), params)
+    nodesdf, edgesdf, clusters = bn.buildSimilarityNetwork(df, sims.copy(), params)
     # compute and assign cluster names
-    nodesdf = get_cluster_names_from_text(
-        nodesdf,
-        textcol=params.textcol,
-        clusname=params.clusName,
-        subject=subject,
-        n_tags=params.n_tags,
-        n_entities=n_entities,
-    )
+    for clattr in clusters:
+        nodesdf = get_cluster_names_from_text(
+            nodesdf,
+            textcol=params.textcol,
+            clusattr=clattr,
+            clusname=params.clusName,
+            n_tags=params.n_tags,
+            subject=subject,
+            n_entities=n_entities,
+        )
     return nodesdf, edgesdf, sims

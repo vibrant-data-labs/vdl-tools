@@ -8,7 +8,7 @@ config = get_configuration()
 
 
 def get_netzero_api(
-    use_sandbox: bool = True,
+    use_sandbox: bool = False,
     read_from_cache: bool = True,
     write_to_cache: bool = True,
 ):

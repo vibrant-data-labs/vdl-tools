@@ -281,12 +281,14 @@ def buildNetworkFromNodesAndEdges(nodesdf, edgesdf, sims=None, directed=True,
     # add clusters and attributes
     nw = buildNetworkX(edgesdf, directed=directed)
     if clus_params is not None:
-        nodesdf = cc.add_clustering(nodesdf, nw=nw, sims=sims, params=clus_params)
-        addNetworkAttributes(nodesdf, nw=nw)
+        nodesdf, clusters = cc.add_clustering(nodesdf, nw=nw, sims=sims, params=clus_params)
+        addNetworkAttributes(nodesdf, nw=nw, groupVars=clusters)
+    else:
+        clusters = None
     # add layout
     if layout_params is not None:
         ln.add_layout(nodesdf, nw=nw, params=layout_params)
-    return nodesdf, edgesdf
+    return nodesdf, edgesdf, clusters
 
 
 # build link dataframe from matrix where non-zero element is a link
@@ -387,8 +389,12 @@ def buildTagNetwork(df, params, dropCols=[], idf=False):
     np.fill_diagonal(sim, 0)
     df.drop(dropCols, axis=1, inplace=True)
     # build similarity network with clustering and layout
-    nodesdf, edgesdf = buildSimilarityNetwork(df, sim, params)
-    # add cluster names build from tag histogram
-    build_cluster_names_from_tags(nodesdf, tagHist, taglist_attr, n_tags=params.n_tags, clusterName=params.clusName)
+    nodesdf, edgesdf, clusters = buildSimilarityNetwork(df, sim, params)
+    # add cluster names from tag histogram at each cluster level
+    if clusters is not None:
+        for idx, clus in enumerate(clusters):
+            clus_name = params.clusName if idx == 0 else f"{params.clusName}_L{idx + 1}"
+            build_cluster_names_from_tags(nodesdf, tagHist, taglist_attr, n_tags=params.n_tags,
+                                          clAttr=clus, clusterName=clus_name)
     nodesdf.drop(columns=[taglist_attr], inplace=True)
     return nodesdf, edgesdf

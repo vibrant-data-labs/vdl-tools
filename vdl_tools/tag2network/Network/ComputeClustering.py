@@ -11,7 +11,7 @@ from vdl_tools.tag2network.Network.ClusteringProperties import basicClusteringPr
 @dataclass
 class ClusteringParams:
     method: str = 'louvain'
-    resolution: float = 1.0        # leiden resolution parameter
+    resolution: float = 1.0        # leiden resolution parameter, if list then compute multiple levels
     merge_tiny: bool = False
     name_prefix: str = 'Cluster'
     reassign_size_ratio: int = 10  # size ratio between big and small (if small is less than 10% of big, reassign)
@@ -65,10 +65,12 @@ def addLouvainClusters(nodesdf, nw, clusterLevel=0, prefix='Cluster'):
         nodesdf[grp].fillna('No Cluster', inplace=True)
 
 
-def addLeidenClusters(nodesdf, nw, resolution=1.0, prefix='Cluster'):
+def addLeidenClusters(nodesdf, nw, resolution=1.0, prefix='Cluster', min_clus_size=100):
     """
     Compute and add Leiden clusters to node dataframe
     One of linksdf and nw must not be None
+    Clustering is hierarchical if resolution parameter is a list of values. The first value controls the coarsest
+    clustering
 
     Parameters
     ----------
@@ -78,20 +80,61 @@ def addLeidenClusters(nodesdf, nw, resolution=1.0, prefix='Cluster'):
         links dataframe. The default is None.
     nw : networkx.Graph, optional
         graph object, either linksdf or nw must be present. The default is None.
+    resolution: float or list, optional
+        either a single value of clsutering resolution or a list of values, in which case clustering is hierarchical
+    prefix: str, optional
+        clustering attribute anme and value name prefix
+    min_clus_size: int
+        cluster size below which hierarchical clustering is not computed
 
     Returns
     -------
     None
     """
 
-    print("Computing Leiden clustering")
-    gg = ig.Graph.from_networkx(nw)
-    comm = gg.community_leiden(objective_function='modularity', resolution_parameter=resolution, n_iterations=-1)
-    clus = comm.subgraphs()
-    nodesdf[prefix] = None
-    for idx, subg in enumerate(clus):
-        nodes = subg.vs['_nx_name']
-        nodesdf.loc[nodes, prefix] = f"{prefix}_{idx}"
+    def _leiden_helper(ndf, _nw, res, _prefix):
+        print("Computing Leiden clustering")
+        gg = ig.Graph.from_networkx(_nw)
+        comm = gg.community_leiden(objective_function='modularity', resolution_parameter=res, n_iterations=-1)
+        clus = comm.subgraphs()
+        ndf[prefix] = None
+        for idx, subg in enumerate(clus):
+            nodes = subg.vs['_nx_name']
+            ndf.loc[nodes, _prefix] = f"{_prefix}_{idx}"
+
+    clusters = []
+    if type(resolution) is list:
+        prior_clus = None
+        for idx, res in enumerate(resolution):
+            _new_clus = f'{prefix}_L{idx+1}' if idx > 0 else prefix
+            if prior_clus is None:
+                # add top-level clusters
+                _leiden_helper(nodesdf, nw, res, _new_clus)
+            else:
+                # add subclusters of current level
+                ndf = nodesdf[['id', prior_clus]]
+                all_dfs = []
+                for clus, cnt in ndf[prior_clus].value_counts().items():
+                    print(f"{clus} {cnt}")
+                    clus_df = ndf[ndf[prior_clus] == clus].copy()
+                    if cnt >= min_clus_size:    # current cluster is large enough - compute subclusters
+                        nodes = clus_df.id.values
+                        clus_nw = nw.subgraph(nodes)
+                        # add clusters of cluster, name with outer clsuter name
+                        _leiden_helper(clus_df, clus_nw, res, clus)
+                        clus_df.rename(columns={clus: _new_clus}, inplace=True)
+                    else:                       # current cluster is small, next level is a single cluster
+                        clus_df[_new_clus] = clus_df[prior_clus] + '_0'
+                    all_dfs.append(clus_df)
+                ndf = pd.concat(all_dfs)
+                # add results into the main dataframe
+                nodesdf[_new_clus] = ndf[_new_clus]
+            clusters.append(_new_clus)
+            prior_clus = _new_clus
+    else:
+        _leiden_helper(nodesdf, nw, resolution, prefix)
+        clusters.append(prefix)
+    return clusters
 
 
 def add_cluster_metrics(nodesdf, nw, groupVars):
@@ -169,9 +212,10 @@ def add_clustering(nodesdf, linksdf=None, nw=None, sims=None, params=ClusteringP
     if isinstance(nw, nx.DiGraph):
         nw = nx.Graph(nw)
     if params.method == 'leiden':
-        addLeidenClusters(nodesdf, nw, prefix=params.name_prefix, resolution=params.resolution)
+        clusters = addLeidenClusters(nodesdf, nw, prefix=params.name_prefix, resolution=params.resolution)
     elif params.method == 'louvain':
         addLouvainClusters(nodesdf, nw, prefix=params.name_prefix)
+        clusters = [params.name_prefix]
     else:
         return
     if sims is not None and params.merge_tiny:
@@ -181,5 +225,5 @@ def add_clustering(nodesdf, linksdf=None, nw=None, sims=None, params=ClusteringP
                                           max_size=params.reassign_max_size,
                                           )
         # recompute cluster metrics
-        add_cluster_metrics(nodesdf, nw, [params.name_prefix])
-    return nodesdf
+#        add_cluster_metrics(nodesdf, nw, [params.name_prefix])
+    return nodesdf, clusters

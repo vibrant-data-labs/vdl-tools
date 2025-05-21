@@ -78,6 +78,11 @@ def s3_worker(path: Path, bucket_name: str):
     s3 = session.resource("s3")
     bucket = s3.Bucket(bucket_name)
 
+    try:
+        bucket.objects.filter(Prefix='data/').delete()
+    except Exception as e:
+        print(f"Error cleaning 'data/' folder in the bucket: {e}")
+
     data_path = str(path)
     for subdir, _, files in os.walk(path):
         for file in files:

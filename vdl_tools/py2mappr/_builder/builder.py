@@ -370,8 +370,8 @@ def build_map(
     out_dir = Path(os.getcwd()) / out_folder
     out_data_dir = out_dir / "data"
 
-    if not os.path.exists(Path(out_data_dir)):
-        os.makedirs(Path(out_data_dir))
+    shutil.rmtree(out_data_dir, ignore_errors=True)
+    os.makedirs(Path(out_data_dir))
 
     # copy the index and run scripts to out directory
     shutil.copy(template_path / "index.html", out_dir)
