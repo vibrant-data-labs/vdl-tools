@@ -37,6 +37,11 @@ cb_cd_model_4omini_tailwind = "ft:gpt-4o-mini-2024-07-18:vibrant-data-labs:cb-cd
 EMBEDDING_CTX_LENGTH = 16000
 EMBEDDING_ENCODING = "cl100k_base"
 
+DEFAULT_SYSTEM_PROMPT = "You are a climate change expert."
+DEFAULT_PROMPT_FORMAT = (
+    "Categorize the following company descriptions as either pertinent (1) or irrelevant (0) to addressing the climate crisis: {text} -> \n#"
+)
+
 
 def replace_returns_with_spaces(text: str):
     """output_text = replace_returns_with_spaces(input_text)
@@ -70,18 +75,21 @@ def decode_tokens(tok_list: list, encoding_name=EMBEDDING_ENCODING):
     return encoding.decode(tok_list)
 
 
-def get_model_pred(text: str, model):
+def get_model_pred(
+    text: str,
+    model: str,
+    system_prompt: str = None,
+    prompt_format: str = None,
+):
+    system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
+    prompt_format = prompt_format or DEFAULT_PROMPT_FORMAT
+
+    text = prompt_format.format(text=text)
     response = client.chat.completions.create(
         model=model,
         messages=[
-            {"role": "system", "content": "You are a climate change expert."},
-            {
-                "role": "user",
-                "content": "Categorize the following company descriptions as either pertinent (1) or irrelevant (0) to addressing the climate crisis: "
-                           + text
-                           + " ->"
-                           + "\n#",
-            },
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": text},
         ],
         logprobs=True,
         top_logprobs=1
@@ -102,13 +110,13 @@ def get_model_pred(text: str, model):
     return [pred_out, round(probs, 3)]
 
 
-def process_get_pred(text: str, model):
+def process_get_pred(text: str, model, system_prompt=None, prompt_format=None):
     in_text = replace_returns_with_spaces(text)
     out_list = truncate_text_tokens(
         in_text, encoding_name=EMBEDDING_ENCODING, max_tokens=EMBEDDING_CTX_LENGTH
     )
     out_text = decode_tokens(out_list, encoding_name=EMBEDDING_ENCODING)
-    return get_model_pred(out_text, model)
+    return get_model_pred(out_text, model, system_prompt, prompt_format)
 
 
 def generate_predictions(
@@ -121,8 +129,27 @@ def generate_predictions(
     max_workers=8,
     label_override_filepath: str = None,
     use_cached_results: bool = True,
+    system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+    prompt_format: str = DEFAULT_PROMPT_FORMAT,
 ):
-    """Generate predictions for a dataframe using a model and save them to a JSON file."""
+    """Generate predictions for a dataframe using a model and save them to a JSON file.
+    
+    Args:
+        df (pd.DataFrame): The input dataframe containing the data to predict.
+        chunk_size (int): The number of rows to process in each chunk.
+        column_text (str): The name of the column containing the text to predict.
+        save_path (str): The path to save the predictions as a JSON file.
+        model: The model to use for generating predictions.
+        idn (str): The name of the column containing unique identifiers for each row.
+        max_workers (int, optional): The maximum number of worker threads to use. Defaults to 8.
+        label_override_filepath (str, optional): Path to a file containing label overrides. Defaults to None.
+        use_cached_results (bool, optional): Whether to use cached results if available. Defaults to True.
+        system_prompt (str, optional): The system prompt to provide context for the model. Defaults to DEFAULT_SYSTEM_PROMPT.
+        prompt_format (str, optional): The format string for the user prompt. Defaults to DEFAULT_PROMPT_FORMAT.
+    
+    Returns:
+        dict: A dictionary containing predictions for each row in the dataframe.
+    """
     save_path = Path(save_path)
     if save_path.exists() and use_cached_results:
         with jsonlines.open(save_path) as file:
@@ -141,7 +168,7 @@ def generate_predictions(
     for i, chunk in enumerate(chunked(to_predict, chunk_size)):
 
         ids, texts = zip(*chunk)
-        to_run = [(text, model) for text in texts]
+        to_run = [(text, model, system_prompt, prompt_format) for text in texts]
         n_run = i * chunk_size
         logger.info(
             "Running GPT Relevance on chunks %s - %s out of %s",
