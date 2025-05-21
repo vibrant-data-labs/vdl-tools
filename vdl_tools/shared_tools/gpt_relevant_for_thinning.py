@@ -132,7 +132,24 @@ def generate_predictions(
     system_prompt: str = DEFAULT_SYSTEM_PROMPT,
     prompt_format: str = DEFAULT_PROMPT_FORMAT,
 ):
-    """Generate predictions for a dataframe using a model and save them to a JSON file."""
+    """Generate predictions for a dataframe using a model and save them to a JSON file.
+    
+    Args:
+        df (pd.DataFrame): The input dataframe containing the data to predict.
+        chunk_size (int): The number of rows to process in each chunk.
+        column_text (str): The name of the column containing the text to predict.
+        save_path (str): The path to save the predictions as a JSON file.
+        model: The model to use for generating predictions.
+        idn (str): The name of the column containing unique identifiers for each row.
+        max_workers (int, optional): The maximum number of worker threads to use. Defaults to 8.
+        label_override_filepath (str, optional): Path to a file containing label overrides. Defaults to None.
+        use_cached_results (bool, optional): Whether to use cached results if available. Defaults to True.
+        system_prompt (str, optional): The system prompt to provide context for the model. Defaults to DEFAULT_SYSTEM_PROMPT.
+        prompt_format (str, optional): The format string for the user prompt. Defaults to DEFAULT_PROMPT_FORMAT.
+    
+    Returns:
+        dict: A dictionary containing predictions for each row in the dataframe.
+    """
     save_path = Path(save_path)
     if save_path.exists() and use_cached_results:
         with jsonlines.open(save_path) as file:
