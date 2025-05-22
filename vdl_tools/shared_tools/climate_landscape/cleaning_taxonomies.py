@@ -1,5 +1,5 @@
 from vdl_tools.shared_tools.tools.logger import logger
-import re
+
 
 def _join_cols(x):
     results = []
@@ -7,8 +7,6 @@ def _join_cols(x):
         if val is not None:
             results.extend(val)
     return results
-
-
 
 
 def combine_one_earth_solution_tags(ndf):
@@ -150,17 +148,18 @@ def rename_one_earth_crosscutting_tags(df):
             df[col] = df[col].apply(lambda x: [tag.replace(k, v) for tag in x] if isinstance(x, list) else x)
     return df
 
+
 def clean_no_level(df,
-                     taxonomy="one_earth",
-                     level=1  # e.g., 1 for No_Level_1
-                     ):
+                   taxonomy="one_earth",
+                   level=1  # e.g., 1 for No_Level_1
+                   ):
     level = str(level)
     logger.info(f'cleaning no level {level} tags')
     # clean no level 1 categories
     df[f'level{level}_{taxonomy}_category'] = df[f'level{level}_{taxonomy}_category'].apply(
         lambda x: None if f"No_Level_{level}_" in x else x)
     # clean no level 0 tags
-    df[f'all_level{level}_{taxonomy}_category'] = df[f'level{level}_{taxonomy}_category'].apply(
+    df[f'all_level{level}_{taxonomy}_category'] = df[f'all_level{level}_{taxonomy}_category'].apply(
         lambda x: [tag for tag in x if "No_Level_{level}_" not in tag] if isinstance(x, list) else x)
 
     return df
