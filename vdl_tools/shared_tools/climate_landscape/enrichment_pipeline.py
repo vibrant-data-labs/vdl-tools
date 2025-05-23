@@ -442,6 +442,7 @@ def run_pipeline(
         model_name=relevance_model_name,
         system_prompt=relevance_model_system_prompt,
         prompt_format=relevance_model_prompt_format,
+        column_text='text_for_relevance_model',
         idn=id_col,
         save_path=paths['relevance_model_predictions_path'],
         label_override_filepath=label_override_filepath,
