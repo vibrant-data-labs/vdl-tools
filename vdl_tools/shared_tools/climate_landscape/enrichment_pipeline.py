@@ -260,6 +260,7 @@ def run_relevance_model(
     model_name,
     idn,
     save_path,
+    column_text='text_for_relevance_model',
     label_override_filepath=None,
     use_cached_results=True,
     system_prompt=None,
@@ -277,7 +278,7 @@ def run_relevance_model(
     predictions = gpt.generate_predictions(
         df,
         500,
-        'text_for_relevance_model',
+        column_text= column_text, #'text_for_relevance_model',
         save_path=save_path,
         model=model_name,
         idn=idn,
