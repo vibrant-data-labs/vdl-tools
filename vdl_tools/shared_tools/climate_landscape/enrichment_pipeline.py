@@ -264,6 +264,7 @@ def run_relevance_model(
     use_cached_results=True,
     system_prompt=None,
     prompt_format=None,
+    column_text=None,
 ):
 
     model_name_safe = model_name.replace("-", "_").replace(":", "_")
@@ -277,7 +278,7 @@ def run_relevance_model(
     predictions = gpt.generate_predictions(
         df,
         500,
-        'text_for_relevance_model',
+
         save_path=save_path,
         model=model_name,
         idn=idn,
@@ -285,6 +286,7 @@ def run_relevance_model(
         use_cached_results=use_cached_results,
         system_prompt=system_prompt,
         prompt_format=prompt_format,
+        column_text = column_text
     )
 
     df['prediction_relevant'], df['probability_relevant'] = (
@@ -407,6 +409,7 @@ def run_pipeline(
     relevance_model_name=gpt.cb_cd_model_4omini,
     relevance_model_system_prompt=None,
     relevance_model_prompt_format=None,
+    column_text_name=None,
     adaptation_model_id=adp.CPI_ADAPTATION_MODEL_2024_ID,
     num_records=None,
     run_process_images=False,
@@ -441,6 +444,7 @@ def run_pipeline(
         model_name=relevance_model_name,
         system_prompt=relevance_model_system_prompt,
         prompt_format=relevance_model_prompt_format,
+        column_text=column_text_name,
         idn=id_col,
         save_path=paths['relevance_model_predictions_path'],
         label_override_filepath=label_override_filepath,

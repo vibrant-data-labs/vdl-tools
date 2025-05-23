@@ -41,7 +41,7 @@ DEFAULT_SYSTEM_PROMPT = "You are a climate change expert."
 DEFAULT_PROMPT_FORMAT = (
     "Categorize the following company descriptions as either pertinent (1) or irrelevant (0) to addressing the climate crisis: {text} -> \n#"
 )
-
+DEFAULT_COLUMN_TEXT = "text_for_relevance_model"
 
 def replace_returns_with_spaces(text: str):
     """output_text = replace_returns_with_spaces(input_text)
@@ -122,7 +122,6 @@ def process_get_pred(text: str, model, system_prompt=None, prompt_format=None):
 def generate_predictions(
     df,
     chunk_size: int,
-    column_text: str,
     save_path: str,
     model,
     idn: str,
@@ -131,6 +130,7 @@ def generate_predictions(
     use_cached_results: bool = True,
     system_prompt: str = DEFAULT_SYSTEM_PROMPT,
     prompt_format: str = DEFAULT_PROMPT_FORMAT,
+    column_text: str = DEFAULT_COLUMN_TEXT,
 ):
     """Generate predictions for a dataframe using a model and save them to a JSON file.
     
