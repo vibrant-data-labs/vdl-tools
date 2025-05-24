@@ -356,6 +356,7 @@ def add_one_earth_taxonomy(
     distributed_funding_results_path=None,
     levers_path=None,
     levers_results_path=None,
+    max_depth=2,
 ):
     paths = paths or pc.get_paths()
     taxonomy_path = taxonomy_path or paths["one_earth_taxonomy"]
@@ -390,6 +391,7 @@ def add_one_earth_taxonomy(
         use_cached_results=use_cached_results,
         force_parents=force_parents,
         mapping_name=mapping_name,
+        max_distr_funding_level=max_depth,
     )
 
     # reduce the number of columns in the output
@@ -633,7 +635,7 @@ def add_netzero_taxonomy(
         use_cached_results=use_cached_results,
         force_parents=force_parents,
         mapping_name=mapping_name,
-        max_distr_funding_level=5,
+        max_distr_funding_level=max_depth,
     )
 
     # reduce the number of columns in the output
