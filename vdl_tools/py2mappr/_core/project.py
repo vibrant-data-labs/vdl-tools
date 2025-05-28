@@ -20,7 +20,7 @@ import copy
 
 class PublishConfig(TypedDict):
     gtag_id: str
-
+    gtm_id: str
 
 def create_sponsor(
     icon_url: str, link_url: str, link_title: str
