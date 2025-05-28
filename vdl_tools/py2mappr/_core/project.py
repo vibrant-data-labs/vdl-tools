@@ -16,6 +16,7 @@ from vdl_tools.py2mappr._attributes.calculate import (
 from vdl_tools.py2mappr._layout import Layout, LayoutSettings
 from pandas import DataFrame
 import copy
+import hashlib
 
 
 class PublishConfig(TypedDict):
@@ -205,6 +206,20 @@ class OpenmapprProject:
             {
                 "displayExportButton": display,
             }
+        )
+
+    def set_password(self, password: str):
+        """
+        Set the SHA256 hashed password for the project.
+
+        Parameters
+        ----------
+        password : str. The password to hash and set for the project.
+        """
+        # Create SHA256 hash of the password
+        sha256_hash = hashlib.sha256(password.encode()).hexdigest()
+        self.configuration.update(
+            {"passwordHash": sha256_hash},
         )
 
     def set_socials(
