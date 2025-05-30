@@ -275,6 +275,13 @@ def load_one_earth_taxonomy(taxonomy_path,
     ag_term_df = pd.read_excel(taxonomy_path, sheet_name="Regenerative Ag").ffill()
     nature_term_df = pd.read_excel(taxonomy_path, sheet_name="Nature Conservation").ffill()
 
+    # for pillars, sub, and soln exclude any rows that have Exclude == 1 if Exclude column exists
+    if 'Exclude' in pillar_df.columns:
+        pillar_df = pillar_df[pillar_df['Exclude'] != 1].copy()
+    if 'Exclude' in sub_df.columns:
+        sub_df = sub_df[sub_df['Exclude'] != 1].copy()
+    if 'Exclude' in soln_df.columns:
+        soln_df = soln_df[soln_df['Exclude'] != 1].copy()
     # Concatenate sub-term sheets into a single subterm dataframe
     term_df = pd.concat([energy_term_df, ag_term_df, nature_term_df])
     if add_geo_engineering:
@@ -352,6 +359,7 @@ def add_one_earth_taxonomy(
     force_parents=True,
     add_intersectional=True,
     add_falsesolns=True,
+    add_geo_engineering=False,
     add_levers_of_change=True,
     mapping_name="one_earth_category",
     taxonomy_path=None,
@@ -381,6 +389,7 @@ def add_one_earth_taxonomy(
 
     taxonomy = load_one_earth_taxonomy(taxonomy_path,
                                        solution_textattr=oe_solution_textattr,
+                                        add_geo_engineering=add_geo_engineering,
                                        )
 
     # add main taxonomy mapping
