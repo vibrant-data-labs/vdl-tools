@@ -278,6 +278,7 @@ def review_one_sentence(clusters_df):
     -Remove a non‑essential noun or adjective from one title to break the overlap, or
     -Add a distinctive qualifier drawn from the long description (e.g., a region, beneficiary, or method).
         • Re‑check until every title is uniquely worded.
+        • Before finalizing, perform a check for near‑synonyms among the key nouns. If two titles use near synonymous key nouns, treat them as clashing and adjust as above.
 
     **Example of Before and After:**  
     - Original long sentence: “A nonprofit dedicated to empowering youth by enhancing educational access and providing mentorship.”  
