@@ -52,3 +52,18 @@ num_palette = [  # default numeric color palette endpoints
     {"col": "#a7a7a8"},  # min VDL grey   #a7a7a8
     {"col": "#8c0303"},  # max VDL dark red
 ]
+
+cat_palette_octopus = [
+    {"col": "#008BA0"}, # Blue 700            – cool
+    {"col": "#F23F36"},  # Lighthouse Red 700  – warm
+    {"col": "#003B56"},  # Navy Blue 700       – cool
+    {"col": "#A7B062"},  # Dirty Lime 700      – warm-green
+    {"col": "#EB8082"},  # Coral 700           – warm coral
+    {"col": "#5E939E"},  # Light Blue 800      – cool slate-teal
+    {"col": "#DC6A2C"}
+    ]
+
+num_palette_octopus = [
+    {"col": "#B7B7B7"},  # Off-White 800 – mid-grey (~ #A7A7A8)
+    {"col": "#922621"},  # Lighthouse Red 900 – deep maroon (~ #8C0303)
+]
