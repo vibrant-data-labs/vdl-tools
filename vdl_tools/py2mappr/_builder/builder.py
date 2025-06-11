@@ -60,9 +60,7 @@ def _printer(project: OpenmapprProject):
 
 
 _debug_print = None
-template_path = Path(
-    os.path.join(os.path.dirname(__file__), "..", "_templates")
-)
+template_path = Path(os.path.join(os.path.dirname(__file__), "..", "_templates"))
 
 
 def __write_dataset_file(
@@ -95,12 +93,8 @@ def __write_dataset_file(
     """
     # collect datapoint attributes
     datapointAttribs = build_attrDescriptors(df_datapoints, datapointAttrs)
-    datapointAttrTypes = {
-        row["id"]: row["attrType"] for row in datapointAttribs
-    }
-    datapointRenderTypes = {
-        row["id"]: row["renderType"] for row in datapointAttribs
-    }
+    datapointAttrTypes = {row["id"]: row["attrType"] for row in datapointAttribs}
+    datapointRenderTypes = {row["id"]: row["renderType"] for row in datapointAttribs}
 
     # collect datapoints
     datapoints = build_datapoints(
@@ -109,7 +103,7 @@ def __write_dataset_file(
         datapointRenderTypes,
         exclude_md_attrs,
         datapoint_weighted_attrs,
-        geodata_latlon
+        geodata_latlon,
     )
 
     _debug_print(
@@ -224,7 +218,7 @@ def __write_settings_file(
     return data
 
 
-def __add_analytics(index_path: str, gtag_id: str = ""):
+def __add_analytics(index_path: str, gtag_id: str = "", gtm_id: str = ""):
     """
     Adds the google analytics tracking code to the index.html file
 
@@ -236,12 +230,15 @@ def __add_analytics(index_path: str, gtag_id: str = ""):
     gtag_id : str, optional
         The google analytics tracking id, by default ""
     """
-    if not gtag_id:
+    if not gtag_id and not gtm_id:
         return
     ga_template = ""
     with open(template_path / "ga_template.html", "r") as f:
         ga_template = f.read()
-        ga_template = ga_template.replace("#{gtag_id}", gtag_id)
+        if gtag_id:
+            ga_template = ga_template.replace("#{gtag_id}", gtag_id)
+        if gtm_id:
+            ga_template = ga_template.replace("#{gtmtag_id}", gtm_id)
 
     index_tmpl = ""
     with open(index_path, "r") as f:
@@ -251,6 +248,23 @@ def __add_analytics(index_path: str, gtag_id: str = ""):
         f.write(index_tmpl)
 
     _debug_print(f"\t- gtag added")
+
+    if not gtm_id:
+        return
+
+    gtm_template = ""
+    with open(template_path / "gtm_template.html", "r") as f:
+        gtm_template = f.read()
+    gtm_template = gtm_template.replace("#{gtmtag_id}", gtm_id)
+
+    index_tmpl = ""
+    with open(index_path, "r") as f:
+        index_tmpl = f.read()
+    with open(index_path, "w") as f:
+        index_tmpl = index_tmpl.replace("<!-- #{gtmtag} -->", gtm_template)
+        f.write(index_tmpl)
+
+    _debug_print(f"\t- gtm tag added")
 
 
 def __extract_sentence(text: str):
@@ -387,7 +401,9 @@ def build_map(
         for snapshot in project.snapshots
     ]
 
-    geosnapshot = [snapshot for snapshot in project.snapshots if snapshot.plot_type == 'geo']
+    geosnapshot = [
+        snapshot for snapshot in project.snapshots if snapshot.plot_type == "geo"
+    ]
     latlon = None
     if len(geosnapshot) > 0:
         geolayout = geosnapshot[0]
@@ -399,11 +415,9 @@ def build_map(
         out_data_dir,
         flatten(exclude_md_attrs),
         project.weighted_attributes,
-        latlon
+        latlon,
     )
-    _debug_print(
-        f"\t- new dataset file written to {out_data_dir / 'nodes.json'}.\n"
-    )
+    _debug_print(f"\t- new dataset file written to {out_data_dir / 'nodes.json'}.\n")
 
     _debug_print(f">> building network")
     if project.network is not None:
@@ -438,7 +452,8 @@ def build_map(
 
     if project.publish_settings.get("gtag_id"):
         gtag_id = project.publish_settings.get("gtag_id")
-        __add_analytics(out_dir / "index.html", gtag_id)
+        gtm_id = project.publish_settings.get("gtm_id")
+        __add_analytics(out_dir / "index.html", gtag_id, gtm_id)
 
     __set_opengraph_tags(out_dir / "index.html", project.configuration)
 

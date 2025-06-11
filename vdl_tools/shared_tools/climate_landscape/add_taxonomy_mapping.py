@@ -134,7 +134,9 @@ def add_taxonomy_mapping(
 # OneEarth-specific functions
 
 def validate_one_earth_taxonomy(taxonomy_path):
-    taxonomy = load_one_earth_taxonomy(taxonomy_path)
+    taxonomy = load_one_earth_taxonomy(taxonomy_path,
+                                       solution_textattr=oe_solution_textattr,
+                                       )
 
     all_errors = []
     for i, level in enumerate(taxonomy):
@@ -263,7 +265,8 @@ def load_netzero_taxonomy(
 
 
 def load_one_earth_taxonomy(taxonomy_path,
-                            add_geo_engineering=False
+                            add_geo_engineering=False,
+                            solution_textattr='Definition'  #  or 'ExpandedText'
                             ):
     pillar_df = pd.read_excel(taxonomy_path, sheet_name="Pillars")
     sub_df = pd.read_excel(taxonomy_path, sheet_name="SubPillars")
@@ -272,6 +275,13 @@ def load_one_earth_taxonomy(taxonomy_path,
     ag_term_df = pd.read_excel(taxonomy_path, sheet_name="Regenerative Ag").ffill()
     nature_term_df = pd.read_excel(taxonomy_path, sheet_name="Nature Conservation").ffill()
 
+    # for pillars, sub, and soln exclude any rows that have Exclude == 1 if Exclude column exists
+    if 'Exclude' in pillar_df.columns:
+        pillar_df = pillar_df[pillar_df['Exclude'] != 1].copy()
+    if 'Exclude' in sub_df.columns:
+        sub_df = sub_df[sub_df['Exclude'] != 1].copy()
+    if 'Exclude' in soln_df.columns:
+        soln_df = soln_df[soln_df['Exclude'] != 1].copy()
     # Concatenate sub-term sheets into a single subterm dataframe
     term_df = pd.concat([energy_term_df, ag_term_df, nature_term_df])
     if add_geo_engineering:
@@ -287,7 +297,7 @@ def load_one_earth_taxonomy(taxonomy_path,
     taxonomy = [
         {'level': 0, 'name': 'Pillar', 'data': pillar_df, 'textattr': 'Definition'},
         {'level': 1, 'name': 'Sub-Pillar', 'data': sub_df, 'textattr': 'Definition'},
-        {'level': 2, 'name': 'Solution', 'data': soln_df, 'textattr': 'Definition'},
+        {'level': 2, 'name': 'Solution', 'data': soln_df, 'textattr': solution_textattr},
         {'level': 3, 'name': 'Sub-Term', 'data': term_df, 'textattr': 'Sub-Term Definition'}
     ]
     return taxonomy
@@ -349,13 +359,16 @@ def add_one_earth_taxonomy(
     force_parents=True,
     add_intersectional=True,
     add_falsesolns=True,
+    add_geo_engineering=False,
     add_levers_of_change=True,
     mapping_name="one_earth_category",
     taxonomy_path=None,
+    oe_solution_textattr='Definition',  # or "ExpandedText"
     results_path=None,
     distributed_funding_results_path=None,
     levers_path=None,
     levers_results_path=None,
+    max_depth=2,
 ):
     paths = paths or pc.get_paths()
     taxonomy_path = taxonomy_path or paths["one_earth_taxonomy"]
@@ -374,7 +387,10 @@ def add_one_earth_taxonomy(
         max_workers=max_workers
     )
 
-    taxonomy = load_one_earth_taxonomy(taxonomy_path)
+    taxonomy = load_one_earth_taxonomy(taxonomy_path,
+                                       solution_textattr=oe_solution_textattr,
+                                        add_geo_engineering=add_geo_engineering,
+                                       )
 
     # add main taxonomy mapping
     all_df, distr_df = add_taxonomy_mapping(
@@ -390,6 +406,7 @@ def add_one_earth_taxonomy(
         use_cached_results=use_cached_results,
         force_parents=force_parents,
         mapping_name=mapping_name,
+        max_distr_funding_level=max_depth,
     )
 
     # reduce the number of columns in the output
@@ -633,7 +650,7 @@ def add_netzero_taxonomy(
         use_cached_results=use_cached_results,
         force_parents=force_parents,
         mapping_name=mapping_name,
-        max_distr_funding_level=5,
+        max_distr_funding_level=max_depth,
     )
 
     # reduce the number of columns in the output

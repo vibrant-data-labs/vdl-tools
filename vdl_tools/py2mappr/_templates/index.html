@@ -2,6 +2,7 @@
 <html lang="en" data-ng-app="hcApp" style="background: #fff">
 
 <head>
+  <!-- #{gtag} -->
   <meta charset="utf-8">
   <link rel="icon" type="image/png" href="https://mappr-player.openmappr.org/img/logos/vdl-logo.svg">
   <meta name="viewport" content="initial-scale=.7, user-scalable=no, minimal-ui">
@@ -21,7 +22,9 @@
 </head>
 
 <body id="app" data-custom-background data-off-canvas-nav style="background: #fff"
-  class="nav-min light-theme side-menu-compressed"><!-- #{gtag} -->
+  class="nav-min light-theme side-menu-compressed">
+  <auth-modal></auth-modal>
+  <!-- #{gtmtag} -->
   <div>
     <div
       ng-init="playerInfo = {&quot;isPublicPlayer&quot;:true,&quot;playerBuildVer&quot;:&quot;v14.15.4&quot;,&quot;directAccess&quot;:true,&quot;isFinal&quot;:false}"

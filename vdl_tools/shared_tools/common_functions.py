@@ -141,43 +141,10 @@ def find_replace_multi_from_dict(x, replace_dict):
     return x  # return cleaned spelling
 
 
-#def clean_empty_tags(df, col):
-#    # clean column of pipe-separated tags to remove blank ones
-#    tagseries = df[col].apply(lambda x: str(x).split("|"))
-#    tagseries = tagseries.apply(
-#        lambda x: [s.strip() for s in x if s]
-#    )  # strip empty spaces
-#    tagseries = tagseries.apply(lambda x: [s for s in x if s])  # keep if not empty
-#    tagseries = tagseries.apply(
-#        lambda x: [s for s in x if s != ""]
-#    )  # keep if not empty string
-#    tagseries = tagseries.apply(lambda x: "|".join(x))  # rejoin into liststring
-#    tagseries = tagseries.apply(
-#        lambda x: None if ((x == "") or (x == "nan")) else x
-#    )  # replace empty string with none
-#    return tagseries
-
-
 def split(delimiters, string, maxsplit=0):
     # split on list of many delimeters
     regexPattern = "|".join(map(regex.escape, delimiters))
     return regex.split(regexPattern, string, maxsplit)
-
-
-#def compile_search_terms(df, col):
-#    # parse manually provided search terms, and compile unique ones into csv file
-#    # col is columns with free text search terms
-#    # return df with unique terms, counts, percents
-#    print("\nCompiling manual search terms and writing results")
-#    delimiters = [",", "/", "|", ":", ";", ".", "&", " and ", " or "]  # " as well as "]
-#    df[col] = df[col].fillna("")
-#    df["term_list"] = df[col].apply(
-#        lambda x: split(delimiters, str(x).lower().strip())
-#    )  # split on characters into list
-#    df["terms"] = df["term_list"].apply(lambda x: "|".join(x))  # join into tags
-#    # generate tag distribution  file
-#    df_searchterms = build_tag_hist_df(df, "terms")
-#    return df_searchterms
 
 
 def blacklist_tags (df, tagcol, blacklist):
@@ -209,18 +176,6 @@ def build_tag_hist_df(df, col, delimiter="|", blacklist=[], mincnt=0):
     tagdf["percent"] = tagdf["count"].apply(lambda x: np.round((100 * (x / total)), 2))
     tagdf = tagdf[tagdf["count"] > mincnt]  # remove infrequent tags
     return tagdf
-
-
-#def clean_tagseries(tagseries, delimeter="|"):
-#    # remove empty tags and duplicates reformat as pipe-separated string of unique tags
-#    tagseries = tagseries.astype(str).str.split(delimeter)  # convert tag string to list
-#   tagseries = tagseries.apply(
-#        lambda x: [s.strip() for s in x if len(s) > 0]
-#    )  # remove spaces and empty elements - list comprehension
-#    tagseries = tagseries.apply(
-#        lambda x: delimeter.join(list(set(x)))
-#    )  # get unique tags, and join back into string of tags
-#    return tagseries
 
 
 def clean_tags(df, tagCol, delimeter="|"):
@@ -371,22 +326,6 @@ def join_strings_no_missing(df: pd.DataFrame, cols: List[str], delim="|"):
     return joined_strings
 
 
-#def build_custom_list_from_tags(x, tagDict):
-#    '''
-#    x is a list of tags
-#    Rename tags from a renaming dictionary
-#    If the tag is not in the dictionary, DON'T KEEP IT
-#    Returns a new list of replaced tags
-#    '''
-#    oldtaglist = x.split("|")
-#    newtaglist = []
-#    for tag in oldtaglist:
-#        if tag in tagDict:
-#            newtaglist.append(tagDict[tag])
-#    # newtags = "|".join(newtaglist)
-#    return newtaglist
-
-
 def clean_empty_list_elements(df, listcol):
     # clean list of empty elements
     df[listcol] = df[listcol].apply(lambda x: [s.strip() for s in x if s])  # strip empty spaces
@@ -395,26 +334,6 @@ def clean_empty_list_elements(df, listcol):
     df[listcol] = df[listcol].apply(lambda x: list(set(x)))  # remove duplicates
     df[listcol] = df[listcol].apply(lambda x: None if x == '' else x)  # replace empty string with none
     return df[listcol]
-
-
-#def keep_tags_w_min_count(df, tag_attr, minCount=2):
-#    print("Keeping tags that occur at least %s times" % str(minCount))
-#    # trim tags to ones that occur at least n times in the entire dataset
-#    # udpate tag counts for each row
-#
-#    # across entire dataset, count tag hist and remove singleton tags
-#    df[tag_attr] = df[tag_attr].fillna('')
-#    taglists = df[tag_attr].apply(lambda x: x.split("|"))
-#    # build master histogram of tags that occur at least min count times
-#    tagHist = dict([item for item in
-#                    Counter([k for kwList in taglists for k in kwList]).most_common() if item[1] >= minCount])
-#    # filter tags in each row to ones that are in this global 'active' tags set
-#    taglists = taglists.apply(lambda x: [k for k in x if k in tagHist])
-#    # join list back into string of unique pipe-sepparated tags
-#    taglists = taglists.apply(lambda x: "|".join(list(set(x))))
-#    # update tag counts
-#    nTags = taglists.apply(lambda x: len(x.split("|")) if x else 0)
-#    return taglists, nTags
 
 
 def keep_tags_w_min_count_list(df, tag_attr, min_count=2):
@@ -683,6 +602,34 @@ def aggregate_and_fracs(df,
         sort_weighted_kwds(df_agg, wtd_kwds)
     return df_agg
 
+
+def compute_percent_value(
+    df,  # dataframe
+    group_cols,  # list of column(s) to group by
+    attrib,  # the column to compute the fraction for
+    value  # the value to tally if present
+):
+    """
+    Compute the percent of entities in each group that have a given value
+    :param df: dataframe
+    :param group_cols: list of column(s) to group by
+    :param attrib: the column to compute the fraction for
+    :param value: the value to tally if present
+    """
+    df_ = df.copy()
+    df_[attrib] = df_[attrib] == value
+    df_grp = (
+        df_
+        .groupby(group_cols)[attrib]
+        .mean(numeric_only=True)
+        .mul(100)
+        .round(0)
+        .reset_index(name=f'pct_{value}')
+    )
+    # merge back to original df
+    df_ = df_.merge(df_grp, on=group_cols, how='left')
+    # return series
+    return df_[f'pct_{value}']
 
 # %% COMMON FUNCTIONS TO COMBINE CRUNCHBASE, CANDID, AND LINKEDIN DATA
 # NOTE THIS WAS MOVED TO: scrape_enrich/combine_crunchbase_candid_linkedin.py
