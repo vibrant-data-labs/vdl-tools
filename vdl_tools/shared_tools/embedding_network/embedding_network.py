@@ -261,7 +261,7 @@ def get_one_sentence(entities_texts, subject):
     return prompt
 
 
-def review_one_sentence(clusters_df):
+def review_one_sentence(clusters_df, clusattr):
     preamble = dedent(
         f"""
     **Task:**  
@@ -294,7 +294,7 @@ def review_one_sentence(clusters_df):
     """
     ).strip()
     # add clusters descriptsion as a dictionary with the first col as keys and the other 2 cols as values
-    clusters_df = clusters_df.set_index("Cluster")
+    clusters_df = clusters_df.set_index(clusattr)
     clusters_dict = clusters_df.to_dict(orient="index")
     prompt = dedent(f"""{preamble} \n {clusters_dict} \n Output:""").strip()
     return prompt
@@ -344,7 +344,7 @@ def filter_keywords(cluster_kwd_dict, n_tags, filename=None):
     filtered_map = {}
     for cluster_id, kw_list in cluster_kwd_dict.items():
         filtered = [k for k in kw_list if k not in remove_keywords]
-        filtered_map[cluster_id] = filtered[:n_tags]
+        filtered_map[cluster_id] = tuple(filtered[:n_tags])    # make a tuple so it is immutable and therefore hashable
     return filtered_map
 
 
@@ -369,6 +369,7 @@ def parse_keyword_response(response_obj):
 def get_cluster_sentences_from_text(
     nodesdf,
     textcol,
+    clusattr='Cluster',
     subject=None,
     model="gpt-4.1-mini",
 ):
@@ -382,7 +383,7 @@ def get_cluster_sentences_from_text(
     ids_text_sums_all = []
     cluster_texts_all_list = {}
 
-    for clus, cdf in nodesdf.groupby("Cluster"):
+    for clus, cdf in nodesdf.groupby(clusattr):
         sorted_cdf = cdf.sort_values("wtd_cc", ascending=False)
 
         cluster_texts_all = add_text_below_token_limit(sorted_cdf, textcol, model)
@@ -427,8 +428,8 @@ def get_cluster_sentences_from_text(
     }
 
     # Assign results back to nodesdf in separate columns
-    nodesdf["clus_sentence_short"] = nodesdf["Cluster"].map(cluster_id_to_shorts_all)
-    nodesdf["clus_sentence_long"] = nodesdf["Cluster"].map(cluster_id_to_sums_all)
+    nodesdf["clus_sentence_short"] = nodesdf[clusattr].map(cluster_id_to_shorts_all)
+    nodesdf["clus_sentence_long"] = nodesdf[clusattr].map(cluster_id_to_sums_all)
 
     # # Capture how many entities went into the all-entities approach
     # nodesdf["clus_sentence_count_all"] = nodesdf["Cluster"].map(
@@ -437,15 +438,15 @@ def get_cluster_sentences_from_text(
     return nodesdf
 
 
-def improve_one_sentences(nodesdf, subject="education", model="o3-mini"):
+def improve_one_sentences(nodesdf, clusattr='Cluster', subject="education", model="o3-mini"):
 
     df = nodesdf[
-        ["Cluster", "clus_sentence_short", "clus_sentence_long"]
+        [clusattr, "clus_sentence_short", "clus_sentence_long"]
     ].drop_duplicates()
     # print(df.shape)
     assistant_prompt = define_assistant_prompt(subject)
     # get the prompt for the cluster
-    review_prompt = review_one_sentence(df)
+    review_prompt = review_one_sentence(df, clusattr)
 
     response = oai_utils.CLIENT.chat.completions.create(
         model=model,
@@ -467,7 +468,7 @@ def improve_one_sentences(nodesdf, subject="education", model="o3-mini"):
 
     # get the response json
     json_resp = json.loads(response.choices[0].message.content)
-    nodesdf["clus_sentence_reviewed"] = nodesdf["Cluster"].map(json_resp)
+    nodesdf["clus_sentence_reviewed"] = nodesdf[clusattr].map(json_resp)
     return nodesdf
     # nodesdf["clus_sentence_reviewed"] = nodesdf["Cluster"].map(cluster_id_to_review)
     # return nodesdf
@@ -503,7 +504,7 @@ def get_cluster_names_from_text(
 
     ids_text_prompts, ids_text_sums = [], []
 
-    for clus, cdf in nodesdf.groupby("Cluster"):
+    for clus, cdf in nodesdf.groupby(clusattr):
         cdf_sorted = cdf.sort_values("wtd_cc", ascending=False)
 
         if n_entities is None:
@@ -558,8 +559,8 @@ def get_cluster_names_from_text(
         clus: resp["response_text"] for clus, resp in raw_sum.items()
     }
 
-    nodesdf[clusname] = nodesdf["Cluster"].map(cluster_to_cleaned_keywords)
-    nodesdf["clus_sum"] = nodesdf["Cluster"].map(cluster_id_to_summaries)
+    nodesdf[clusname] = nodesdf[clusattr].map(cluster_to_cleaned_keywords)
+    nodesdf["clus_summary"] = nodesdf[clusattr].map(cluster_id_to_summaries)
 
     return nodesdf
 
@@ -583,14 +584,16 @@ def build_embedding_network(
     df.reset_index(drop=True, inplace=True)
     nodesdf, edgesdf, clusters = bn.buildSimilarityNetwork(df, sims.copy(), params)
     # compute and assign cluster names
-    for clattr in clusters:
-        nodesdf = get_cluster_names_from_text(
-            nodesdf,
-            textcol=params.textcol,
-            clusattr=clattr,
-            clusname=params.clusName,
-            n_tags=params.n_tags,
-            subject=subject,
-            n_entities=n_entities,
-        )
+    if params.clusName is not None:
+        for idx, clattr in enumerate(clusters):
+            clName = params.clusName if idx == 0 else f"{params.clusName}_L{idx + 1}"
+            nodesdf = get_cluster_names_from_text(
+                nodesdf,
+                textcol=params.textcol,
+                clusattr=clattr,
+                clusname=clName,
+                n_tags=params.n_tags,
+                subject=subject,
+                n_entities=n_entities,
+            )
     return nodesdf, edgesdf, sims

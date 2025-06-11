@@ -450,7 +450,8 @@ def get_categorical_colors(nw, df, node_attr, node_vals, color_edges, colors, ed
 # so multiple images can have the same color scheme
 # if plotfile is given, image is written to file
 def plot_network(nodes_df, edges_df, node_attr='Cluster', node_vals=None, node_size=30,
-                 plotfile=None, colors=None, title=None, color_edges=True, draw_edges=True):
+                 plotfile=None, colors=None, title=None, color_edges=True, draw_edges=True,
+                 legend_min_count=0):
     nw = bn.buildNetworkX(edges_df)
     layout = dict(zip(nodes_df.id, list(zip(nodes_df.x, nodes_df.y))))
     node_colors, edge_colors, attr_colors = get_categorical_colors(nw, nodes_df, node_attr, node_vals, color_edges, None)
@@ -464,7 +465,8 @@ def plot_network(nodes_df, edges_df, node_attr='Cluster', node_vals=None, node_s
         plt.gca().set_title(title)
     # add legend
     counts = nodes_df[node_attr].value_counts()
-    patches = [mpatches.Patch(color=attr_colors[val], label=val+'('+str(counts.loc[val])+')') for val in counts.index]
+    patches = [mpatches.Patch(color=attr_colors[val], label=val+'('+str(counts.loc[val])+')')
+               for val in counts.index if counts.loc[val] >= legend_min_count]
     fig.axes[0].legend(handles=patches, loc='upper left', bbox_to_anchor=(1.0, 1.0),
                        borderpad=0.05, borderaxespad=0.05)
     if plotfile is not None:

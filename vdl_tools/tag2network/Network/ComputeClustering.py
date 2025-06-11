@@ -17,7 +17,7 @@ class ClusteringParams:
     reassign_size_ratio: int = 10  # size ratio between big and small (if small is less than 10% of big, reassign)
     reassign_top_n: int = 5        # top n most similar clusters to check for reassignment
     reassign_max_size: int = 40    # if cluster is bigger than that don't re-assign it (even if size ratio is met)
-
+    min_clus_size: int = 100        # hierarchical leiden min cluster size to split; if list one value per level
 
 def addLouvainClusters(nodesdf, nw, clusterLevel=0, prefix='Cluster'):
     """
@@ -107,17 +107,18 @@ def addLeidenClusters(nodesdf, nw, resolution=1.0, prefix='Cluster', min_clus_si
         prior_clus = None
         for idx, res in enumerate(resolution):
             _new_clus = f'{prefix}_L{idx+1}' if idx > 0 else prefix
-            if prior_clus is None:
+            if idx == 0:
                 # add top-level clusters
                 _leiden_helper(nodesdf, nw, res, _new_clus)
             else:
+                min_cl = min_clus_size[idx - 1] if type(min_clus_size) is list else min_clus_size
                 # add subclusters of current level
                 ndf = nodesdf[['id', prior_clus]]
                 all_dfs = []
                 for clus, cnt in ndf[prior_clus].value_counts().items():
                     print(f"{clus} {cnt}")
                     clus_df = ndf[ndf[prior_clus] == clus].copy()
-                    if cnt >= min_clus_size:    # current cluster is large enough - compute subclusters
+                    if cnt >= min_cl:    # current cluster is large enough - compute subclusters
                         nodes = clus_df.id.values
                         clus_nw = nw.subgraph(nodes)
                         # add clusters of cluster, name with outer clsuter name
