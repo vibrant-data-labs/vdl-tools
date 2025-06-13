@@ -90,8 +90,17 @@ def api_query_factory(url, default_fields, limit=None) -> Callable:
                 url,
                 json={"field_ids": fields, "query": filters, "limit": 1000, **next},
             )
+            if data.status_code != 200:
+                print(f"API error {data.status_code}: {data.text}")
+                break
 
-            res_json = data.json()
+            try:
+                res_json = data.json()
+            except Exception as e:
+                print(f"Failed to decode JSON: {e}\nResponse text: {data.text}")
+                break
+
+            #res_json = data.json()
 
             if 'entities' not in res_json:
                 print(res_json)

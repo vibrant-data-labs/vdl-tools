@@ -302,7 +302,7 @@ def process_crunchbase_raw_data(
 
     if filter_to_companies:
         logger.info('Filtering out facet_ids that do not have "company"')
-        df_cb = df_cb[df_cb['facet_ids'].apply(lambda x: 'company' in x)]
+        df_cb = df_cb[df_cb['facet_ids'].apply(lambda x: isinstance(x, (list, set, tuple)) and 'company' in x)]
 
     logger.info('Precomputing founders dictionary')
     founders_dict = __precompute_founders_dict(df_founders)

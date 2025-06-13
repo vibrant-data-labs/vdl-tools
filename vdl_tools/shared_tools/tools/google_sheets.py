@@ -82,9 +82,9 @@ def get_sheet_values(
         raise ValueError('Cannot provide both range_value and sheet_name')
 
     if sheet_name:
-        range_value = f"'{sheet_name}'!A1:Z1000"
+        range_value = f"'{sheet_name}'!A1:Z"
     else:
-        range_value = range_value or 'A1:Z1000'
+        range_value = range_value or 'A1:Z'
 
     sheet = service.spreadsheets()
     result = sheet.values().get(spreadsheetId=spreadsheet_id, range=range_value).execute()
