@@ -421,7 +421,7 @@ def draw_nx_nodes(G, pos,
         highlight_collection.set_zorder(2)
 
 
-def get_categorical_colors(nw, df, node_attr, node_vals, color_edges, colors, edge_color='gray'):
+def get_categorical_colors(nw, df, node_attr, node_vals, color_edges, colors, id_attr, edge_color='gray'):
     if colors is None:
         colors = ["red", "limegreen", "orange", "mediumblue", "yellow", "darkviolet",
                   "darkred", "darkgreen", "chocolate", "dodgerblue", "gold", "rebeccapurple",
@@ -432,7 +432,7 @@ def get_categorical_colors(nw, df, node_attr, node_vals, color_edges, colors, ed
         attr_colors = {val: colors[idx] if idx < len(colors) else 'gray' for idx, val in enumerate(node_vals)}
     else:
         attr_colors = {val: colors[idx] if idx < len(colors) else 'gray' for idx, val in enumerate(counts.index)}
-    node_color_map = dict(zip(df['id'], df[node_attr].map(attr_colors)))
+    node_color_map = dict(zip(df[id_attr], df[node_attr].map(attr_colors)))
     node_colors = [node_color_map[node] for node in nw.nodes()]
     # color edges
     if color_edges:
@@ -451,10 +451,11 @@ def get_categorical_colors(nw, df, node_attr, node_vals, color_edges, colors, ed
 # if plotfile is given, image is written to file
 def plot_network(nodes_df, edges_df, node_attr='Cluster', node_vals=None, node_size=30,
                  plotfile=None, colors=None, title=None, color_edges=True, draw_edges=True,
-                 legend_min_count=0):
+                 legend_min_count=0, id_attr='__id__'):
     nw = bn.buildNetworkX(edges_df)
-    layout = dict(zip(nodes_df.id, list(zip(nodes_df.x, nodes_df.y))))
-    node_colors, edge_colors, attr_colors = get_categorical_colors(nw, nodes_df, node_attr, node_vals, color_edges, None)
+    layout = dict(zip(nodes_df[id_attr], list(zip(nodes_df.x, nodes_df.y))))
+    node_colors, edge_colors, attr_colors = get_categorical_colors(nw, nodes_df, node_attr,
+                                                                   node_vals, color_edges, None, id_attr)
     # plot network
     fig = plt.figure(figsize=(10, 8), tight_layout={'rect': (0, 0, 1, 1)})
     plt.axis('off')

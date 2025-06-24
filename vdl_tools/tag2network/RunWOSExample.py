@@ -19,8 +19,8 @@ dropCols = ['text', 'AuKeywords', 'KeywordsPlus', 'keywords']
 namebase = "Example"         # dataset/project name
 rawfilebase = "savedrecs"   # name base of raw, unjoined WoS data files
 outfile = namebase+"Raw.txt"
-basepath = "tag2network/Data"
-datapath = os.path.join(basepath, namebase)
+basepath = "tag2network"
+datapath = "Example"
 
 # concatentate multiple WOS data files
 mergeWOSFiles(datapath, rawfilebase, outfile)
@@ -48,10 +48,11 @@ kwAttr = buildKeywords(df, blacklist, whitelist)
 
 # %%
 # build network linked by keyword similarity
-nodes_df, edges_df = bn.buildTagNetwork(df, kwAttr, dropCols=dropCols)
+params = bn.BuildNWParams(tag_attr=kwAttr)
+nodes_df, edges_df = bn.buildTagNetwork(df, params, dropCols=dropCols)
 # save network
 bn.save_network_to_csv(nodes_df, edges_df, nodesname, edgesname)
 bn.save_network_to_excel(nodes_df, edges_df, nwname)
 # %%
 # plot network
-dn.plot_network(nodes_df, edges_df, plotfile=None)
+dn.plot_network(nodes_df, edges_df, legend_min_count=100, plotfile=None)

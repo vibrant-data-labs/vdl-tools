@@ -17,6 +17,7 @@ from scipy.sparse import dok_matrix
 from scipy.sparse import csr_matrix
 import networkx as nx
 
+from vdl_tools.tag2network.Network.ClusteringParams import ClusteringParams
 from vdl_tools.tag2network.Network import ClusteringProperties as cp
 from vdl_tools.tag2network.Network import LayoutNetwork as ln
 from vdl_tools.tag2network.Network import ComputeClustering as cc
@@ -26,7 +27,7 @@ from vdl_tools.tag2network.Network import ComputeClustering as cc
 class BuildNWParams:
     tag_attr: str = None  # tag col for linking
     linksPer: float = 1  # links per node
-    blacklist: list = None  # tags to blacklist for linking
+    blacklist: list = field(default_factory=list)  # tags to blacklist for linking
     nw_name: str = None  # final filename for network
     labelcol: str = 'Name'   # attribute to use for mappr player node labels
     clusName: str = "Keyword Theme"  # name of clusters
@@ -39,7 +40,7 @@ class BuildNWParams:
     tagcols_nodata: list = field(default_factory=list)  # tag columns to replace empty with 'no data'
     add_nodata: bool = False  # for columns in tagcols_nodata, add the words 'no data' when nan
     layout_params: object = field(default_factory=ln.ClusterLayoutParams)  # None for no layout
-    clus_params: object = field(default_factory=cc.ClusteringParams)
+    clus_params: object = field(default_factory=ClusteringParams)
 
 
 @dataclass
@@ -54,7 +55,7 @@ class BuildEmbeddingNWParams:
     tagcols_nodata: list = field(default_factory=list)  # tag columns to replace empty with 'no data'
     add_nodata: bool = False  # for columns in tagcols_nodata, add the words 'no data' when nan
     layout_params: object = field(default_factory=ln.ClusterLayoutParams)  # None for no layout
-    clus_params: object = field(default_factory=cc.ClusteringParams)
+    clus_params: object = field(default_factory=ClusteringParams)
 
 
 @dataclass
@@ -64,7 +65,7 @@ class BuildSimNWParams:
     clusName: str = "ClusterName"  # name of clusters
     n_tags: int = 5  # number of tags to keep in cluster names
     layout_params: object = field(default_factory=ln.ClusterLayoutParams)  # None for no layout
-    clus_params: object = field(default_factory=cc.ClusteringParams)
+    clus_params: object = field(default_factory=ClusteringParams)
 
 
 def save_network_to_csv(nodes_df, edges_df, nodesfile, edgesfile):
@@ -274,10 +275,10 @@ def build_cluster_names_from_tags(df, allTagHist, tagAttr, tag_wt_attr=None,
 
 def buildNetworkFromNodesAndEdges(nodesdf, edgesdf, sims=None, directed=True,
                                   layout_params=ln.ClusterLayoutParams(),
-                                  clus_params=cc.ClusteringParams()):
-    if 'id' in nodesdf.columns:
-        raise(Exception("id column already exists in nodesdf. Please rename or remove it before re-running."))
-    nodesdf['id'] = range(len(nodesdf))
+                                  clus_params=ClusteringParams()):
+    if '__id__' in nodesdf.columns:
+        raise(Exception("__id__ column already exists in nodesdf. Please rename or remove it before re-running."))
+    nodesdf['__id__'] = range(len(nodesdf))
     # add clusters and attributes
     nw = buildNetworkX(edgesdf, directed=directed)
     if clus_params is not None:

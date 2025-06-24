@@ -26,7 +26,7 @@ import networkx as nx
 
 
 # %%
-def add_theme_fracs(df, cluster, cat_col, cat_col_value, normalized=False):
+def add_theme_fracs(df, cluster, cat_col, cat_col_value, normalized=False, id_attr='__id__'):
     # add cluster level fraction summaries to each node
     # cat_col: categorical column to summarize (e.g. funding category)
     # cat_col_value: which catogory value to summarize (e.g. early stage venture)
@@ -35,19 +35,19 @@ def add_theme_fracs(df, cluster, cat_col, cat_col_value, normalized=False):
     df_fracs = add_group_relative_fracs(df, cluster, cat_col, cat_col_value,
                                         normalized=normalized)  # relative frac cat_col_value
     df_fracs.drop([cat_col], axis=1, inplace=True)
-    df = df.merge(df_fracs, on=['id', cluster])
+    df = df.merge(df_fracs, on=[id_attr, cluster])
     return df
 
 
-def add_cluster_metrics(nodesdf, nw, groupVars):
+def add_cluster_metrics(nodesdf, nw, groupVars, id_attr='__id__'):
     # add bridging, cluster centrality etc. for one or more grouping variables
     for groupVar in groupVars:
         if len(nx.get_node_attributes(nw, groupVar)) == 0:
-            vals = {k: v for k, v in dict(zip(nodesdf['id'], nodesdf[groupVar])).items() if k in nw}
+            vals = {k: v for k, v in dict(zip(nodesdf[id_attr], nodesdf[groupVar])).items() if k in nw}
             nx.set_node_attributes(nw, vals, groupVar)
         grpprop = basicClusteringProperties(nw, groupVar)
         for prop, vals in grpprop.items():
-            nodesdf[prop] = nodesdf['id'].map(vals)
+            nodesdf[prop] = nodesdf[id_attr].map(vals)
 
 
 def plot_network(ndf, edf, plot_name, x='x', y='y',
@@ -134,7 +134,8 @@ def add_group_relative_fracs(ndf,
                              group_col,  # grouping attribute (e.g. 'cluster')
                              attr,  # column with value compute % (e.g. 'org typ')
                              value,  # value to tally if present (e.g. 'non-profit')
-                             normalized=True  # convert relative fract to normalized difference
+                             normalized=True,  # convert relative fract to normalized difference
+                             id_attr='__id__'
                              ):
     # summarize fraction (relative to global frac)
     # of nodes each cluster where a value is present
@@ -144,7 +145,7 @@ def add_group_relative_fracs(ndf,
 
     groups = list(ndf[group_col].unique())
     # subset the dataframe columns
-    df = ndf[['id', group_col, attr]]
+    df = ndf[[id_attr, group_col, attr]]
 
     grp_fracs = {}  # dict to hold fracs for each group
     grp_rel_fracs = {}  # dict to hold relative fracs for each group

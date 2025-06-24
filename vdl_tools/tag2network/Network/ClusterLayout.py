@@ -97,7 +97,6 @@ def _remove_overlap(nodes, overlap_frac):
 def compress_groups(nodes_df, layout_dict, cluster_attr, overlap_frac,
                     max_expansion, scale_factor, aspect_ratio=1.0):
     clus_nodes = nodes_df.groupby(cluster_attr)
-    # subgraphs = {clus: cdf.id.to_list() for clus, cdf in clus_nodes}
     subgraphs = {clus: cdf.index.to_list() for clus, cdf in clus_nodes}
     new_positions = {}
     clusters = []
