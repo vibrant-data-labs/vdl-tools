@@ -39,13 +39,13 @@ def get_paths() -> Dict[str, pl.Path]:
 
 def set_dataroot(val):
     if val is not None:
-        substitutions['data'] = f'climate-tech/{val}'
+        substitutions['data'] = val
     (pl.Path.cwd() / substitutions['data']).mkdir(parents=True, exist_ok=True)
 
 
 def set_cftroot(val):
     if val is not None:
-        substitutions['cftroot'] = f'../climate-landscape/data/{val}'
+        substitutions['cftroot'] = f'data/{val}'
 
 
 if __name__ == '__main__':
