@@ -15,7 +15,7 @@ SECONDS_BETWEEN_REQUESTS = 60
 def get_headers(api_key):
     return {
         'Content-Type': 'application/json',
-        'Authorization': f'Bearer {api_key}'
+        'apikey': api_key
     }
 
 
@@ -27,7 +27,7 @@ def make_bulk_request_company(linkedin_ids: list, api_key: str):
     }
     logger.info("Making request to Coresignal for %s companies", len(linkedin_ids))
     res = requests.post(
-        "https://api.coresignal.com/cdapi/v1/linkedin/company/bulk_collect/es_dsl",
+        "https://api.coresignal.com/cdapi/v2/data_requests/company_base/es_dsl",
         headers=get_headers(api_key),
         json=payload,
         timeout=360,
@@ -54,7 +54,7 @@ def get_processed_filenames(
     i = 0
     while still_processing:
         files_request = requests.get(
-            f"https://api.coresignal.com/cdapi/v1/bulk_collect/{request_id}/files",
+            f"https://api.coresignal.com/cdapi/v2/data_requests/{request_id}/files",
             headers=get_headers(api_key),
             timeout=360,
         )
@@ -88,7 +88,7 @@ def retrieve_bulk_results(request_id, filepart_names, api_key):
     results = []
     for i, filename in enumerate(filepart_names):
         file_part = requests.get(
-            f"https://api.coresignal.com/cdapi/v1/bulk_collect/{request_id}/files/{filename}",
+            f"https://api.coresignal.com/cdapi/v2/data_requests/{request_id}/files/{filename}",
             headers=get_headers(api_key),
             timeout=360,
         )
