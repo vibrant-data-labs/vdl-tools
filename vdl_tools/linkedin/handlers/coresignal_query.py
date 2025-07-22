@@ -5,15 +5,15 @@ import urllib
 from vdl_tools.shared_tools.tools.logger import logger
 from vdl_tools.linkedin.utils.linkedin_url import extract_linkedin_id
 
-_base_url = "https://api.coresignal.com/cdapi/v1"
+_base_url = "https://api.coresignal.com/cdapi/v2"
 
 
 ENDPOINTS = {
-    'member': 'linkedin/member',
-    'company': 'linkedin/company',
-    'historical_headcount': 'linkedin/historical_headcount',
-    'clean_company': 'linkedin/clean_company',
-    'multi_source': 'multi_source/company',
+    'member': 'member',
+    'company': 'company_base',
+    'historical_headcount': 'historical_headcount',
+    'clean_company': 'company_clean',
+    'multi_source': 'company_multi_source',
 }
 
 
@@ -31,7 +31,7 @@ EXCLUDED_LINKEDINS = [extract_linkedin_id(x) for x in EXCLUDED_LINKEDIN_URLS]
 def _get_coresignal_base(_id: str, api_key: str, endpoint: str):
     headers = {
         'Content-Type': 'application/json',
-        'Authorization': f'Bearer {api_key}'
+        'apikey': api_key
     }
     if endpoint not in ENDPOINTS:
         raise ValueError(f'Invalid endpoint: {endpoint}')
@@ -217,7 +217,7 @@ def search_es_dsl(
 
     headers = {
         'Content-Type': 'application/json',
-        'Authorization': f'Bearer {api_key}'
+        'apikey': api_key
     }
 
     endpoint = ENDPOINTS[coresignal_endpoint]
