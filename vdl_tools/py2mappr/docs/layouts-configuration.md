@@ -192,15 +192,14 @@ It does not have any additional settings.
 The `set_geo_config` of the layout is to be called in order to set up the geo zoom levels:
 
 ```
-layout.set_geo_config(min_level='nodes', max_level='counties', default_level='counties')
+layout.set_geo_config(levels=['countries', 'nodes'], default_level='counties')
 ```
 
 By default it has the following values:
 
 | Setting | Default Value|
 |---------|--------------|
-| min_level | `nodes` |
-| max_level | `countries`  |
+| levels | `['countries', 'states', 'counties', 'nodes']` |
 | default_level | `countries`  |
 
 ## Layout display settings
