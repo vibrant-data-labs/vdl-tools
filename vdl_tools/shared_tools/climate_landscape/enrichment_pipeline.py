@@ -622,6 +622,11 @@ def run_pipeline(
     approach_list = df_climate_kwds[df_climate_kwds.strategy == 1].tag.tolist()
 
     tags = df_relevant[tag_attr].apply(lambda x: [val[0] for val in x])
+
+    # Strict Equity Justice Words
+    ej_kwds = ['justice', 'indigenous', 'low income', 'poverty', 'underserved', 'marginalized']
+    df_relevant["Strict Equity-Justice Mentions"] = tags.apply(lambda x: [tag for tag in x if tag in ej_kwds])
+
     df_relevant[equity] = tags.apply(lambda x: [tag for tag in x if tag in equity_list])
     df_relevant["Approach Tags"] = tags.apply(lambda x: [tag for tag in x if tag in approach_list])
 
@@ -637,6 +642,10 @@ def run_pipeline(
     df_relevant[equity].fillna("", inplace=True)
     df_relevant["Any Equity-Justice Mention"] = df_relevant[equity].apply(
         lambda x: "no equity-justice mention" if len(x) == 0 else "equity-justice mention"
+    )
+
+    df_relevant["Any Strict Equity-Justice Mention"] = df_relevant["Strict Equity-Justice Mentions"].apply(
+        lambda x: "no strict equity-justice mention" if len(x) == 0 else "strict equity-justice mention"
     )
 
     # Run Prediction for Organization Type

@@ -126,7 +126,9 @@ def write_to_sheet(
 
     # ── normalise DataFrame / list input ───────────────────────────────────
     if isinstance(values, pd.DataFrame):
-        rows = values.reset_index(drop=True).values.tolist()
+        # Convert DataFrame to list, replacing NaN with None for JSON compliance
+        df_clean = values.reset_index(drop=True).fillna(None)
+        rows = df_clean.values.tolist()
         if include_header:
             rows = [values.columns.tolist()] + rows
         values = rows
