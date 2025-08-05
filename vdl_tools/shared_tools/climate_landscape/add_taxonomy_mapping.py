@@ -537,12 +537,12 @@ def add_tailwind_taxonomy(
     examples_df = pd.read_excel(paths["tailwind_taxonomy"], sheet_name="Examples")
 
     # add prefix to the columns and combine sector-examples to be unique
-    prefix = 'TW-'
-    theme_df['Theme'] = prefix + theme_df['Theme']
-    sector_df['Theme'] = prefix + sector_df['Theme']
-    sector_df['Sector'] = prefix + sector_df['Sector']
-    examples_df['Theme'] = prefix + examples_df['Theme']
-    examples_df['Sector'] = prefix + examples_df['Sector']
+
+    theme_df['Theme'] =  theme_df['Theme']
+    sector_df['Theme'] =  sector_df['Theme']
+    sector_df['Sector'] =  sector_df['Sector']
+    examples_df['Theme'] =  examples_df['Theme']
+    examples_df['Sector'] =  examples_df['Sector']
     examples_df['Examples'] = examples_df['Sector'] + '-' + examples_df['Examples']
 
     taxonomy = [
