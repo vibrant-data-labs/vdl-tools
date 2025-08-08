@@ -543,7 +543,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--filename', type=str, default='')
-    parser.add_argument('--skip_existing', action='store_true', default=True)
+    parser.add_argument('--skip_existing', type=int, default=1)
     parser.add_argument('--subpage_type', type=str, default='about')
     parser.add_argument('--single_page_websites', type=str, default='')
     args = parser.parse_args()
@@ -558,9 +558,11 @@ if __name__ == '__main__':
             'https://elementalimpact.com/',
             'https://elementalimpact.com/funding-opportunities/commercial-projects/'
         ]
+
+    skip_existing = int(args.skip_existing)
     combined_res = scrape_websites_psql(
         urls,
-        skip_existing=args.skip_existing,
+        skip_existing=skip_existing,
         subpage_type=args.subpage_type,
         return_combined_res=True,
         single_page_websites=args.single_page_websites.split(',') if args.single_page_websites else []
