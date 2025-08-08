@@ -538,18 +538,32 @@ def _format_scraped_sites(results):
 
 if __name__ == '__main__':
     from vdl_tools.shared_tools.database_cache.database_utils import get_session
-    urls = [
-        'https://www.vibrantdatalabs.org',
-        'https://www.spicqyxdl.com/',
-        'https://elementalimpact.com/',
-        'https://elementalimpact.com/funding-opportunities/commercial-projects/'
-    ]
+    import json
+    import argparse
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('--filename', type=str, default='')
+    parser.add_argument('--skip_existing', action='store_true', default=True)
+    parser.add_argument('--subpage_type', type=str, default='about')
+    parser.add_argument('--single_page_websites', type=str, default='')
+    args = parser.parse_args()
+
+    if args.filename:
+        urls = json.load(open(args.filename))
+        urls = [x for x in urls if x]
+    else:
+        urls = [
+            'https://www.vibrantdatalabs.org',
+            'https://www.spicqyxdl.com/',
+            'https://elementalimpact.com/',
+            'https://elementalimpact.com/funding-opportunities/commercial-projects/'
+        ]
     combined_res = scrape_websites_psql(
         urls,
-        skip_existing=False,
-        subpage_type='about',
+        skip_existing=args.skip_existing,
+        subpage_type=args.subpage_type,
         return_combined_res=True,
-        single_page_websites=['https://elementalimpact.com/funding-opportunities/commercial-projects/']
+        single_page_websites=args.single_page_websites.split(',') if args.single_page_websites else []
     )
     # res = scrape_websites_psql(
     #     urls,
