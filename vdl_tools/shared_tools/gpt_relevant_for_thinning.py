@@ -29,7 +29,7 @@ cb_ft_model = "ft:gpt-3.5-turbo-1106:vibrant-data-labs:prompt-climate-v2:8dkgn7K
 cd_ft_model = "ft:gpt-3.5-turbo-1106:vibrant-data-labs:prompt-climate-cd:8syuyqk3"
 cb_cd_model_4omini = 'ft:gpt-4o-mini-2024-07-18:vibrant-data-labs:cb-cd-just-conservative:9x1MMlJz'
 cb_cd_model_4omini_tailwind = "ft:gpt-4o-mini-2024-07-18:vibrant-data-labs:cb-cd-tw-airtable:A9l2oRot"
-
+cb_model_arpah = 'ft:gpt-4.1-mini-2025-04-14:vibrant-data-labs:arpa-h:Bzr8QOcl'
 # process text
 # eliminate extra spaces
 # truncate entries longer than max tokens (or chunking?)
