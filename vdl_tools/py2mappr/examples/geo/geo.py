@@ -23,7 +23,7 @@ edges[edges["target"].isna()] = 0
 # preparing the project
 project, layout = mappr.create_map(datapoints, edges, layout_type="geo")
 
-layout.set_geo_config(min_level='nodes', max_level='states', default_level='counties')
+layout.set_geo_config(levels=['counties','states','nodes'], default_level='counties')
 
 layout.set_nodes(
     # coloring nodes by the estimated population with numeric scale
