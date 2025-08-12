@@ -131,19 +131,30 @@ class PromptResponseCacheSQL():
         text_ids = [PromptResponse.create_text_id(x[1]) for x in given_ids_texts]
         given_ids_text_ids = list(zip(given_ids, text_ids))
 
-        found_rows = []
-        for i, chunk in enumerate(chunked(given_ids_text_ids, 4000)):
-            logger.info("Pulling chunk %s of %s", i, len(given_ids_text_ids) // 4000)
-            chunk_found_rows = (
-                self.session
-                .query(PromptResponse)
-                .filter(
-                    PromptResponse.prompt_id == self.prompt.id,
-                    tuple_(PromptResponse.given_id, PromptResponse.text_id).in_(chunk),
-                )
-            ).all()
-            found_rows.extend(chunk_found_rows)
-            logger.info("Found %s total rows", len(found_rows))
+        # found_rows = []
+        # for i, chunk in enumerate(chunked(given_ids_text_ids, 4000)):
+        #     logger.info("Pulling chunk %s of %s", i, len(given_ids_text_ids) // 4000)
+        #     chunk_found_rows = (
+        #         self.session
+        #         .query(PromptResponse)
+        #         .filter(
+        #             PromptResponse.prompt_id == self.prompt.id,
+        #             tuple_(PromptResponse.given_id, PromptResponse.text_id).in_(chunk),
+        #         )
+        #     ).all()
+        #     found_rows.extend(chunk_found_rows)
+        #     logger.info("Found %s total rows", len(found_rows))
+
+        found_rows = (
+            self.session
+            .query(PromptResponse)
+            .filter(
+                PromptResponse.prompt_id == self.prompt.id,
+                PromptResponse.text_id.in_(text_ids),
+            )
+        ).all()
+
+        logger.info("Found %s total rows", len(found_rows))
 
         found_rows_to_errors = {(x.given_id, x.text_id): x.num_errors for x in found_rows}
         found_rows = [x for x in found_rows if not found_rows_to_errors.get((x.given_id, x.text_id))]
@@ -404,6 +415,10 @@ class PromptResponseCacheSQL():
 
                 if len(res) % 500 == 0:
                     logger.info("Completed %s of %s", len(res), len_unfound)
+
+        requested_given_ids = {given_id for given_id, _ in given_ids_texts}
+        # filter res to only the requested given_ids
+        res = {x: res[x] for x in requested_given_ids if x in res}
         return res
 
     def bulk_get_cache_or_run(

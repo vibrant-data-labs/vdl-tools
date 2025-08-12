@@ -98,9 +98,15 @@ def _get_completion_kwargs(
     presence_penalty=0,
     stop=None,
     response_format_type="text",
+    logprobs=None,
+    top_logprobs=None,
 ):
 
-    model_name = MODEL_DATA[model]["model_name"]
+    # Handle fine-tuned models (they start with "ft:")
+    if model.startswith("ft:"):
+        model_name = model  # Use the fine-tuned model name directly
+    else:
+        model_name = MODEL_DATA[model]["model_name"]
     messages = messages or []
     if not messages and prompt:
         messages = [
@@ -125,6 +131,12 @@ def _get_completion_kwargs(
         "stop": stop,
         "response_format": {"type": response_format_type},
     }
+    
+    # Add logprobs if specified
+    if logprobs is not None:
+        kwargs["logprobs"] = logprobs
+        if top_logprobs is not None:
+            kwargs["top_logprobs"] = top_logprobs
 
     if model_name == "o3-mini":
         max_tokens = kwargs.pop("max_tokens")
@@ -148,6 +160,8 @@ async def get_completion_async(
     response_format_type="text",
     return_all=True,
     dry_run=False,
+    logprobs=None,
+    top_logprobs=None,
 ):
     kwargs = _get_completion_kwargs(
         prompt,
@@ -162,6 +176,8 @@ async def get_completion_async(
         presence_penalty=presence_penalty,
         stop=stop,
         response_format_type=response_format_type,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
     )
     if dry_run:
         return kwargs
@@ -187,6 +203,8 @@ def get_completion(
     return_all=True,
     verbose=False,
     response_format_type="text",
+    logprobs=None,
+    top_logprobs=None,
 ):
     if not verbose:
         logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -206,7 +224,9 @@ def get_completion(
         frequency_penalty=frequency_penalty,
         presence_penalty=presence_penalty,
         stop=stop,
-    response_format_type=response_format_type
+        response_format_type=response_format_type,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
     )
 
     completion = CLIENT.chat.completions.create(**kwargs)
