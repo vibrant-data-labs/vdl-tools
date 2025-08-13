@@ -6,6 +6,7 @@ import pathlib as pl
 
 import numpy as np
 import pandas as pd
+import re
 
 import vdl_tools.shared_tools.openai.openai_api_utils as oai_utils
 import vdl_tools.tag2network.Network.BuildNetwork as bn
@@ -329,39 +330,64 @@ def add_text_below_token_limit(cdf, textcol, model, max_tokens=120000):
 
     return cluster_texts
 
-def sample_cluster_texts_by_percentile(nodesdf,
-                                       textcol,
-                                       clusattr='Cluster',
-                                       max_samples=50):
-    """ outputs a dictionary with cluster ids as keys and lists of sampled texts as values.
-    samples 50 nodes per cluster or 50% of the nodes in the cluster, whichever is smaller."""
-    centrality_col = "ClusterCentrality"
+def sample_cluster_texts_by_percentile(
+    nodesdf,
+    textcol,
+    clusattr="Cluster",
+    max_samples=50,
+    centrality_col="ClusterCentrality",
+):
+    """
+    Returns {cluster_id: [sampled_texts]}.
+
+    For each cluster:
+      - If size <= 2*max_samples: return the whole cluster sorted by centrality.
+      - Else: sample min(max_samples, 50% of the cluster) stratified by centrality percentiles (5 bins).
+    """
     cluster_samples = {}
 
     # Iterate over clusters
     for clus, cdf in nodesdf.groupby(clusattr):
+        # Work on a COPY so the original df is untouched
+        cdf = cdf.copy()
+
         n_total = len(cdf)
-        n_samples = min(max_samples, int(np.ceil(n_total * 0.5)))  # 50% or max_samples, whichever is smaller
+        threshold = 2 * max_samples
+        if n_total <= threshold:
+            # take all, sorted by centrality (descending)
+            cluster_samples[clus] = (
+                cdf.sort_values(centrality_col, ascending=False)[textcol].tolist()
+            )
+            continue
+
+        # For larger clusters: 50% or max_samples, whichever is smaller
+        n_samples = min(max_samples, int(np.ceil(n_total * 0.5)))
 
         # Bin by centrality percentiles (5 bins)
-        cdf["cent_bin"] = pd.qcut(cdf[centrality_col], 5, labels=False, duplicates="drop")
+        cdf.loc[:, "cent_bin"] = pd.qcut(
+            cdf[centrality_col], 5, labels=False, duplicates="drop"
+        )
 
         # Sample proportional to bin sizes
-        bin_counts = cdf['cent_bin'].value_counts(normalize=True)
+        bin_counts = cdf["cent_bin"].value_counts(normalize=True)
         n_per_bin = (bin_counts * n_samples).round().astype(int)
 
-        # Ensure that the total number of samples matches the desired count (adjust for rounding)
+        # Ensure the total allocation matches n_samples
         diff = n_samples - n_per_bin.sum()
-        while diff != 0:
+        while diff != 0 and len(n_per_bin) > 0:
             bin_to_adjust = n_per_bin.idxmax() if diff > 0 else n_per_bin.idxmin()
             n_per_bin[bin_to_adjust] += 1 if diff > 0 else -1
             diff = n_samples - n_per_bin.sum()
 
-        # Sample from each bin and collect the text
+        # Draw samples from each bin
         sampled_texts = []
         for bin_idx, count in n_per_bin.items():
-            bin_cdf = cdf[cdf['cent_bin'] == bin_idx]
-            sampled_texts.extend(bin_cdf.sample(n=count, random_state=42)[textcol].tolist())
+            if count <= 0:
+                continue
+            bin_cdf = cdf[cdf["cent_bin"] == bin_idx]
+            sampled_texts.extend(
+                bin_cdf.sample(n=count, random_state=42)[textcol].tolist()
+            )
 
         cluster_samples[clus] = sampled_texts
 
@@ -403,6 +429,61 @@ def parse_keyword_response(response_obj):
 
 
 
+def _suffix_from_col_name(colname: str) -> str:
+    m = re.search(r'(_L\d+)$', str(colname))
+    return m.group(1) if m else ""
+
+
+
+def improve_one_sentences(nodesdf,
+                          clusattr='Cluster',
+                          clusname=None,  # Use this for short sentence column name
+                          subject="education",
+                          model="o3-mini",
+                          short_col=None,
+                          long_col=None):
+    """
+        Improves one-sentence summaries for a specific level and REPLACES the short column.
+        - If short_col/long_col are provided, uses them directly.
+        - Else if clusname is provided, infers columns as:
+             short = f"{clusname}{suffix_from(clusattr)}"
+             long  = short + "_long"
+        - Else falls back to: 'clus_sentence_short' / 'clus_sentence_long'
+        """
+    out = nodesdf.copy()
+    for col in (clusattr, short_col, long_col):
+        if col not in out.columns:
+            raise KeyError(f"Expected column '{col}' not found.")
+
+        # Minimal table for prompt
+    df_min = out[[clusattr, short_col, long_col]].drop_duplicates()
+    # print(df.shape)
+    assistant_prompt = define_assistant_prompt(subject)
+    # get the prompt for the cluster
+    review_prompt = review_one_sentence_prompt(df_min, clusattr)
+
+    response = oai_utils.CLIENT.chat.completions.create(
+        model=model,
+        messages=[
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": assistant_prompt + "\n"}],
+            },
+            {"role": "user", "content": [{"type": "text", "text": review_prompt}]},
+        ],
+        response_format={"type": "json_object"},
+        temperature=1,
+        max_completion_tokens=10000,
+        top_p=1,
+        frequency_penalty=0,
+        presence_penalty=0,
+        store=False,
+    )
+
+    # get the response json
+    json_resp = json.loads(response.choices[0].message.content)
+    out[short_col] = out[clusattr].map(json_resp)
+    return out
 
 
 
@@ -413,8 +494,11 @@ def get_cluster_sentences_from_text(
     clusname=None,             # Use this for short sentence column name
     subject=None,
     model="gpt-4.1-mini",
+    n_tags = None,
     n_entities=None,
-    sample_texts=None
+    sample_texts=None,
+    improve = False,
+    improve_model="o3-mini"  # Model for improving one-sentence summaries
 ):
     centrality_col = "ClusterCentrality"
     assistant_prompt = define_assistant_prompt(subject)
@@ -476,49 +560,24 @@ def get_cluster_sentences_from_text(
 
     # Use clusname for short sentence column if provided; else fallback to 'clus_sentence_short'
     short_col = clusname if clusname else "clus_sentence_short"
-    long_col = "clus_sentence_long"  # hardcoded
+    long_col = f"{clusname}_long" if clusname else "clus_sentence_long"
 
     nodesdf[short_col] = nodesdf[clusattr].map(cluster_id_to_shorts_all)
     nodesdf[long_col] = nodesdf[clusattr].map(cluster_id_to_sums_all)
 
+    if improve:
+        print(f"Improving one-sentence summaries for {clusattr}...")
+        nodesdf = improve_one_sentences(
+            nodesdf,
+            clusattr=clusattr,
+            clusname=clusname,  # no special base needed; uses the names we just wrote
+            subject=subject,
+            model=improve_model,
+            short_col=short_col,
+            long_col=long_col
+
+        )
     return nodesdf
-
-
-def improve_one_sentences(nodesdf, clusattr='Cluster', subject="education", model="o3-mini"):
-
-    df = nodesdf[
-        [clusattr, "clus_sentence_short", "clus_sentence_long"]
-    ].drop_duplicates()
-    # print(df.shape)
-    assistant_prompt = define_assistant_prompt(subject)
-    # get the prompt for the cluster
-    review_prompt = review_one_sentence_prompt(df, clusattr)
-
-    response = oai_utils.CLIENT.chat.completions.create(
-        model=model,
-        messages=[
-            {
-                "role": "system",
-                "content": [{"type": "text", "text": assistant_prompt + "\n"}],
-            },
-            {"role": "user", "content": [{"type": "text", "text": review_prompt}]},
-        ],
-        response_format={"type": "json_object"},
-        temperature=1,
-        max_completion_tokens=10000,
-        top_p=1,
-        frequency_penalty=0,
-        presence_penalty=0,
-        store=False,
-    )
-
-    # get the response json
-    json_resp = json.loads(response.choices[0].message.content)
-    nodesdf["clus_sentence_reviewed"] = nodesdf[clusattr].map(json_resp)
-    return nodesdf
-    # nodesdf["clus_sentence_reviewed"] = nodesdf["Cluster"].map(cluster_id_to_review)
-    # return nodesdf
-
 
 def get_cluster_kwdnames_from_text(
         nodesdf,
@@ -529,7 +588,10 @@ def get_cluster_kwdnames_from_text(
         subject=None,
         n_entities=20,  # int → use top‑k; None → token‑limit fallback
         model="gpt-4.1-mini",
-        sample_texts=None  # New parameter for optional pre-calculated sample texts
+        sample_texts=None,
+        improve=False,
+        improve_model='o3-mini'
+
 ):
     """
     Adds one column to *nodesdf*:
@@ -644,9 +706,12 @@ def build_embedding_network(
     params: bn.BuildEmbeddingNWParams,
     debug=False,
     subject=None,
+    model="gpt-4.1-mini",
     clusattr='Cluster',
-    n_entities=20,
-    naming_strategy="keywords"  # New param for custom naming function
+    n_entities=50,
+    naming_strategy="keywords",
+    improve = False,
+    improve_model="o3-mini"  # Model for improving one-sentence summaries
 ):
     emb_file = pl.Path("embeddings.npy")
 
@@ -665,13 +730,14 @@ def build_embedding_network(
     nodesdf, edgesdf, clusters = bn.buildSimilarityNetwork(df, sims.copy(), params)
 
     naming_func = NAMING_FUNCTIONS.get(naming_strategy, get_cluster_kwdnames_from_text)
+    print('Using naming function:', naming_func.__name__)
 
     sampled_texts_by_level = {}
     # Assign cluster names with provided function or default
     if params.clusName is not None:
-
         for idx, clattr in enumerate(clusters):
             clName = params.clusName if idx == 0 else f"{params.clusName}_L{idx + 1}"
+            print('sampling texts for', clattr, 'with n_entities', n_entities)
             sampled_texts = sample_cluster_texts_by_percentile(
                 nodesdf,
                 textcol=params.textcol,
@@ -680,6 +746,7 @@ def build_embedding_network(
             )
             sampled_texts_by_level[clattr] = sampled_texts
             # Call the naming function, passing sampled texts
+            print(f"Assigning names for cluster {clattr} with {len(sampled_texts)} clusters")
             nodesdf = naming_func(
                 nodesdf,
                 textcol=params.textcol,
@@ -688,7 +755,10 @@ def build_embedding_network(
                 n_tags=params.n_tags,
                 subject=subject,
                 n_entities=n_entities,
-                sample_texts=sampled_texts
+                sample_texts=sampled_texts,
+                model=model,
+                improve=improve,
+                improve_model=improve_model
             )
 
     return nodesdf, edgesdf, sims, sampled_texts_by_level
