@@ -17,15 +17,12 @@ geo_base_settings: LayoutSettings = {
 ZOOM_LEVELS = Literal['nodes', 'counties', 'states', 'countries']
 
 class GeoConfig:
-    min_level: ZOOM_LEVELS
-    max_level: ZOOM_LEVELS
+    levels: list[ZOOM_LEVELS]
     default_level: ZOOM_LEVELS
     def __init__(self,
-                 min_level: ZOOM_LEVELS = 'nodes',
-                 max_level: ZOOM_LEVELS = 'countries',
+                 levels: list[ZOOM_LEVELS] = ['countries', 'states', 'counties', 'nodes'],
                  default_level: ZOOM_LEVELS = 'countries'):
-        self.min_level = min_level
-        self.max_level = max_level
+        self.levels = levels
         self.default_level = default_level
 
 def geo_level_mapping(zoom_level: ZOOM_LEVELS):
@@ -92,18 +89,16 @@ class GeoLayout(Layout):
 
 
     def set_geo_config(self,
-                 min_level: ZOOM_LEVELS = 'nodes',
-                 max_level: ZOOM_LEVELS = 'countries',
+                 levels: list[ZOOM_LEVELS] = ['countries', 'states', 'counties', 'nodes'],
                  default_level: ZOOM_LEVELS = 'countries'):
-        self.geo_config = GeoConfig(min_level, max_level, default_level)
+        self.geo_config = GeoConfig(levels, default_level)
 
 
     def toDict(self):
         return {
             **super().toDict(),
             "geo": {
-                "minLevel": geo_level_mapping(self.geo_config.min_level),
-                "maxLevel": geo_level_mapping(self.geo_config.max_level),
+                "levels": [geo_level_mapping(level) for level in self.geo_config.levels],
                 "defaultLevel": geo_level_mapping(self.geo_config.default_level)
             },
             "layout": {
