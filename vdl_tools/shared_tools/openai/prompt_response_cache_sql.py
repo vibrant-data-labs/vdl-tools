@@ -11,6 +11,7 @@ from vdl_tools.shared_tools.tools.logger import logger
 
 import logging
 logger.setLevel(logging.DEBUG)
+from typing import Optional
 
 
 def get_prompt_by_id(prompt_id: str, session):
@@ -42,6 +43,7 @@ class PromptResponseCacheSQL():
         prompt_id: str = None,
         prompt_name: str = "",
         prompt_description: str = "",
+        filter_by_model: bool = False,
     ):
         if not any([prompt is not None, prompt_str, prompt_id]):
             raise Exception("Need to give at least one of prompt, prompt_str, prompt_id")
@@ -54,6 +56,8 @@ class PromptResponseCacheSQL():
             prompt_name=prompt_name,
             prompt_description=prompt_description,
         )
+        self.filter_by_model = filter_by_model
+
 
     def _set_prompt_obj(
         self, prompt, prompt_str, prompt_id, prompt_name, prompt_description):
@@ -104,23 +108,28 @@ class PromptResponseCacheSQL():
             temp_prompt = all_prompts[temp_prompt.id]
         return temp_prompt
 
-    def get_prompt_response_obj(self, given_id: str, text: str):
+    def get_prompt_response_obj(self, given_id: str, text: str, model: Optional[str] = None):
         text_id = PromptResponse.create_text_id(text)
+
+        filters = [
+                PromptResponse.prompt_id == self.prompt.id,
+                PromptResponse.text_id == text_id,
+                PromptResponse.given_id == given_id,
+        ]
+        if self.filter_by_model and model:
+            filters.append(PromptResponse.model_name == model)
 
         prompt_response_obj = (
             self.session
             .query(PromptResponse)
-            .filter(
-                PromptResponse.prompt_id == self.prompt.id,
-                PromptResponse.text_id == text_id,
-                PromptResponse.given_id == given_id,
-            )
+            .filter(*filters)
         )
         return prompt_response_obj.first()
 
     def get_prompt_response_obj_bulk(
         self,
-        given_ids_texts: list[tuple[str, str]]
+        given_ids_texts: list[tuple[str, str]],
+        model: Optional[str] = None,
     ):
         logger.info(
             "Starting to pull %s previous results for prompt: %s",
@@ -131,27 +140,17 @@ class PromptResponseCacheSQL():
         text_ids = [PromptResponse.create_text_id(x[1]) for x in given_ids_texts]
         given_ids_text_ids = list(zip(given_ids, text_ids))
 
-        # found_rows = []
-        # for i, chunk in enumerate(chunked(given_ids_text_ids, 4000)):
-        #     logger.info("Pulling chunk %s of %s", i, len(given_ids_text_ids) // 4000)
-        #     chunk_found_rows = (
-        #         self.session
-        #         .query(PromptResponse)
-        #         .filter(
-        #             PromptResponse.prompt_id == self.prompt.id,
-        #             tuple_(PromptResponse.given_id, PromptResponse.text_id).in_(chunk),
-        #         )
-        #     ).all()
-        #     found_rows.extend(chunk_found_rows)
-        #     logger.info("Found %s total rows", len(found_rows))
+        filters = [
+            PromptResponse.prompt_id == self.prompt.id,
+            PromptResponse.text_id.in_(text_ids),
+        ]
+        if self.filter_by_model and model:
+            filters.append(PromptResponse.model_name == model)
 
         found_rows = (
             self.session
             .query(PromptResponse)
-            .filter(
-                PromptResponse.prompt_id == self.prompt.id,
-                PromptResponse.text_id.in_(text_ids),
-            )
+            .filter(*filters)
         ).all()
 
         logger.info("Found %s total rows", len(found_rows))
@@ -172,6 +171,7 @@ class PromptResponseCacheSQL():
         given_id: str,
         text,
         response_full,
+        model: Optional[str] = None,
     ):
         logger.info("Storing error for %s, %s", self.prompt.name, given_id)
         text_id = PromptResponse.create_text_id(text)
@@ -196,6 +196,7 @@ class PromptResponseCacheSQL():
             prompt_response_obj = PromptResponse(
                 prompt_id=self.prompt.id,
                 given_id=given_id,
+                model_name=model,
                 input_text=text,
                 response_full=response_full,
                 num_errors=1,
@@ -208,10 +209,12 @@ class PromptResponseCacheSQL():
         given_id: str,
         text,
         response,
+        model: Optional[str] = None,
     ):
         prompt_response_obj = PromptResponse(
             prompt_id=self.prompt.id,
             given_id=given_id,
+            model_name=model,
             input_text=text,
             response_full=response.model_dump_json(),
             response_text=response.choices[0].message.content,
@@ -258,6 +261,7 @@ class PromptResponseCacheSQL():
             data = self.get_prompt_response_obj(
                 given_id=given_id,
                 text=text,
+                model=model,
             )
             if data:
                 logger.info("Found cached response for %s", given_id)
@@ -275,6 +279,7 @@ class PromptResponseCacheSQL():
                 given_id=given_id,
                 text=text,
                 response=response,
+                model=model,
             )
         else:
             logger.warning("No response text for %s", given_id)
@@ -282,6 +287,7 @@ class PromptResponseCacheSQL():
                 given_id=given_id,
                 text=text,
                 response_full=response,
+                model=model,
             )
             return None
         return data.to_dict()
@@ -352,7 +358,10 @@ class PromptResponseCacheSQL():
             given_ids_texts = given_ids_texts
 
         if use_cached_result:
-            found_rows, unfound_ids_errors = self.get_prompt_response_obj_bulk(given_ids_texts)
+            found_rows, unfound_ids_errors = self.get_prompt_response_obj_bulk(
+                given_ids_texts,
+                model=model,
+            )
             unfound_rows = []
             for given_id, text in given_ids_texts:
                 text_id = PromptResponse.create_text_id(text)
@@ -387,6 +396,7 @@ class PromptResponseCacheSQL():
                     given_id=given_id,
                     text=text,
                     response_full=response,
+                    model=model,
                 )
                 return None
 
@@ -394,6 +404,7 @@ class PromptResponseCacheSQL():
                 given_id=given_id,
                 text=text,
                 response=response,
+                model=model,
             )
             return data.to_dict()
 
