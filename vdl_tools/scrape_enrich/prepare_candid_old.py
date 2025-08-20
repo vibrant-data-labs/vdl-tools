@@ -172,9 +172,11 @@ def process_add_candid_funding(df_funders, df_main):
     ### PROCESS AND ADD FUNDING DATA
     print("\nAdding funders by Org")
     # aggregate funders into list
+    df_funders.dropna(subset=['gm_name'], inplace=True)
     df_funding_byOrg = (
         df_funders.groupby("recip_ein")["gm_name"].agg(list).reset_index()
     )
+
     df_funding_byOrg.columns = ["ein", "Funders"]
     df_funding_counts = (
         df_funders.groupby("recip_ein")["gm_name"].agg("size").reset_index()

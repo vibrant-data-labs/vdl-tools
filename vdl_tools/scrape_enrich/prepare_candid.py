@@ -1,40 +1,60 @@
 import pandas as pd
+import re
 import vdl_tools.scrape_enrich.prepare_candid_old as cd  # from scrape-enrich
 import vdl_tools.shared_tools.project_config as pc
 import vdl_tools.shared_tools.common_functions as cf  # from common directory: commonly used functions
-
+from vdl_tools.scrape_enrich.fix_candid_funders_txt import clean_csv_file
 paths = pc.get_paths()
 
 # %% 
-def __add_funding_by_year(df_cd: pd.DataFrame):
-    # TODO: note this is is temp fix - added funding totals
-    print ("\nAdding total funding by year")
-    funding_cols = ['total_funding_2017',
-                    'total_funding_2018',
-                    'total_funding_2019',
-                    'total_funding_2020',
-                    'total_funding_2021',
-                    'total_funding_2022',
-                    'total_funding_2023']
-    # checks if funding cols are present
-    df_check = pd.read_excel(paths['candid_source_data']/"candid_main_programs_w_yrs.xlsx", sheet_name='main',  engine='openpyxl' )
-    existing_funding_cols = [col for col in funding_cols if col in df_check.columns]
+# def __add_funding_by_year(df_cd: pd.DataFrame):
+#     # TODO: note this is is temp fix - added funding totals
+#     print ("\nAdding total funding by year")
+#     funding_cols = ['total_funding_2017',
+#                     'total_funding_2018',
+#                     'total_funding_2019',
+#                     'total_funding_2020',
+#                     'total_funding_2021',
+#                     'total_funding_2022',
+#                     'total_funding_2023']
+#     # checks if funding cols are present
+#     df_check = pd.read_excel(paths['candid_source_data']/"candid_main_programs_w_yrs.xlsx", sheet_name='main',  engine='openpyxl' )
+#     existing_funding_cols = [col for col in funding_cols if col in df_check.columns]
+#
+#     if not existing_funding_cols:
+#         print("No funding columns found in the data. Skipping merge.")
+#         return df_cd
+#     keep_cols = ['ein'] + existing_funding_cols
+#     df_cd_by_yr = pd.read_excel(paths['candid_source_data'] / "candid_main_programs_w_yrs.xlsx", sheet_name='main')[
+#         keep_cols]
+#
+#     df_cd_by_yr.columns = ['id'] + ['Funding_'+ x.split("_")[-1] for x in funding_cols]
+#     df_cd_by_yr.fillna(0, inplace=True)
+#     df_cd = df_cd.merge(df_cd_by_yr, on='id', how='left')
+#     return df_cd
 
-    if not existing_funding_cols:
+def __add_funding_by_year(df_cd: pd.DataFrame, start_year=2017, year_col_prefix='total_funding_'):
+    print("\nAdding total funding by year")
+    # Read the columns from the Excel file
+    df_check = pd.read_excel(paths['candid_source_data'] / "candid_main_programs_w_yrs.xlsx", sheet_name='main', engine='openpyxl')
+    # Find columns matching the pattern and >= start_year
+    funding_cols = [col for col in df_check.columns
+                    if re.match(f"{year_col_prefix}\\d{{4}}", col) and int(col[-4:]) >= start_year]
+    if not funding_cols:
         print("No funding columns found in the data. Skipping merge.")
         return df_cd
-    keep_cols = ['ein'] + existing_funding_cols
-    df_cd_by_yr = pd.read_excel(paths['candid_source_data'] / "candid_main_programs_w_yrs.xlsx", sheet_name='main')[
-        keep_cols]
-
-    df_cd_by_yr.columns = ['id'] + ['Funding_'+ x.split("_")[-1] for x in funding_cols]
+    keep_cols = ['ein'] + funding_cols
+    df_cd_by_yr = pd.read_excel(paths['candid_source_data'] / "candid_main_programs_w_yrs.xlsx", sheet_name='main')[keep_cols]
+    df_cd_by_yr.columns = ['id'] + [f"Funding_{col[-4:]}" for col in funding_cols]
     df_cd_by_yr.fillna(0, inplace=True)
     df_cd = df_cd.merge(df_cd_by_yr, on='id', how='left')
     return df_cd
 
+
 def prepare_raw_candid(
     process_candid: bool,
-    total_funding=20000
+    total_funding=20000,
+    filter_yr=2016
 ):
     if not process_candid:
         if paths['cd_orgs_cleaned'].exists():
@@ -42,11 +62,14 @@ def prepare_raw_candid(
             return pd.read_excel(paths['cd_orgs_cleaned'])
         
         return None
-
+    cd_funders_fixed = paths['candid_source_data']/"candid_funders.csv"
+    if not cd_funders_fixed.exists():
+        print('Fixing Candid funders file')
+        clean_csv_file(paths['candid_source_data']/"VibrantDataLabs_Funders.txt", paths['candid_source_data']/"candid_funders.csv")
      # process raw candid data
     df_cd = cd.process_candid(
         paths['candid_source_data']/"candid_main.txt",   # cp.cd_main,
-        paths['candid_source_data']/"candid_funders.txt",  # cp.cd_funders,
+        paths['candid_source_data']/"candid_funders.csv",  # cp.cd_funders,
         paths['candid_source_data']/"candid_personnel.txt",  # cp.cd_personnel,
         paths['candid_source_data']/"candid_programs.txt",  # cp.cd_programs,        
         cd_filings=paths['candid_source_data']/"candid_filings.txt",  # cp.cd_filings, descriptions from 990s
@@ -84,7 +107,6 @@ def prepare_raw_candid(
         df_cd[col] = pd.to_numeric(df_cd[col], errors='coerce')
     print("\nFiltering Candid data for total funding <", total_funding)
     df_cd = df_cd[df_cd['Total_Funding_$'] > total_funding ]
-    df_cd = df_cd[df_cd['Year_Last_Funded'] >= 2016]  # keep 2017-2021
     df_cd = df_cd.reset_index(drop=True)
 
     cd_metacols = ['Organization Name', 'Funders', 'Org Type',  # core info
@@ -117,7 +139,7 @@ def prepare_raw_candid(
     df_cd['Description_990'] = df_cd['Description_990'].apply(lambda x: cd.clean_990(x) if x != '' else '')
     
     # add funding by year
-    df_cd = __add_funding_by_year(df_cd)
+    df_cd = __add_funding_by_year(df_cd, start_year=filter_yr)
 
     # write cleaned file
     cf.write_excel_no_hyper(df_cd, paths['cd_orgs_cleaned'])
