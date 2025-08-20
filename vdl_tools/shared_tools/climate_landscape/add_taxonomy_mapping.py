@@ -526,6 +526,7 @@ def add_tailwind_taxonomy(
     paths=None,
     max_workers=3,
     mapping_name="tailwind_category",
+    max_depth = 2,
 ):
 
     paths = paths or pc.get_paths()
@@ -573,7 +574,8 @@ def add_tailwind_taxonomy(
         filter_fewshot_classification=filter_fewshot_classification,
         fewshot_examples=None,
         use_cached_results=use_cached_results,
-        mapping_name=mapping_name
+        mapping_name=mapping_name,
+        max_distr_funding_level=max_depth
     )
 
     all_df.to_json(paths["tailwind_taxonomy_mapping_results"], orient='records')
