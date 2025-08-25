@@ -112,7 +112,7 @@ def define_assistant_prompt(subject):
     return assistant_prompt
 
 
-def get_kwds_prompt(n_tags, entities_texts):
+def format_kwds_prompt(n_tags, entities_texts):
     n_tags_expanded = n_tags + 5
     # use gpt to extract cluster name from top n entities
     preamble = dedent(
@@ -147,7 +147,7 @@ def get_kwds_prompt(n_tags, entities_texts):
     return prompt
 
 
-def get_summaries_prompt(entities_texts, subject):
+def format_summaries_prompt(entities_texts, subject):
 
     # use gpt to extract cluster name from top n entities
     preamble = dedent(
@@ -177,7 +177,7 @@ def get_summaries_prompt(entities_texts, subject):
     return prompt
 
 
-def get_short_sentence_prompt(entities_texts, subject):
+def format_short_sentence_prompt(entities_texts, subject):
 
     preamble = dedent(
         f"""
@@ -215,7 +215,7 @@ def get_short_sentence_prompt(entities_texts, subject):
     return prompt
 
 
-def get_one_sentence_prompt(entities_texts, subject):
+def format_one_sentence_prompt(entities_texts, subject):
 
     preamble = dedent(
         f"""
@@ -262,7 +262,7 @@ def get_one_sentence_prompt(entities_texts, subject):
     return prompt
 
 
-def review_one_sentence_prompt(clusters_df, clusattr):
+def format_prompt_review_titles(clusters_df, clusattr):
     preamble = dedent(
         f"""
     **Task:**  
@@ -460,7 +460,7 @@ def improve_one_sentences(nodesdf,
     # print(df.shape)
     assistant_prompt = define_assistant_prompt(subject)
     # get the prompt for the cluster
-    review_prompt = review_one_sentence_prompt(df_min, clusattr)
+    review_prompt = format_prompt_review_titles(df_min, clusattr)
 
     response = oai_utils.CLIENT.chat.completions.create(
         model=model,
@@ -520,11 +520,11 @@ def get_cluster_sentences_from_text(
         cluster_texts_all = sample_texts[clus]
 
         # short sentence prompt
-        short_sentences_all = get_short_sentence_prompt(cluster_texts_all, subject)
+        short_sentences_all = format_short_sentence_prompt(cluster_texts_all, subject)
         ids_text_sums_short.append((clus, short_sentences_all))
 
         # longer one sentence prompt
-        one_sentences_all = get_one_sentence_prompt(cluster_texts_all, subject)
+        one_sentences_all = format_one_sentence_prompt(cluster_texts_all, subject)
         ids_text_sums_all.append((clus, one_sentences_all))
 
     prompt_name = "sentences_for_cluster"
@@ -620,7 +620,7 @@ def get_cluster_kwdnames_from_text(
     for clus, sampled_texts in cluster_samples.items():
         # Use the sampled texts for each cluster
         cluster_texts = sampled_texts  # Already sampled texts
-        ids_text_prompts.append((clus, get_kwds_prompt(n_tags, cluster_texts)))
+        ids_text_prompts.append((clus, format_kwds_prompt(n_tags, cluster_texts)))
 
     kw_prompt_name = "keywords_for_cluster"
     if subject:
@@ -671,7 +671,7 @@ def get_cluster_summaries_from_text(
             cluster_texts = add_text_below_token_limit(cdf_sorted, textcol, model)
         else:
             cluster_texts = cdf_sorted.iloc[:n_entities][textcol].values
-        ids_text_sums.append((clus, get_summaries_prompt(cluster_texts, subject)))
+        ids_text_sums.append((clus, format_summaries_prompt(cluster_texts, subject)))
 
     sum_prompt_name = "keyword_cluster_summaries"
     if subject:
