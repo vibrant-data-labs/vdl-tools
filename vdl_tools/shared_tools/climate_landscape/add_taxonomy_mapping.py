@@ -264,10 +264,11 @@ def load_netzero_taxonomy(
     return taxonomy
 
 
-def load_one_earth_taxonomy(taxonomy_path,
-                            add_geo_engineering=False,
-                            solution_textattr='Definition'  #  or 'ExpandedText'
-                            ):
+def load_one_earth_taxonomy(
+    taxonomy_path,
+    add_geo_engineering=False,
+    solution_textattr='Definition'  #  or 'ExpandedText'
+):
     pillar_df = pd.read_excel(taxonomy_path, sheet_name="Pillars")
     sub_df = pd.read_excel(taxonomy_path, sheet_name="SubPillars")
     soln_df = pd.read_excel(taxonomy_path, sheet_name="Solutions")

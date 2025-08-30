@@ -11,7 +11,7 @@ def normalize_value(
 
 
 def geometric_mean_values(
-    values: list[float] | np.array | pd.Series,
+    values,
     remove_nan=True, # whether to remove NaN values)
     remove_zero=True # whether to remove zero values
 ):
@@ -23,11 +23,7 @@ def geometric_mean_values(
     if (len(values) == 0) or np.all(np.isnan(values)):
         return np.nan  # Return NaN if the input is empty or all NaN
     else:
-        # compute geometric mean of values, preserve sign  -> mean^^1/n
-        # remove NaN and Zero values
-        avg = values.mean()
-
-        # Create the product of the absolute values (so no sign is lost)
+        # Create the product of the absolute values
         product = np.prod(np.abs(values))
         geo_mean = np.power(product, 1 / len(values))
         return geo_mean

@@ -1,16 +1,12 @@
 import numpy as np
 import pandas as pd
 
-from vdl_tools.shared_tools.project_config import get_paths
 from vdl_tools.shared_tools.tools.numeric_normalizations import (
     geometric_mean_values,
     max_min_normalization,
 )
 
 MISSING_SUFFIX = ""  # suffix to add to missing levels, e.g. ": Other"
-
-paths = get_paths()
-
 
 # %% helper function
 def clean_no_level(
@@ -55,64 +51,58 @@ def clean_industries(df, tax_cols, list_cols=None):
     return df
 
 
-
-def funding_maturity_index(
+def funding_attention_index(
     df,
-    cols,  # list of columns to compute maturity index for
+    cols,  # list of columns to compute attention index for
     remove_nan=True,  # whether to remove NaN values before computing geometric mean
     remove_zero=False,  # whether to remove zero values before computing geometric mean
 ):
     """
-    Compute a funding maturity index based on total funding, funding per company, and percentage of late stage or IPO companies.
+    Compute a funding attention index based on total funding, funding per company, and percentage of late stage or IPO companies.
     """
     # Normalize total funding, funding per company, and percentage of late stage or IPO companies
     for col in cols:
         df[f"{col}_min_max"] = df[col].apply(
             lambda x: max_min_normalization(x, df[col].min(), df[col].max())
         )
+
     # Compute the geometric mean of the normalized values
     combine_cols = [f"{col}_min_max" for col in cols]
-    funding_maturity = df.apply(
+    funding_attention = df.apply(
         lambda x: geometric_mean_values(
-            x[combine_cols], remove_nan=remove_nan, remove_zero=remove_zero
+            x[combine_cols],
+            remove_nan=remove_nan,
+            remove_zero=remove_zero,
         ),
         axis=1,
     )
-    # rescale the funding maturity index to [0, 1]
-    funding_maturity = funding_maturity.apply(
-        lambda x: max_min_normalization(x, funding_maturity.min(), funding_maturity.max())
+
+   # rescale the funding attention index to [0, 1]
+    funding_attention = funding_attention.apply(
+        lambda x: max_min_normalization(x, funding_attention.min(), funding_attention.max())
     )
 
-    return funding_maturity  # series
+    return funding_attention  # series
 
 
-def add_maturity_index(
+def add_attention_index(
     df,
-    level,  # level to add maturity index for
-    maturity_cols,  # list of columns to compute maturity index for
+    level,  # level to add attention index for
+    attention_cols,  # list of columns to compute attention index for
 ):
-    """Add a combined funding maturity index and maturity summary stats for the specified level."""
-    # add combined maturity index for each level
-    metric_cols = [f"{level}_{col}" for col in maturity_cols]
-    df[f"{level}_maturity"] = funding_maturity_index(
+    """Add a combined funding attention index and attention summary stats for the specified level."""
+    # add combined attention index for each level
+    metric_cols = [f"{level}_{col}" for col in attention_cols]
+    df[f"{level}_attention"] = funding_attention_index(
         df,
-        metric_cols,  # list of columns to include in maturity index
+        metric_cols,  # list of columns to include in attention index
         remove_nan=True,  # remove NaN values before computing geometric mean
         remove_zero=False,  # keep zero values for geometric mean
     )
-    # add maturity summary stats
-    col = f"{level}_maturity"
-    df[f"{col}_mean"] = df[col].mean()
-    df[f"{col}_median"] = df[col].median()
-    no_zero = df[col].replace(
-        0, np.nan
-    )  # replace maturity zero (0) with NaN for non-zero stats
-    df[f"{col}_nonzero_mean"] = no_zero.mean()
-    df[f"{col}_nonzero_median"] = no_zero.median()
     return df
 
 
-def transform_cols(df, cols):
+def log_transform_cols(df, cols):
     for col in cols:
         # log10 transformation
         df[f"{col}_log"] = np.log10(df[col].replace(0, np.nan)).round(2)
@@ -164,16 +154,31 @@ def add_tax_funding_share_rounds(
     - Computes funding share for each round and aggregates statistics by taxonomy level and company.
     """
     df_fr = df_rounds.copy()
-    df_fund_frac = df_fund_frac[df_fund_frac['FundingFrac'] > 0][levels + ["FundingFrac", id_col]].copy()
 
+    import ipdb; ipdb.set_trace()
+    # filter to only rows with FundingFrac > 0
+    df_fund_frac = (
+        df_fund_frac[df_fund_frac['FundingFrac'] > 0]
+        [levels + ["FundingFrac", 'uid']]
+        .copy()
+    )
+
+    #########################################################################################
+    # Filter and clean funding fractions dataframe
+    #########################################################################################
     # Clean taxonomy mapping results
-    df_fund_frac = clean_industries(df_fund_frac, tax_cols=levels)
-    df_fund_frac = clean_no_level(df_fund_frac, levels, suffix=MISSING_SUFFIX)
+    # df_fund_frac = clean_industries(df_fund_frac, tax_cols=levels)
+    # df_fund_frac = clean_no_level(df_fund_frac, levels, suffix=MISSING_SUFFIX)
     # remove no taxonomy match
     df_fund_frac = df_fund_frac[~df_fund_frac["level0"].isnull()].copy()
 
+
+    #########################################################################################
+    # Filter and clean funding rounds dataframe
+    #########################################################################################
     # keep only organizations from the df_orgs
     df_fr = df_fr[df_fr["uid"].isin(df_orgs[id_col])].copy()
+
     # filter funding rounds to only include specified years and stages
     if years:
         # only keep funding rounds for specified years
@@ -195,9 +200,12 @@ def add_tax_funding_share_rounds(
     df_fr = df_fr.merge(df_fund_frac, on=id_col, how="left")
 
     # add FundingShare for each round
+    df_fr['FundingFrac'] = df_fr['FundingFrac'].fillna(0)
     df_fr["FundingShare"] = df_fr["funding_funding"] * df_fr["FundingFrac"]
-
+    df_fr['FundingShare'] = df_fr['FundingShare'].fillna(0)
+    import ipdb; ipdb.set_trace()
     # aggregate to get total FundingShare across years for each level for each company
+
     df_level_total = (
         df_fr.groupby([id_col] + levels)[["FundingFrac", "FundingShare"]]
         .sum()
@@ -218,9 +226,6 @@ def add_tax_funding_share_rounds(
         columns={"FundingShare_total": "FundingShare_avg_annual"},
         inplace=True,
     )
-    # add org stage and name from cft nodes
-    org_name_stage = df_orgs.set_index(id_col)[["Name", "Funding Stage"]]
-    df_fr_avg = df_fr_avg.merge(org_name_stage, on=id_col, how="left")
     return df_fr_avg
 
 
@@ -232,38 +237,65 @@ def get_child_level_sums(
     frac_count_col="FundingFrac",  # None if no fractional count
     id_col="uid",  # unique id to remove dupes for % stage
 ):
+
     """
-    Get sums of funding, counts, and % early & late stage at the specified child level.
-    Get list of top 10 funded companies at the child level.
-    Transform funding and count sums.
+    Aggregate and summarize funding and company counts at the child level of a hierarchical taxonomy.
+
+
+    Parameters
+    ----------
+    df_child : pandas.DataFrame
+        DataFrame containing company-level funding and taxonomy information.
+    all_levels : list of str
+        List of column names representing the hierarchical taxonomy levels to group by.
+    funding_col : str, default "FundingShare_avg_annual"
+        Column name for the funding value to aggregate.
+    frac_count_col : str or None, default "FundingFrac"
+        Column name for the fractional count for a company, or None if not used.
+    id_col : str, default "uid"
+        Column name for unique company identifier.
+
+    Returns
+    -------
+    df_child_sum : pandas.DataFrame
+        DataFrame with aggregated funding, company counts, and top company names for each child node.
+
     """
+
+    if not frac_count_col:
+        frac_count_col = "FundingFrac"
+        df_child[frac_count_col] = 1
+
     # set column names
     child = all_levels[-1]
-    child_funding = f"{child}_funding"
-    df_child[child_funding] = df_child[funding_col]
-    child_frac_count = (
-        f"{child}_frac_count"  # fractional count of companies at child level
-    )
-    child_count = f"{child}_count"  # count of unique companies at child level
+    child_funding_col = f"{child}_funding"
+    df_child[child_funding_col] = df_child[funding_col]
+
+    # fractional count of companies at child level
+    child_frac_count_col = f"{child}_frac_count"
+    # count of unique companies at child level
+    child_count_col = f"{child}_count"
+
+
     # aggregate funding at child level
-    df_child_sum = df_child.groupby(all_levels)[child_funding].sum().reset_index()
-    if frac_count_col is not None:
-        # add fractional count of companies at child level
-        df_child_sum[child_frac_count] = (
-            df_child.groupby(all_levels)[frac_count_col].sum().values
-        )
-    else:
-        # if no fractional count, set it to 0
-        df_child_sum[child_frac_count] = 0
-    # add count of unique companies at child level
-    df_child_sum[child_count] = df_child.groupby(all_levels)[id_col].nunique().values
-    df_child_sum[f"{child}_funding_per_co"] = (
-        (df_child_sum[child_funding] / df_child_sum[child_count]).round(2).fillna(0)
+    df_child_sum = df_child.groupby(all_levels)[child_funding_col].sum().reset_index()
+
+    # add fractional count of companies at child level
+    df_child_sum[child_frac_count_col] = (
+        df_child.groupby(all_levels)[frac_count_col].sum().values
     )
+
+    # add count of unique companies at child level
+    df_child_sum[child_count_col] = df_child.groupby(all_levels)[id_col].nunique().values
+
+    df_child_sum[f"{child}_funding_per_co"] = (
+        (df_child_sum[child_funding_col] / df_child_sum[child_count_col]).round(2).fillna(0)
+    )
+
     # add a list of top 10 funded company names at child level
     # sort by levels and child funding
     df_child = df_child.sort_values(
-        by=all_levels + [child_funding], ascending=False
+        by=all_levels + [child_funding_col], ascending=False
     ).copy()
     df_child_sum[f"{child}_companies"] = (
         df_child.groupby(all_levels)["Name"].agg(list).reset_index(drop=True)
@@ -273,16 +305,13 @@ def get_child_level_sums(
     )
     # remove duplicate company names while preserving order (required if we aggregate to higher level than level3
     df_child_sum[f"{child}_companies"] = df_child_sum[f"{child}_companies"].apply(
-        lambda x: list(dict.fromkeys(x))
-    )
-    df_child_sum[f"{child}_companies"] = df_child_sum[f"{child}_companies"].apply(
-        lambda x: x[:10]
+        lambda x: list(dict.fromkeys(x))[:10]
     )
 
     # transform child funding and count columns
-    df_child_sum = transform_cols(
+    df_child_sum = log_transform_cols(
         df_child_sum,
-        [child_funding, child_frac_count, child_count, f"{child}_funding_per_co"],
+        [child_funding_col, child_frac_count_col, child_count_col, f"{child}_funding_per_co"],
     )
     return df_child_sum
 
@@ -295,7 +324,7 @@ def summarize_child_and_all_parents(
     frac_count_col="FundingFrac",
     stage_col="Funding Stage",  # column with funding stage
     id_col="uid",  # unique company id to remove dupes for % stage
-    maturity_cols=None,  # ['funding', 'count', 'funding_per_co']  # 'late_wtd'],  # columns to compute neglectedness index for
+    attention_cols=['funding', 'count', 'funding_per_co'],  # columns to compute attention index for
 ):
     """
     Aggregate funding and counts by child level and add summaries for each parent level.
@@ -303,7 +332,9 @@ def summarize_child_and_all_parents(
     Add financial neglectedness index for each level.
     """
     # truncate full taxonomy to the specified child level
+    import ipdb; ipdb.set_trace()
     df_tax = df_tax[levels].groupby(levels).first().reset_index()
+
     # remove rows with no Sub-Pillar match (where the level1 == level0 except for where level0 is "Cross-Cutting")
     df = df[
         ~((df["level1"] == df["level0"]) & (df["level0"] != "Cross-Cutting"))
@@ -346,14 +377,84 @@ def summarize_child_and_all_parents(
             0
         )
         df_child_sum[f"{level}_late_pct"] = df_child_sum[f"{level}_late_pct"].fillna(0)
-        if maturity_cols:
-            # add combined maturity index for each level
-            add_maturity_index(
-                df_child_sum,
-                level,  # level to add maturity index for
-                maturity_cols,  # list of columns to compute maturity index for
-            )
+        # add combined attention index for each level
+        add_attention_index(
+            df_child_sum,
+            level,  # level to add attention index for
+            attention_cols,  # list of columns to compute attention index for
+        )
 
     return df_child_sum
 
 
+def add_financial_attention_index(
+    df_orgs,
+    df_rounds,
+    df_funding_frac,
+    taxonomy_df,
+    years,
+    round_types,
+    levels=["level0", "level1", "level2", "level3"],
+    funding_col="FundingShare_avg_annual",
+    frac_count_col="FundingFrac",
+    stage_col="Funding Stage",
+    id_col="uid",
+    attention_cols=['funding', 'count', 'funding_per_co'],  # columns to compute attention index for
+):
+
+    df_aggregated = add_tax_funding_share_rounds(
+        df_orgs,
+        df_rounds=df_rounds,
+        df_fund_frac=df_funding_frac,
+        levels=levels,
+        id_col=id_col,
+        years=years,
+        round_types=round_types,
+    )
+
+    # EARLY - LEVEL3: early stage round funding by level3 child ("approach) and add summary metrics for all levels
+    df_att = summarize_child_and_all_parents(
+        df_aggregated,
+        taxonomy_df,
+        levels=levels,
+        funding_col=funding_col,
+        frac_count_col=frac_count_col,
+        stage_col=stage_col,
+        id_col=id_col,
+        attention_cols=attention_cols,
+    )
+    return df_att
+
+
+if __name__ == "__main__":
+
+    import json
+    from vdl_tools.shared_tools.climate_landscape.add_taxonomy_mapping import load_one_earth_taxonomy
+
+    df_orgs = pd.read_json('../climate-landscape/data/results/cb_cd_li_meta.json')
+
+    cft_nodes = json.load(open('../climate-landscape/data/cft-published/US/internal/cft_network_cleaned.json'))['nodes']
+
+    df_orgs = df_orgs[df_orgs['uid'].isin([node['uid'] for node in cft_nodes])].copy()
+
+    df_rounds = pd.read_json('../climate-landscape/data/dashboard/timeseries_df_dashboard_data.json', lines=True)
+    df_rounds['uid'] = df_rounds['funding_uid']
+
+    df_funding_frac = pd.read_json('../grantham-neglectedness/data/results/cft_one_earth_taxonomy_mapping_distributed_funding_results.json')
+    taxonomy_df = load_one_earth_taxonomy('../shared-data/data/taxonomies/oneearth/OE Solutions Terms 20250502_expanded_w_false.xlsx')
+    years = [2018, 2019, 2020, 2021, 2022, 2023, 2024]
+    round_types = ["angel", "pre_seed", "seed", "series_a"]
+    levels = ["level0", "level1", "level2", "level3"]
+    attention_cols = ['funding', 'count', 'funding_per_co']
+
+
+    df_att = add_financial_attention_index(
+        df_orgs,
+        df_rounds,
+        df_funding_frac,
+        taxonomy_df,
+        years,
+        round_types,
+        levels,
+        attention_cols,
+    )
