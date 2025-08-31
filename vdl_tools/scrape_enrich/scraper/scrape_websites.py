@@ -10,7 +10,7 @@ from urllib.parse import urljoin, urlparse
 import vdl_tools.scrape_enrich.scraper.direct_loader as dl
 import vdl_tools.scrape_enrich.scraper.page_scraper as ps
 import vdl_tools.scrape_enrich.scraper.website_processor as wp
-from vdl_tools.shared_tools.web_summarization.make_page_text import make_group_text
+from vdl_tools.shared_tools.web_summarization.make_page_text import make_group_text, MIN_TEXT_LENGTH
 from vdl_tools.shared_tools.tools.logger import logger
 from vdl_tools.shared_tools.database_cache.database_models.web_scraping import WebPagesScraped, WebPagesParsed
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
@@ -110,8 +110,8 @@ def extract_website_name(value: str) -> str:
         return None
 
 
-def process_website_text(url, data):
-    return wp.get_page_text(url, data)
+def process_website_text(url, data, add_section_links=False):
+    return wp.get_page_text(url, data, add_section_links=add_section_links)
 
 
 def get_netloc(url):
@@ -153,6 +153,7 @@ def get_page_data(
     scraper=None,
     return_raw_html: bool = False,
     filter_no_body: bool=True,
+    add_section_links=False,
     verify_ssl: bool = True,
 ):
     res = []
@@ -171,6 +172,7 @@ def get_page_data(
         website_text = process_website_text(
             url,
             web_content,
+            add_section_links=add_section_links,
         )
         res.append({
             "cleaned_key": cache_id,
@@ -195,6 +197,7 @@ def get_page_data(
                 scraper=scraper,
                 return_raw_html=return_raw_html,
                 filter_no_body=filter_no_body,
+                add_section_links=add_section_links,
             ))
         elif is_single_page:
             logger.debug(f'{url} is marked as single page website, proceeding without scraping the internal pages')
@@ -232,6 +235,7 @@ def process_internal_pages(
     scraper=None,
     return_raw_html: bool = False,
     filter_no_body: bool=True,
+    add_section_links=False,
 ):
     links = wp.extract_website_links(url, website_content, subpage_type, max_per_subpath)
     res = []
@@ -251,6 +255,7 @@ def process_internal_pages(
             scraper=scraper,
             return_raw_html=return_raw_html,
             filter_no_body=filter_no_body,
+            add_section_links=add_section_links,
         )
         res.extend(page_data)
 
@@ -283,6 +288,7 @@ def scrape_websites_psql(
     max_workers: int = 5,
     return_raw_html: bool = False,
     filter_no_body: bool = True,
+    add_section_links: bool = False,
     summary_prompt: str = None,
     return_combined_res: bool = True,
     verify_ssl: bool = True,
@@ -302,6 +308,7 @@ def scrape_websites_psql(
                 scraper=scraper,
                 return_raw_html=return_raw_html,
                 filter_no_body=filter_no_body,
+                add_section_links=add_section_links,
                 verify_ssl=verify_ssl,
             )
             return response
@@ -538,37 +545,23 @@ def _format_scraped_sites(results):
 
 if __name__ == '__main__':
     from vdl_tools.shared_tools.database_cache.database_utils import get_session
-    import json
-    import argparse
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument('--filename', type=str, default='')
-    parser.add_argument('--skip_existing', type=int, default=1)
-    parser.add_argument('--subpage_type', type=str, default='about')
-    parser.add_argument('--single_page_websites', type=str, default='')
-    args = parser.parse_args()
-
-    if args.filename:
-        urls = json.load(open(args.filename))
-        urls = [x for x in urls if x]
-    else:
-        urls = [
-            'https://www.vibrantdatalabs.org',
-            'https://www.spicqyxdl.com/',
-            'https://elementalimpact.com/',
-            'https://elementalimpact.com/funding-opportunities/commercial-projects/'
-        ]
-
-    skip_existing = int(args.skip_existing)
+    urls = [
+        'https://www.vibrantdatalabs.org',
+        'https://www.spicqyxdl.com/',
+        'https://elementalimpact.com/',
+        'https://elementalimpact.com/funding-opportunities/commercial-projects/'
+    ]
     combined_res = scrape_websites_psql(
         urls,
-        skip_existing=skip_existing,
-        subpage_type=args.subpage_type,
+        add_section_links=True,
+        skip_existing=True,
+        subpage_type='about',
         return_combined_res=True,
-        single_page_websites=args.single_page_websites.split(',') if args.single_page_websites else []
+        single_page_websites=['https://elementalimpact.com/funding-opportunities/commercial-projects/']
     )
     # res = scrape_websites_psql(
     #     urls,
+    #     add_section_links=True,
     #     skip_existing=True,
     #     subpage_type='about',
     #     return_combined_res=False,
