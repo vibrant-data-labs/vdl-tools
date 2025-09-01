@@ -470,7 +470,7 @@ def threshold_weighted_kwds(df, attr, min_relative_wt=0.1, min_cnt=10):
             row[wt_attr] = wts[keep].tolist()
             row[li_attr] = words[keep].tolist()
         else:
-            print(f"{row['name']} has no keywords")
+            print("row has no keywords")
         return row
     if min_relative_wt > 0 and min_cnt > 0:
         df = df.apply(threshold_row, axis=1)

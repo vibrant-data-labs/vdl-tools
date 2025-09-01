@@ -201,7 +201,7 @@ def layout_single_cluster(g, pos, scale, center, jitter_frac=0.03):
 #                                       center=center)
     if jitter_frac > 0:
         pts = np.array(list(new_pos.values()))
-        rng = pts.ptp(axis=0)
+        rng = np.ptp(pts, axis=0)
         jitter = np.random.uniform(low=-1, high=1, size=pts.shape) * rng * jitter_frac
         new_pts = pts + jitter
         new_pos = {node: new_pts[idx] for idx, node in enumerate(new_pos.keys())}
