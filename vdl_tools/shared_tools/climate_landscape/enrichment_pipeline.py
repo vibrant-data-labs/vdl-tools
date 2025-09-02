@@ -623,9 +623,10 @@ def run_pipeline(
 
     tags = df_relevant[tag_attr].apply(lambda x: [val[0] for val in x])
 
-    # Strict Equity Justice Words
-    ej_kwds = ['justice', 'indigenous', 'low income', 'poverty', 'underserved', 'marginalized']
-    df_relevant["Strict Equity-Justice Mentions"] = tags.apply(lambda x: [tag for tag in x if tag in ej_kwds])
+    # Underserved Community Words
+    # Need to do this before we filter the tags
+    underserved_kwds = ['justice', 'indigenous', 'low income', 'poverty', 'underserved', 'marginalized']
+    df_relevant["Underserved Community Keywords"] = tags.apply(lambda x: [tag for tag in x if tag in underserved_kwds])
 
     df_relevant[equity] = tags.apply(lambda x: [tag for tag in x if tag in equity_list])
     df_relevant["Approach Tags"] = tags.apply(lambda x: [tag for tag in x if tag in approach_list])
@@ -644,8 +645,8 @@ def run_pipeline(
         lambda x: "no equity-justice mention" if len(x) == 0 else "equity-justice mention"
     )
 
-    df_relevant["Any Strict Equity-Justice Mention"] = df_relevant["Strict Equity-Justice Mentions"].apply(
-        lambda x: "no strict equity-justice mention" if len(x) == 0 else "strict equity-justice mention"
+    df_relevant["Any Underserved Community Mention"] = df_relevant["Underserved Community Keywords"].apply(
+        lambda x: "no underserved community mention" if len(x) == 0 else "underserved community mention"
     )
 
     # Run Prediction for Organization Type
