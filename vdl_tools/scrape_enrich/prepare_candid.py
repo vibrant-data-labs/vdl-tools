@@ -12,7 +12,7 @@ def __add_funding_by_year(df_cd: pd.DataFrame, start_year=2017, year_col_prefix=
     df_check = pd.read_excel(paths['candid_source_data'] / "candid_main_programs_w_yrs.xlsx", sheet_name='main', engine='openpyxl')
     # Find columns matching the pattern and >= start_year
     funding_cols = [col for col in df_check.columns
-                    if re.match(f"{year_col_prefix}\\d{{4}}", col) and int(col[-4:]) >= start_year]
+                    if col.startswith(year_col_prefix) and int(col[-4:]) >= start_year]
     if not funding_cols:
         print("No funding columns found in the data. Skipping merge.")
         return df_cd
