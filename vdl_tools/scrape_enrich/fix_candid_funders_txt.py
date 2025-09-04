@@ -2,7 +2,7 @@ import pandas as pd
 import vdl_tools.shared_tools.project_config as pc
 
 #paths = pc.get_paths()
-
+"""This was a one off script to fix a malformed candid funders txt file"""
 
 # -------------------
 
@@ -49,12 +49,12 @@ def clean_csv_file(input_filename: str, output_filename: str):
             if buffer:
                 f_out.write(buffer)
 
-        print(f"✅ Successfully created cleaned file: '{output_filename}'")
+        print(f"Successfully created cleaned file: '{output_filename}'")
 
     except FileNotFoundError:
-        print(f"❌ ERROR: The file '{input_filename}' was not found.")
+        print(f"ERROR: The file '{input_filename}' was not found.")
     except Exception as e:
-        print(f"❌ An unexpected error occurred: {e}")
+        print(f"An unexpected error occurred: {e}")
 
 
 if __name__ == "__main__":
