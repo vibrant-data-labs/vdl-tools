@@ -1,5 +1,4 @@
 import pandas as pd
-import re
 import vdl_tools.scrape_enrich.prepare_candid_old as cd  # from scrape-enrich
 import vdl_tools.shared_tools.project_config as pc
 import vdl_tools.shared_tools.common_functions as cf  # from common directory: commonly used functions
