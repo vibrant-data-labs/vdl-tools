@@ -1,22 +1,35 @@
 import pandas as pd
+
 import vdl_tools.scrape_enrich.prepare_candid_old as cd  # from scrape-enrich
 import vdl_tools.shared_tools.project_config as pc
 import vdl_tools.shared_tools.common_functions as cf  # from common directory: commonly used functions
+from vdl_tools.shared_tools.tools.logger import logger
 paths = pc.get_paths()
 
 
 def __add_funding_by_year(df_cd: pd.DataFrame, start_year=2017, year_col_prefix='total_funding_'):
     logger.info("\nAdding total funding by year")
     # Read the columns from the Excel file
-    df_check = pd.read_excel(paths['candid_source_data'] / "candid_main_programs_w_yrs.xlsx", sheet_name='main', engine='openpyxl')
+    df_cd_by_yr = pd.read_excel(paths['candid_source_data'] / "candid_main_programs_w_yrs.xlsx", sheet_name='main', engine='openpyxl')
     # Find columns matching the pattern and >= start_year
-    funding_cols = [col for col in df_check.columns
+    funding_cols = [col for col in df_cd_by_yr.columns
                     if col.startswith(year_col_prefix) and int(col[-4:]) >= start_year]
+    # Extract years from columns with the correct prefix and 4-digit year at the end
+    years = [
+        int(col[-4:])
+        for col in df_cd_by_yr.columns
+        if col.startswith(year_col_prefix) and col[-4:].isdigit()
+    ]
+    if years:
+        logger.info(f"Funding year columns found for years: {min(years)} to {max(years)}")
+    else:
+        logger.info("No funding year columns found.")
     if not funding_cols:
-        print("No funding columns found in the data. Skipping merge.")
+        logger.info("Not all funding columns found in the data. Skipping merge.")
         return df_cd
     keep_cols = ['ein'] + funding_cols
-    df_cd_by_yr = pd.read_excel(paths['candid_source_data'] / "candid_main_programs_w_yrs.xlsx", sheet_name='main')[keep_cols]
+    #df_cd_by_yr = pd.read_excel(paths['candid_source_data'] / "candid_main_programs_w_yrs.xlsx", sheet_name='main')[keep_cols]
+    df_cd_by_yr = df_cd_by_yr[keep_cols].copy()
     df_cd_by_yr.columns = ['id'] + [f"Funding_{col[-4:]}" for col in funding_cols]
     df_cd_by_yr.fillna(0, inplace=True)
     df_cd = df_cd.merge(df_cd_by_yr, on='id', how='left')
@@ -66,7 +79,7 @@ def prepare_raw_candid(
                     'State or provincial governments and agencies',
                     'Tribal governments and agencies'
                 }
-                pattern = '|'.join(map(re.escape, gov_dictionary)) # temp fix b/c their metadata should have one type only and now can have more than one type
+                pattern = '|'.join(gov_dictionary) # temp fix b/c their metadata should have one type only and now can have more than one type
                 gov_funders = df_funder_meta[df_funder_meta.funder_type.str.contains(pattern, na=False)][
                     'gm_name'].tolist()
                 df_cd['Funders'].fillna('', inplace=True)
