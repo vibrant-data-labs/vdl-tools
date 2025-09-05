@@ -6,7 +6,7 @@ paths = pc.get_paths()
 
 
 def __add_funding_by_year(df_cd: pd.DataFrame, start_year=2017, year_col_prefix='total_funding_'):
-    print("\nAdding total funding by year")
+    logger.info("\nAdding total funding by year")
     # Read the columns from the Excel file
     df_check = pd.read_excel(paths['candid_source_data'] / "candid_main_programs_w_yrs.xlsx", sheet_name='main', engine='openpyxl')
     # Find columns matching the pattern and >= start_year
