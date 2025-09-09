@@ -769,14 +769,14 @@ def build_embedding_network(
     nodesdf, edgesdf, clusters = bn.buildSimilarityNetwork(df, sims.copy(), params)
 
     naming_func = NAMING_FUNCTIONS.get(naming_strategy, get_cluster_kwdnames_from_text)
-    logger.info('Using naming function:', naming_func.__name__)
+    logger.info(f"Using naming function: {naming_func.__name__}")
 
     sampled_texts_by_level = {}
     # Assign cluster names with provided function or default
     if params.clusName is not None:
         for idx, clattr in enumerate(clusters):
             clName = params.clusName if idx == 0 else f"{params.clusName}_L{idx + 1}"
-            logger.info('sampling texts for', clattr, 'with n_entities', n_entities)
+            logger.info(f"sampling texts for {clattr} with {n_entities} n_entities" )
             sampled_texts = sample_cluster_texts_by_percentile(
                 nodesdf,
                 textcol=params.textcol,
