@@ -206,7 +206,7 @@ def get_completion(
         frequency_penalty=frequency_penalty,
         presence_penalty=presence_penalty,
         stop=stop,
-    response_format_type=response_format_type
+        response_format_type=response_format_type
     )
 
     completion = CLIENT.chat.completions.create(**kwargs)

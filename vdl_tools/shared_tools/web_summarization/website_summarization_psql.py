@@ -14,6 +14,7 @@ from vdl_tools.shared_tools.web_summarization.page_choice.constants import PATHS
 from vdl_tools.shared_tools.web_summarization.website_summarization_cache_psql import (
     WebsiteSummarizationCache,
     GENERIC_ORG_WEBSITE_PROMPT_TEXT,
+    GENERIC_ORG_WEBSITE_PROMPT_TEXT_STRUCTURED,
 )
 
 
@@ -25,6 +26,7 @@ def summarize_scraped_df(
     n_per_commit: int = 50,
     max_workers: int = 5,
     max_errors: int = 1,
+    response_format_type='text',
 ) -> dict:
     """Runs website summarization on a dataframe that went through VDL's website_scraping code.
 
@@ -72,6 +74,7 @@ def summarize_scraped_df(
             n_per_commit=n_per_commit,
             max_workers=max_workers,
             max_errors=max_errors,
+            response_format_type=response_format_type,
         )
 
     summaries = {k.rstrip("/"): v['response_text'] for k, v in summaries.items()}
@@ -128,13 +131,12 @@ def summarize_website(
 
     return list(summaries.values())[0]
 
-
 if __name__ == "__main__":
-
+    import json
     summary = summarize_website(
         'https://elementalimpact.com/funding-opportunities/commercial-projects/',
         use_combined=True,
-        prompt_str=GENERIC_ORG_WEBSITE_PROMPT_TEXT,
+        prompt_str=GENERIC_ORG_WEBSITE_PROMPT_TEXT_STRUCTURED,
         skip_existing=True,
         is_single_page=True,
     )
@@ -142,6 +144,11 @@ if __name__ == "__main__":
     summary2 = summarize_website(
         'https://elementalimpact.com/',
         use_combined=True,
-        prompt_str=GENERIC_ORG_WEBSITE_PROMPT_TEXT,
+        prompt_str=GENERIC_ORG_WEBSITE_PROMPT_TEXT_STRUCTURED,
         skip_existing=True,
     )
+
+    # print( json.loads(summary) )
+    # print( json.loads(summary2) )
+    for key, value in json.loads(summary2).items():
+        print(f'=====({key})====\n{value}')
