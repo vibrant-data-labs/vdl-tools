@@ -388,6 +388,8 @@ def get_cluster_sentences_from_text(
         sorted_cdf = cdf.sort_values("wtd_cc", ascending=False)
 
         cluster_texts_all = add_text_below_token_limit(sorted_cdf, textcol, model)
+        # cluster_texts_all = sample_density_stratified(cdf, col=clus_centrality, sample_dist=[20,10,5,5])
+
         # a- short sentence
         short_sentences_all = get_short_sentence(cluster_texts_all, subject)
         ids_text_sums_short.append((clus, short_sentences_all))
@@ -498,21 +500,23 @@ def get_cluster_names_from_text(
     clus_centrality = "ClusterCentrality"
     assistant_prompt = define_assistant_prompt(subject)
 
-    if weight_param is not None:
-        nodesdf["wtd_cc"] = nodesdf[clus_centrality] * nodesdf[weight_param]
-    else:
-        nodesdf["wtd_cc"] = nodesdf[clus_centrality]
+    # if weight_param is not None:
+    #     nodesdf["wtd_cc"] = nodesdf[clus_centrality] * nodesdf[weight_param]
+    # else:
+    #     nodesdf["wtd_cc"] = nodesdf[clus_centrality]
 
     ids_text_prompts, ids_text_sums = [], []
 
     for clus, cdf in nodesdf.groupby(clusattr):
-        cdf_sorted = cdf.sort_values("wtd_cc", ascending=False)
+        # cdf_sorted = cdf.sort_values("wtd_cc", ascending=False)
 
-        if n_entities is None:
-            cluster_texts = add_text_below_token_limit(cdf_sorted, textcol, model)
-        else:
-            cluster_texts = cdf_sorted.iloc[:n_entities][textcol].values
-
+        # if n_entities is None:
+        #     cluster_texts = add_text_below_token_limit(cdf_sorted, textcol, model)
+        # else:
+        #     cluster_texts = cdf_sorted.iloc[:n_entities][textcol].values
+        # cluster_texts = sample_density_stratified(cdf, col=clus_centrality, sample_dist=[10,5,3,2])
+        cluster_texts = sample_density_stratified(cdf, col=clus_centrality, sample_dist=[5,5,5,5])
+        # import pdb; pdb.set_trace()
         ids_text_prompts.append((clus, get_text_for_entities(n_tags, cluster_texts)))
         ids_text_sums.append((clus, get_text_for_summaries(cluster_texts, subject)))
 
@@ -538,7 +542,7 @@ def get_cluster_names_from_text(
         for clus, resp in raw_kw.items()
     }
     cluster_to_cleaned_keywords = filter_keywords(cluster_id_to_keywords, n_tags)
-
+    # import pdb; pdb.set_trace()
     sum_prompt_name = "keyword_cluster_summaries"
     if subject:
         sum_prompt_name += f"_{subject.replace(' ', '_').lower()}"
@@ -598,3 +602,61 @@ def build_embedding_network(
                 n_entities=n_entities,
             )
     return nodesdf, edgesdf, sims
+
+
+
+
+def sample_density_stratified(df, col="ClusterCentrality", sample_dist=[40,30,20,10]):
+    """
+    Performs stratified sampling with a specified number of samples from each quartile.
+
+    Args:
+        df (pd.DataFrame): The input DataFrame.
+        col (str): The column to stratify on.
+        sample_dist (list or tuple): A list of 4 integers specifying the number
+                                     of samples to take from each quartile (Q1 to Q4).
+
+    Returns:
+        pd.DataFrame: A DataFrame containing the stratified sample.
+    """
+    if not isinstance(sample_dist, (list, tuple)) or len(sample_dist) != 4:
+        raise ValueError("`sample_dist` must be a list or tuple of 4 integers.")
+
+    # Create quartile labels.
+    try:
+        strata = pd.qcut(df[col], q=4, labels=False, duplicates='drop')
+    except ValueError:
+        # If stratification is not possible, return a random sample of the total desired size
+        total_samples = sum(sample_dist)
+        return df.sample(n=min(total_samples, len(df)))
+
+    all_samples = []
+    # Iterate through each stratum (0, 1, 2, 3) and sample the specified amount
+    for i in range(4):
+        stratum_df = df[strata == i]
+
+        # Number of samples to take for this stratum
+        n_samples = sample_dist[i]
+
+        # Take all points if the requested sample size is larger than the stratum itself
+        actual_samples = min(n_samples, len(stratum_df))
+
+        if actual_samples > 0:
+            all_samples.append(stratum_df.sample(n=actual_samples))
+
+    # Combine the samples from all strata into a single DataFrame
+    if not all_samples:
+        return pd.DataFrame(columns=df.columns)
+
+    return pd.concat(all_samples)
+
+
+
+
+
+#
+if __name__ == "__main__":
+    # C:\Users\naims\Documents\vdl\vdl-project-template\cft_cluster.json
+    df = pd.read_json("C:\\Users\\naims\Documents\\vdl\\vdl-project-template\\cft_cluster.json")    
+    print(df.columns)
+    get_cluster_names_from_text(df, "Summary", "Cluster", "clus_name", 5)
