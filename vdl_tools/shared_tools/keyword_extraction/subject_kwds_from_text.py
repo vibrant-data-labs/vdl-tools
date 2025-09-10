@@ -1,24 +1,22 @@
+import ast
 import json
 from textwrap import dedent
-import ast
+
 import hdbscan
 import numpy as np
-import openai
 import pandas as pd
+import vdl_tools.shared_tools.project_config as pc
 from pydantic import BaseModel
 from sklearn.metrics.pairwise import cosine_distances, cosine_similarity
 from sklearn.preprocessing import StandardScaler
-
-import vdl_tools.shared_tools.openai.openai_api_utils as oai_utils
-import vdl_tools.shared_tools.project_config as pc
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
+from vdl_tools.shared_tools.embed_texts_with_cache import embed_texts_with_cache
 from vdl_tools.shared_tools.embedding_network.embedding_network import define_assistant_prompt
 from vdl_tools.shared_tools.openai.prompt_response_cache_instructor import InstructorPRC
-from vdl_tools.shared_tools.openai.prompt_response_cache_sql import PromptResponseCacheSQL
-from vdl_tools.shared_tools.embed_texts_with_cache import embed_texts_with_cache
 from vdl_tools.shared_tools.tools.logger import logger
 
 paths = pc.get_paths()
+
 
 class SubjectKeywords(BaseModel):
     keywords: list
@@ -26,12 +24,12 @@ class SubjectKeywords(BaseModel):
 
 class SubjectKeywordsResponseCache(InstructorPRC):
     def __init__(
-        self,
-        session,
-        prompt_str,
-        prompt_name=None,
-        model="gpt-4.1-mini",
-        response_model=SubjectKeywords,
+            self,
+            session,
+            prompt_str,
+            prompt_name=None,
+            model="gpt-4.1-mini",
+            response_model=SubjectKeywords,
     ):
         super().__init__(
             session=session,
@@ -40,6 +38,7 @@ class SubjectKeywordsResponseCache(InstructorPRC):
             response_model=response_model,
             model=model,
         )
+
 
 def parse_keyword_list(response_obj):
     # Example GPT JSON structure:
@@ -51,11 +50,11 @@ def parse_keyword_list(response_obj):
         response_obj["response_full"]["choices"][0]["message"]["content"]
     )
     kwds_set = set(resp_json.get("keywords", [])
-    )
+                   )
     return list(kwds_set)
 
-def subject_kwds_prompt(max_keywords, subject, texts):
 
+def subject_kwds_prompt(max_keywords, subject, texts):
     # use gpt to extract subject kwords from texts
     preamble = dedent(
         f"""
@@ -76,8 +75,7 @@ Texts:
     return prompt
 
 
-
-def get_kword_list_from_text(
+def extract_keywords_from_text(
         subject=None,
         max_kwords=50,
         model="gpt-4.1-mini",
@@ -89,19 +87,17 @@ def get_kword_list_from_text(
     Returns:
         A deduplicated flat list of keywords.
     """
-    
 
     assistant_prompt = define_assistant_prompt(subject)
 
     ids_text_prompts = []
     collected_keywords = []
 
-
     for clus, samples_or_dict in sample_texts.items():
         # Recursive case: if value is a dict, dive deeper
         if isinstance(samples_or_dict, dict):
             collected_keywords.extend(
-                get_kword_list_from_text(
+                extract_keywords_from_text(
                     subject=subject,
                     max_kwords=max_kwords,
                     model="gpt-4.1-mini",
@@ -111,8 +107,7 @@ def get_kword_list_from_text(
             continue
         # Base case: if value is a list, process the texts
         texts = samples_or_dict
-        #prompt = subject_kwds_prompt(max_kwords, subject, texts)
-
+        # prompt = subject_kwds_prompt(max_kwords, subject, texts)
 
         # Use the sampled texts from each cluster
         ids_text_prompts.append((clus, subject_kwds_prompt(max_kwords, subject, texts)))
@@ -148,38 +143,42 @@ def get_kword_list_from_text(
 
 
 def embed_keywords(
-            kwd_list,
-            used_cached_result=True,
-            max_workers=3,
-            embedding_provider="openai",
-            embedding_model="text-embedding-3-small"
-    ):
+        kwd_list,
+        used_cached_result=True,
+        max_workers=3,
+        embedding_provider="openai",
+        embedding_model="text-embedding-3-small"
+):
     """Embed a list of keywords using the specified OpenAI model.
     Returns:
         np.ndarray: Array of keyword embeddings.
     """
-    #make a df with kwd list and an id column == kwd
+    # make a df with kwd list and an id column == kwd
     words_df = pd.DataFrame({"kwd": kwd_list})
     id_col = "kwd"
     words_col = "kwd"
 
     ids_text = words_df[[id_col, words_col]].values.tolist()
     embeddings = embed_texts_with_cache(
-            ids_texts=ids_text,
-            use_cached_result=used_cached_result,
-            return_flat=True,
-            max_workers=max_workers,
-            embedding_provider=embedding_provider,
-            embedding_model=embedding_model,
-        )
+        ids_texts=ids_text,
+        use_cached_result=used_cached_result,
+        return_flat=True,
+        max_workers=max_workers,
+        embedding_provider=embedding_provider,
+        embedding_model=embedding_model,
+    )
     return embeddings
 
 
 def group_keywords_by_embedding_cluster(
-    keywords_list,
-    min_cluster_size: int = 2,
-    output_csv_path = "./vdl_tools/shared_tools/keyword_extraction/kwd_dic.csv"
+        keywords_list,
+        min_cluster_size: int = 2,
+        output_csv_path="./vdl_tools/shared_tools/keyword_extraction/kwd_dic.csv"
 ):
+    """Group keywords by embedding similarity using HDBSCAN clustering.
+    Select a master term for each cluster based on centrality.
+    Saves the grouped keywords to a CSV file with columns: tag, search_terms, review."""
+
     embeddings = embed_keywords(keywords_list)
     X_scaled = StandardScaler().fit_transform(embeddings)
 
@@ -247,7 +246,7 @@ def append_new_kwords_to_dict(kwd_dict_path,
     Newly added tags are also considered for subsequent matches.
     """
 
-    #read the csv with existing kwd dict
+    # read the csv with existing kwd dict
     df = pd.read_csv(kwd_dict_path)
     # Parse the list-like strings into actual Python lists
     df["search_terms"] = df["search_terms"].apply(ast.literal_eval)
@@ -274,7 +273,8 @@ def append_new_kwords_to_dict(kwd_dict_path,
     unique_new_keywords = [kw for kw in list_new_kwds if kw not in existing_keywords]
 
     # Embed only the truly new keywords
-    logger.info(f"Fetching or computing embeddings for {len(unique_new_keywords)} new keywords from {len(list_new_kwds)} total")
+    logger.info(
+        f"Fetching or computing embeddings for {len(unique_new_keywords)} new keywords from {len(list_new_kwds)} total")
     new_embeddings = embed_keywords(unique_new_keywords, embedding_model=emb_model)
     logger.info(f"Assigning new kwords to existing master terms or creating new ones")
     # Process new keywords
@@ -288,7 +288,7 @@ def append_new_kwords_to_dict(kwd_dict_path,
 
         if best_score >= similarity_threshold:
             tag_to_terms[best_tag].add(kwd)
-            #logger.info(f"'{kwd}' added to tag '{best_tag}' (matched '{best_match_term}' with score {best_score:.2f})")
+            # logger.info(f"'{kwd}' added to tag '{best_tag}' (matched '{best_match_term}' with score {best_score:.2f})")
         else:
             tag_to_terms[kwd] = {kwd}  # new tag = the keyword itself
             term_to_tag[kwd] = kwd
@@ -296,7 +296,7 @@ def append_new_kwords_to_dict(kwd_dict_path,
             # add new embedding to existing matrix - to allow matching of subsequent new keywords to it
             existing_matrix = np.vstack([existing_matrix, emb])
             new_tag_notes[kwd] = f"closest match: {best_match_term} (score: {best_score:.4f})"
-            #logger.info(f"'{kwd}' created new tag (highest match '{best_match_term}' score {best_score:.2f})")
+            # logger.info(f"'{kwd}' created new tag (highest match '{best_match_term}' score {best_score:.2f})")
             new_term_count += 1
 
     logger.info(f"Added {new_term_count} new tags to existing keyword dictionary")
@@ -315,19 +315,17 @@ def append_new_kwords_to_dict(kwd_dict_path,
     return updated_df
 
 
-
-
 if __name__ == "__main__":
     generate_new_kwd_dict = False
     expand_kwds_with_new = True
 
     if generate_new_kwd_dict:
-    #read the txt with list of kwds
+        # read the txt with list of kwds
 
         with open('./vdl_tools/shared_tools/keyword_extraction/keywords.txt', 'r') as f:
             initial_kwds = [line.strip() for line in f if line.strip()]
         logger.info(f"Read {len(initial_kwds)} initial keywords")
-        kwd_dict = group_keywords_by_embedding_cluster(initial_kwds)#group them by embedding cluster
+        kwd_dict = group_keywords_by_embedding_cluster(initial_kwds)  # group them by embedding cluster
         df_kwds = pd.read_csv("./vdl_tools/shared_tools/keyword_extraction/kwd_dic.csv")
 
         # Parse the list-like strings into actual Python lists
