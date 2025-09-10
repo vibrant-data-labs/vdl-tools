@@ -177,7 +177,8 @@ def embed_keywords(
 
 def group_keywords_by_embedding_cluster(
     keywords_list,
-    min_cluster_size: int = 2
+    min_cluster_size: int = 2,
+    output_csv_path = "./vdl_tools/shared_tools/keyword_extraction/kwd_dic.csv"
 ):
     embeddings = embed_keywords(keywords_list)
     X_scaled = StandardScaler().fit_transform(embeddings)
@@ -207,14 +208,29 @@ def group_keywords_by_embedding_cluster(
         for t in terms:
             raw_to_master[t] = master_term
         master_to_terms[master_term] = sorted(set(terms))
-
+    # Identify outliers
+    outliers = [kw for label, kw in zip(labels, keywords_list) if label == -1]
+    logger.info(f"Identified {len(outliers)} outlier keywords not assigned to any cluster")
     # Save to CSV with list serialized as JSON string
     # Save: use str() instead of json.dumps()
     df_out = pd.DataFrame([
-        {"tag": tag, "search_terms": str(terms)}  # Python-style string
+        {"tag": tag,
+         "search_terms": str(terms),
+         "review": False
+         }  # Python-style string
         for tag, terms in master_to_terms.items()
     ])
-    df_out.to_csv("./vdl_tools/shared_tools/keyword_extraction/kwd_dic.csv", index=False)
+    # Append outliers with review flag only (no suggestion)
+    if outliers:
+        outlier_rows = [
+            {"tag": kw,
+             "search_terms": str([kw]),
+             "review": True}
+            for kw in outliers
+        ]
+    df_out = pd.concat([df_out, pd.DataFrame(outlier_rows)], ignore_index=True)
+
+    df_out.to_csv(output_csv_path, index=False)
 
     logger.info(f"Saved grouped keywords")
     return raw_to_master
