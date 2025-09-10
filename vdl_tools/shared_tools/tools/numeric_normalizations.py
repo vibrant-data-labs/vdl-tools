@@ -36,11 +36,6 @@ def max_min_normalization(
 ):
     """Normalize a value to the range [0, 1]."""
     # Convert to float, catch conversion errors
-    if any(pd.isna([value, min_value, max_value])):
-        return np.nan
-    if any([not x for x in [value, min_value, max_value]]):
-        return np.nan
-
     diff = max_value - min_value
     # Avoid division by zero
     if diff == 0:
@@ -50,3 +45,13 @@ def max_min_normalization(
             return 0
     value_normalized = (value - min_value) / diff
     return value_normalized
+
+
+def zero_max_normalization(
+    value,
+    max_value,
+):
+    if max_value == 0:
+        raise ValueError("Max value is 0")
+    """Normalize a value to the range [0, 1]."""
+    return value / max_value

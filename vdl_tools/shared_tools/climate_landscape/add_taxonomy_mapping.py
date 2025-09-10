@@ -6,6 +6,7 @@ import vdl_tools.shared_tools.taxonomy_mapping.fewshot_examples as fse
 from vdl_tools.shared_tools.tools.logger import logger
 
 
+
 def add_taxonomy_mapping(
     df,
     entity_embeddings,
@@ -118,14 +119,11 @@ def add_taxonomy_mapping(
         distributed_funding_df = None
 
     if mapping_name:
-        rename = {f'level{tx["level"]}': f'level{tx["level"]}_{mapping_name}' for tx in taxonomy}
-        pct = 'pct_' + mapping_name
-        sim = 'sim_' + mapping_name
-        rename['mapped_category'] = mapping_name
-        rename['pct'] = pct
-        rename['sim'] = sim
-        rename['cat_level'] = 'cat_level_' + mapping_name
-        filtered_all_df = filtered_all_df.rename(columns=rename)
+        filtered_all_df = add_mapping_name_suffix_to_taxonomy_results(
+            filtered_all_df,
+            taxonomy,
+            mapping_name,
+        )
 
     return filtered_all_df, distributed_funding_df
 
@@ -134,9 +132,10 @@ def add_taxonomy_mapping(
 # OneEarth-specific functions
 
 def validate_one_earth_taxonomy(taxonomy_path):
-    taxonomy = load_one_earth_taxonomy(taxonomy_path,
-                                       solution_textattr=oe_solution_textattr,
-                                       )
+    taxonomy = load_one_earth_taxonomy(
+        taxonomy_path,
+        solution_textattr='Definition',
+    )
 
     all_errors = []
     for i, level in enumerate(taxonomy):
@@ -287,6 +286,7 @@ def load_one_earth_taxonomy(
     term_df = pd.concat([energy_term_df, ag_term_df, nature_term_df])
     if add_geo_engineering:
         # add terms for geo-engineering pillar
+        # This doesn't work for the standard 
         geo_term_df = pd.read_excel(taxonomy_path, sheet_name="Geo-Engineering").ffill()
         term_df = pd.concat([term_df, geo_term_df])
 
@@ -388,10 +388,11 @@ def add_one_earth_taxonomy(
         max_workers=max_workers
     )
 
-    taxonomy = load_one_earth_taxonomy(taxonomy_path,
-                                       solution_textattr=oe_solution_textattr,
-                                        add_geo_engineering=add_geo_engineering,
-                                       )
+    taxonomy = load_one_earth_taxonomy(
+        taxonomy_path,
+        solution_textattr=oe_solution_textattr,
+        add_geo_engineering=add_geo_engineering,
+    )
 
     # add main taxonomy mapping
     all_df, distr_df = add_taxonomy_mapping(
@@ -678,3 +679,105 @@ def add_netzero_taxonomy(
     new_df = tm.add_mapping_to_orgs(df, all_df, id_col, pct=pct, sim=sim, cats=cols)
 
     return new_df
+
+
+def add_mapping_name_suffix_to_taxonomy_results(
+    df,
+    taxonomy,
+    mapping_name,
+):
+    """
+    Add mapping name suffix to taxonomy result column names.
+
+    This function renames columns in a taxonomy mapping results DataFrame by adding
+    a suffix to distinguish between different taxonomy mappings. It handles level
+    columns, percentage columns, similarity columns, and category columns.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The DataFrame containing taxonomy mapping results to be renamed.
+    taxonomy : list of dict
+        List of taxonomy level dictionaries, each containing 'level' key.
+        Used to identify which level columns need renaming.
+    mapping_name : str
+        The suffix to append to column names. Should be a descriptive name
+        for the specific taxonomy mapping (e.g., 'one_earth_category').
+    
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame with renamed columns. The following columns are renamed:
+        - level{level} -> level{level}_{mapping_name}
+        - pct -> pct_{mapping_name}
+        - sim -> sim_{mapping_name}
+        - mapped_category -> {mapping_name}
+        - cat_level -> cat_level_{mapping_name}
+
+    Examples
+    --------
+    >>> taxonomy = [{'level': 0}, {'level': 1}, {'level': 2}]
+    >>> df = pd.DataFrame({
+    ...     'level0': ['A', 'B'],
+    ...     'level1': ['A1', 'B1'],
+    ...     'pct': [0.8, 0.9],
+    ...     'sim': [0.85, 0.92],
+    ...     'mapped_category': ['cat1', 'cat2'],
+    ...     'cat_level': [1, 2]
+    ... })
+    >>> result = add_mapping_name_suffix_to_taxonomy_results(df, taxonomy, 'climate')
+    >>> result.columns.tolist()
+    ['level0_climate', 'level1_climate', 'level2_climate', 'pct_climate', 
+     'sim_climate', 'climate', 'cat_level_climate']
+    """
+
+    rename = {f'level{tx["level"]}': f'level{tx["level"]}_{mapping_name}' for tx in taxonomy}
+    pct = 'pct_' + mapping_name
+    sim = 'sim_' + mapping_name
+    rename['mapped_category'] = mapping_name
+    rename['pct'] = pct
+    rename['sim'] = sim
+    rename['cat_level'] = 'cat_level_' + mapping_name
+    df = df.rename(columns=rename)
+    return df
+
+
+def remove_mapping_name_suffix_from_taxonomy_results(
+    df,
+    mapping_name
+):
+    """
+    Remove the mapping_name suffix from taxonomy result columns.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The DataFrame containing taxonomy mapping results with suffixed column names.
+    mapping_name : str
+        The suffix to remove from column names (e.g., 'one_earth_category').
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame with the mapping_name suffix removed from relevant columns.
+
+    Examples
+    --------
+    >>> df = pd.DataFrame({
+    ...     'level0_climate': ['A', 'B'],
+    ...     'level1_climate': ['A1', 'B1'],
+    ...     'pct_climate': [0.8, 0.9],
+    ...     'sim_climate': [0.85, 0.92],
+    ...     'climate': ['cat1', 'cat2'],
+    ...     'cat_level_climate': [1, 2]
+    ... })
+    >>> result = remove_mapping_name_suffix_from_taxonomy_results(df, 'climate')
+    >>> result.columns.tolist()
+    ['level0', 'level1', 'pct', 'sim', 'climate', 'cat_level']
+    """
+    renames = {
+        col: col.replace(f'_{mapping_name}', '')
+        for col in df.columns if col.endswith(f'_{mapping_name}')
+    }
+    df = df.rename(columns=renames)
+    return df
