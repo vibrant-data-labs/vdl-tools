@@ -218,6 +218,35 @@ def has_government_investor(investors_data):
             return True
     return False
 
+def add_gov_funder_to_rounds(
+    funding_rounds_df: pd.DataFrame,
+    orgs_investors_df: pd.DataFrame
+):
+    """ Add a boolean column to funding rounds dataframe indicating if any investor is a government investor """
+    investor_cols = [
+        'permalink',
+        'uuid',
+        'name',
+        'entity_def_id',
+        'investor_type',
+    ]
+    investor_df = orgs_investors_df[investor_cols]
+    # get list of government investor uuids
+    gov_investor_uuids = set(
+        investor_df[investor_df['investor_type'].apply(lambda x: 'government_office' in x if isinstance(x, list) else False)]['uuid']
+    )
+    def fr_has_gov_investor(investor_ids):
+        if not investor_ids or not isinstance(investor_ids, list):
+            return None
+        for inv in investor_ids:
+            inv_uuid = inv.get('uuid')
+            if inv_uuid in gov_investor_uuids:
+                return True
+        return False
+    gov_funder = funding_rounds_df['investor_identifiers'].apply(fr_has_gov_investor)
+    return gov_funder # Series of booleans
+
+
 def __get_values(data, field_name="value", default_value=None):
     if not data:
         return default_value
@@ -449,6 +478,7 @@ def __get_org_country_from_fr(entries):
 
 
 def process_funding_rounds(fr_path=paths['expanded_orgs_funding_rounds'],
+                           investor_orgs_path=paths['expanded_orgs_investor_orgs'],
                            filter_yr=2010):
     logger.info('processing funding rounds')
     df_fr = pd.read_json(fr_path)
@@ -466,7 +496,13 @@ def process_funding_rounds(fr_path=paths['expanded_orgs_funding_rounds'],
     # get org country
     df_fr['country'] = df_fr['funded_organization_location'].apply(lambda x: __get_org_country_from_fr(x) if isinstance(x, list) else None)
     # get diversity spotlights
+    logger.info('adding diversity tags for each funding round')
     df_fr['diversity'] = df_fr['funded_organization_diversity_spotlights'].apply(lambda x: __get_values(x, 'value', None))
+    # add gov funder flag to funding rounds
+    logger.info('adding government funder flag for each funding round')
+    orgs_investors_df = pd.read_json(investor_orgs_path)
+    df_fr['gov_funder'] = add_gov_funder_to_rounds(df_fr,
+                                                   orgs_investors_df)
     keep_columns = ['org_uuid',
                     'org_permalink',
                     'announced_on',
@@ -474,7 +510,10 @@ def process_funding_rounds(fr_path=paths['expanded_orgs_funding_rounds'],
                     'raised_usd',
                     'investment_stage',
                     'investment_type',
+                    'investor_identifiers',
+                    'gov_funder',
                     'country',
+                    'diversity',
                     'funded_organization_description',
                     'permalink',
                     'uuid'

@@ -51,7 +51,7 @@ def addLouvainClusters(nodesdf, nw, clusterLevel=0, prefix='Cluster'):
     # add cluster attr to dataframe
     for grp, vals in clusterings.items():
         bn.add_network_attr(nodesdf, grp, vals)
-        nodesdf[grp].fillna('No Cluster', inplace=True)
+        nodesdf[grp] = nodesdf[grp].fillna('No Cluster')
 
 
 def addLeidenClusters(nodesdf, nw, resolution=1.0, prefix='Cluster', min_clus_size=100, id_attr='__id__'):
@@ -215,5 +215,5 @@ def add_clustering(nodesdf, linksdf=None, nw=None, sims=None, params=ClusteringP
                                           max_size=params.reassign_max_size,
                                           )
         # recompute cluster metrics
-#        add_cluster_metrics(nodesdf, nw, [params.name_prefix])
+        # add_cluster_metrics(nodesdf, nw, [params.name_prefix])
     return nodesdf, clusters
