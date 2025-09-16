@@ -218,33 +218,31 @@ def has_government_investor(investors_data):
             return True
     return False
 
-def add_gov_funder_to_rounds(
+def flag_gov_funder_to_rounds(
     funding_rounds_df: pd.DataFrame,
     orgs_investors_df: pd.DataFrame
 ):
     """ Add a boolean column to funding rounds dataframe indicating if any investor is a government investor """
-    investor_cols = [
-        'permalink',
-        'uuid',
-        'name',
-        'entity_def_id',
-        'investor_type',
-    ]
-    investor_df = orgs_investors_df[investor_cols]
-    # get list of government investor uuids
+
+    # More efficient way to get government investor UUIDs
+    # Use explode() to flatten the lists, then filter, then get unique UUIDs
     gov_investor_uuids = set(
-        investor_df[investor_df['investor_type'].apply(lambda x: 'government_office' in x if isinstance(x, list) else False)]['uuid']
+        orgs_investors_df.explode('investor_type')
+        .query("investor_type == 'government_office'")
+        ['uuid']
     )
-    def fr_has_gov_investor(investor_ids):
-        if not investor_ids or not isinstance(investor_ids, list):
-            return None
-        for inv in investor_ids:
-            inv_uuid = inv.get('uuid')
-            if inv_uuid in gov_investor_uuids:
-                return True
-        return False
-    gov_funder = funding_rounds_df['investor_identifiers'].apply(fr_has_gov_investor)
-    return gov_funder # Series of booleans
+
+    # More efficient way to check if any investor is a government investor
+    # Single apply with optimized logic
+    def has_gov_investor(investor_list):
+        if not investor_list or not isinstance(investor_list, list):
+            return False
+        # Use set intersection for O(1) lookup instead of nested loops
+        investor_uuids = {inv.get('uuid') for inv in investor_list if inv.get('uuid')}
+        return bool(investor_uuids & gov_investor_uuids)
+
+    gov_funder = funding_rounds_df['investor_identifiers'].apply(has_gov_investor)
+    return gov_funder
 
 
 def __get_values(data, field_name="value", default_value=None):
@@ -501,8 +499,12 @@ def process_funding_rounds(fr_path=paths['expanded_orgs_funding_rounds'],
     # add gov funder flag to funding rounds
     logger.info('adding government funder flag for each funding round')
     orgs_investors_df = pd.read_json(investor_orgs_path)
-    df_fr['gov_funder'] = add_gov_funder_to_rounds(df_fr,
-                                                   orgs_investors_df)
+
+    df_fr['gov_funder'] = flag_gov_funder_to_rounds(
+        df_fr,
+        orgs_investors_df
+    )
+
     keep_columns = ['org_uuid',
                     'org_permalink',
                     'announced_on',
