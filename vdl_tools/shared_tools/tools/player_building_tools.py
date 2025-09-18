@@ -11,6 +11,8 @@ def rename_clean_for_player(
     df_settings = df_settings[df_settings.Keep == 1].copy()
     keep_cols = df_settings['Attribute'].tolist()
     rename_cols = df_settings.set_index('Attribute').to_dict()['Display_Name']
+    # remove any columns that are not in the dataframe
+    keep_cols = [col for col in keep_cols if col in ndf.columns]
     ndf = ndf[keep_cols].copy()
     ndf.rename(columns=rename_cols, inplace=True)
     return ndf
