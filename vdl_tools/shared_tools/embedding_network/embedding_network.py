@@ -609,7 +609,8 @@ def get_cluster_kwdnames_from_text(
     # Use pre-calculated sample texts if provided, otherwise sample new ones
     if sample_texts is not None:
         # If sample_texts are provided, use them directly
-        cluster_samples = {clus: sample_texts[clus] for clus in nodesdf[clusattr].unique()}
+        cluster_samples = {clus: sample_texts[clus]
+                           for clus in nodesdf[clusattr].unique() if type(clus) is str}
     else:
         # Get the cluster samples using stratified sampling based on centrality
         cluster_samples = sample_cluster_texts_by_percentile(
@@ -711,7 +712,8 @@ def build_embedding_network(
     n_entities=50,
     naming_strategy="keywords",
     improve = False,
-    improve_model="o3-mini"  # Model for improving one-sentence summaries
+    improve_model="o3-mini",  # Model for improving one-sentence summaries
+    use_cache=True
 ):
     emb_file = pl.Path("embeddings.npy")
 
@@ -719,7 +721,8 @@ def build_embedding_network(
         emb_matrix = np.load(emb_file)
     else:
         emb_matrix = tm.get_or_compute_embeddings(
-            org_df=df, id_col=params.uid, text_col=params.textcol
+            org_df=df, id_col=params.uid, text_col=params.textcol,
+            used_cached_result=use_cache
         )
         if debug:
             np.save(emb_file, emb_matrix)
@@ -762,4 +765,3 @@ def build_embedding_network(
             )
 
     return nodesdf, edgesdf, sims, sampled_texts_by_level
-
