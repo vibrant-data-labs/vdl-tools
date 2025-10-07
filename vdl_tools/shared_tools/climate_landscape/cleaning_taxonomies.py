@@ -155,11 +155,19 @@ def clean_no_level(df,
                    ):
     level = str(level)
     logger.info(f'cleaning no level {level} tags')
-    # clean no level 1 categories
-    df[f'level{level}_{taxonomy}_category'] = df[f'level{level}_{taxonomy}_category'].apply(
-        lambda x: None if f"No_Level_{level}_" in x else x)
+
+    df[f'level{level}_{taxonomy}_category'] = (
+        df[f'level{level}_{taxonomy}_category']
+        .apply(
+            lambda x: None if x and f"No_Level_{level}_" in x else x
+        )
+    )
     # clean no level 0 tags
-    df[f'all_level{level}_{taxonomy}_category'] = df[f'all_level{level}_{taxonomy}_category'].apply(
-        lambda x: [tag for tag in x if "No_Level_{level}_" not in tag] if isinstance(x, list) else x)
+    df[f'all_level{level}_{taxonomy}_category'] = (
+        df[f'all_level{level}_{taxonomy}_category']
+        .apply(
+            lambda x: [tag for tag in x if "No_Level_{level}_" not in tag] if isinstance(x, list) else x
+        )
+    )
 
     return df

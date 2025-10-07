@@ -20,16 +20,16 @@ cat_palette = [  # VDL default categorical color palette
 ]
 
 one_earth_colors = [
-    {"col": "#0e5b87"},  # Nature - Blue
-    {"col": "#60bbad"},  # Agriculture - Green
-    {"col": "#ec6254"},  # Energy - Red
+    {"col": "#8ECAFF"},  # Nature - Blue
+    {"col": "#7FCDB0"},  # Agriculture - Green
+    {"col": "#FF805F"},  # Energy - Red
     {"col": "#a7a7a8"},  # Other - grey
 ]
 
 one_earth_colors_NEA = [ # Nature, Energy, Ag
-    {"col": "#0e5b87"},  # Nature - Blue
-    {"col": "#ec6254"},  # Energy - Red
-    {"col": "#60bbad"},  # Agriculture - Green
+    {"col": "#8ECAFF"},  # Nature - Blue
+    {"col": "#FF805F"},  # Energy - Red
+    {"col": "#7FCDB0"},  # Agriculture - Green
     {"col": "#a7a7a8"},  # Other - grey
 ]
 grey_palette = [{"col": "#BDBFC1"},  # grey

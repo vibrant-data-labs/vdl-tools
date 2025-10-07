@@ -38,7 +38,8 @@ def calculate_attr_types(df: pd.DataFrame) -> Dict[str, ATTR_TYPE]:
     for column in df.columns.values:
         if df[column].dtype == np.number or df[column].dtype == np.int64:
             attr_types[column] = _detect_number_column(df, column)
-        elif df[column].apply(lambda x: "|" in str(x)).any():
+        # if column contains lists, make attribute_types "listring"
+        elif df[column].apply(lambda x: isinstance(x, list)).any():
             attr_types[column] = "liststring"
         else:
             attr_types[column] = "string"

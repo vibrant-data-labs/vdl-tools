@@ -622,6 +622,12 @@ def run_pipeline(
     approach_list = df_climate_kwds[df_climate_kwds.strategy == 1].tag.tolist()
 
     tags = df_relevant[tag_attr].apply(lambda x: [val[0] for val in x])
+
+    # Underserved Community Words
+    # Need to do this before we filter the tags
+    underserved_kwds = ['justice', 'indigenous', 'low income', 'poverty', 'underserved', 'marginalized']
+    df_relevant["Underserved Community Keywords"] = tags.apply(lambda x: [tag for tag in x if tag in underserved_kwds])
+
     df_relevant[equity] = tags.apply(lambda x: [tag for tag in x if tag in equity_list])
     df_relevant["Approach Tags"] = tags.apply(lambda x: [tag for tag in x if tag in approach_list])
 
@@ -637,6 +643,10 @@ def run_pipeline(
     df_relevant[equity].fillna("", inplace=True)
     df_relevant["Any Equity-Justice Mention"] = df_relevant[equity].apply(
         lambda x: "no equity-justice mention" if len(x) == 0 else "equity-justice mention"
+    )
+
+    df_relevant["Any Underserved Community Mention"] = df_relevant["Underserved Community Keywords"].apply(
+        lambda x: "no underserved community mention" if len(x) == 0 else "underserved community mention"
     )
 
     # Run Prediction for Organization Type
