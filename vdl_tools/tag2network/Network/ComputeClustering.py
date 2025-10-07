@@ -70,7 +70,7 @@ def addLeidenClusters(nodesdf, nw, resolution=1.0, prefix='Cluster', min_clus_si
     nw : networkx.Graph, optional
         graph object, either linksdf or nw must be present. The default is None.
     resolution: float or list, optional
-        either a single value of clsutering resolution or a list of values, in which case clustering is hierarchical
+        either a single value of clustering resolution or a list of values, in which case clustering is hierarchical
     prefix: str, optional
         clustering attribute anme and value name prefix
     min_clus_size: int
@@ -110,7 +110,7 @@ def addLeidenClusters(nodesdf, nw, resolution=1.0, prefix='Cluster', min_clus_si
                     if cnt >= min_cl:    # current cluster is large enough - compute subclusters
                         nodes = clus_df[id_attr].values
                         clus_nw = nw.subgraph(nodes)
-                        # add clusters of cluster, name with outer clsuter name
+                        # add clusters of cluster, name with outer cluster name
                         _leiden_helper(clus_df, clus_nw, res, clus)
                         clus_df.rename(columns={clus: _new_clus}, inplace=True)
                     else:                       # current cluster is small, next level is a single cluster
@@ -139,19 +139,26 @@ def add_cluster_metrics(nodesdf, nw, groupVars):
 
 
 # re-assign small clusters to similar large clusters
-def reassign_small_clusters(nodes_df, edges_df, sims, size_ratio=10, top_n=5, max_size=40):
+def reassign_small_clusters(nodes_df, edges_df, sims, clus_name, parent_clus,
+                            size_ratio=10, top_n=5, max_size=40):
     # compute intra- and inter-cluster similarities
-    clusters = nodes_df.Cluster.unique()
+    clusters = nodes_df[clus_name].unique()
     cluster_similarities = []
     for idx, clus1 in enumerate(clusters):
         for jdx, clus2 in enumerate(clusters):
-            idx1 = nodes_df[nodes_df.Cluster == clus1].index
-            idx2 = nodes_df[nodes_df.Cluster == clus2].index
+            ndf1 = nodes_df[nodes_df[clus_name] == clus1]
+            ndf2 = nodes_df[nodes_df[clus_name] == clus2]
+            parent1 = ndf1.iloc[0][parent_clus] if parent_clus is not None else ""
+            parent2 = ndf2.iloc[0][parent_clus] if parent_clus is not None else ""
+            idx1 = ndf1.index
+            idx2 = ndf2.index
             clus_sims = sims[idx1][:, idx2]
             cluster_similarities.append({'idx': idx,
                                          'jdx': jdx,
                                          'clus1': clus1,
                                          'clus2': clus2,
+                                         'parent1': parent1,
+                                         'parent2': parent2,
                                          'size1': len(idx1),
                                          'size2': len(idx2),
                                          'interclus_mean_sim': clus_sims.mean()
@@ -160,16 +167,18 @@ def reassign_small_clusters(nodes_df, edges_df, sims, size_ratio=10, top_n=5, ma
     sim_df = pd.DataFrame(cluster_similarities).sort_values(['clus1', 'interclus_mean_sim'])
     # get top 5 most similar smaller clusters of each cluster
     # keep only rows where clus2 is significantly (10x) smaller or bigger than max_size
+    # and nodes are in the same parent cluster (or have no parent cluster)
     sim_df = (sim_df[(sim_df.clus1 == sim_df.clus2)
-                     | ((sim_df.size1 > (sim_df.size2 * (size_ratio or 0)))
-                     & (sim_df.size2 < (max_size or 0)))
+                     | ((sim_df.parent1 == sim_df.parent2)
+                        & (sim_df.size1 > (sim_df.size2 * (size_ratio or 0)))
+                        & (sim_df.size2 < (max_size or 0)))
                      ])
     sim_dfs = []
     for clus, cdf in sim_df.groupby('clus1'):
         sim_dfs.append(cdf.sort_values(['interclus_mean_sim', 'size2'], ascending=[False, True]).iloc[0:top_n])
     top_sim_df = pd.concat(sim_dfs)
     # for debugging/evaluation, output top similarity clusters
-    top_sim_df.to_excel("TopSimilarityClusters.xlsx", index=False)
+    top_sim_df.to_excel(f"TopSimilarity{clus_name}s.xlsx", index=False)
 
     # for each small clus2 value, get the most-similar clus1 value
     # this creates a list of pairs of cluster values to reassign
@@ -190,8 +199,8 @@ def reassign_small_clusters(nodes_df, edges_df, sims, size_ratio=10, top_n=5, ma
         nodes_df = nodes_df.drop(columns=dropcol)
         # then reassign small clusters to most similar large clusters
         for idx, row in pairs_df.iterrows():
-            mask = nodes_df['Cluster'] == row['clus2']
-            nodes_df.loc[mask, 'Cluster'] = row['clus1']
+            mask = nodes_df[clus_name] == row['clus2']
+            nodes_df.loc[mask, clus_name] = row['clus1']
 
     return nodes_df
 
@@ -209,11 +218,13 @@ def add_clustering(nodesdf, linksdf=None, nw=None, sims=None, params=ClusteringP
     else:
         return
     if sims is not None and params.merge_tiny:
-        nodesdf = reassign_small_clusters(nodesdf, linksdf, sims,
-                                          size_ratio=params.reassign_size_ratio,
-                                          top_n=params.reassign_top_n,
-                                          max_size=params.reassign_max_size,
-                                          )
-        # recompute cluster metrics
-        # add_cluster_metrics(nodesdf, nw, [params.name_prefix])
+        for idx, clus in enumerate(clusters):
+            parent_clus = None if idx == 0 else clusters[idx - 1]
+            nodesdf = reassign_small_clusters(nodesdf, linksdf, sims, clus_name=clus, parent_clus=parent_clus,
+                                              size_ratio=params.reassign_size_ratio,
+                                              top_n=params.reassign_top_n,
+                                              max_size=params.reassign_max_size,
+                                              )
+            # recompute cluster metrics
+    #        add_cluster_metrics(nodesdf, nw, [params.name_prefix])
     return nodesdf, clusters
