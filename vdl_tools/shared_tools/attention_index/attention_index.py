@@ -79,9 +79,6 @@ class AttentionIndexer:
         self._geometric_mean_column_names = None
 
 
-    def _additional_filtering(self):
-        pass
-
     def initialize_files(self):
 
         # Start from the original files
@@ -106,8 +103,16 @@ class AttentionIndexer:
             self.tax_map_prefix
         )
 
+    def _additional_redistribution_modifications(self, **kwargs):
+        """
+        Override this method in subclasses to apply additional modifications
+        to the distributed funding fractions before returning.
+        """
+        pass
+
     def redistribute_funding_fracs(
         self,
+        **kwargs,
     ):
         logger.info("Redistributing funding fractions")
         self.distributed_funding_df = redistribute_funding_fracs(
@@ -120,9 +125,17 @@ class AttentionIndexer:
         if self._taxonomy_mapping_id_col != 'uid':
             self.distributed_funding_df['uid'] = self.distributed_funding_df[self._taxonomy_mapping_id_col]
         self.distributed_funding_df = self.distributed_funding_df[self.distributed_funding_df['FundingFrac'] > 0]
+        self._additional_redistribution_modifications(**kwargs)
         return self.distributed_funding_df
 
-    def map_taxonomy_to_funding_rounds(self):
+    def _additional_mapping_modifications(self, **kwargs):
+        """
+        Override this method in subclasses to apply additional modifications
+        to the funding mapped to taxonomy df before returning.
+        """
+        pass
+
+    def map_taxonomy_to_funding_rounds(self, **kwargs):
 
         # Filter out the rounds that are not in the distributed funding df
         self.combined_funding_df = self.combined_funding_df[
@@ -157,9 +170,17 @@ class AttentionIndexer:
                 funding mapped to taxonomy df
                 """
             )
+        self._additional_mapping_modifications(**kwargs)
         return self.funding_mapped_to_taxonomy_df
 
-    def filter_mapped_rounds(self):
+    def _additional_filtering_mapped_rounds_modifications(self, **kwargs):
+        """
+        Override this method in subclasses to apply additional modifications
+        to the filtered funding mapped to taxonomy df before returning.
+        """
+        pass
+
+    def filter_mapped_rounds(self, **kwargs):
         logger.info("Filtering funding by year %s to %s", self.min_year, self.max_year)
 
         self.filtered_funding_mapped_to_taxonomy_df = self.funding_mapped_to_taxonomy_df[
@@ -172,6 +193,7 @@ class AttentionIndexer:
                 self.filtered_funding_mapped_to_taxonomy_df['funding_investment_type'].isin(self.rounds_to_include)
             ]
 
+        self._additional_filtering_mapped_rounds_modifications(**kwargs)
         return self.filtered_funding_mapped_to_taxonomy_df
 
     def aggregate_funding_to_orgs(
@@ -188,8 +210,12 @@ class AttentionIndexer:
         for i in range(0, self.distributed_funding_level + 1):
             self.taxonomy_level_columns.append(f"tax_map_level{i}")
 
+        # Apply level-specific filtering before aggregation
+        # changed_df = self._change_df_at_level(self.distributed_funding_level, self.filtered_funding_mapped_to_taxonomy_df)
+        changed_df = self.filtered_funding_mapped_to_taxonomy_df
+
         self.org_level_aggregation_df = (
-            self.filtered_funding_mapped_to_taxonomy_df.groupby(['tax_map_uid'] + self.taxonomy_level_columns)
+            changed_df.groupby(['tax_map_uid'] + self.taxonomy_level_columns)
             .agg({
                 "distributed_funding": "sum", # Sum up all the distributed_funding for all the lower levels 
                 "tax_map_fundingfrac": "mean", # Because we are at the round level this will have been multiplied for each round, so take the mean of it
@@ -277,7 +303,6 @@ class AttentionIndexer:
             )
         return self.max_level_tax_aggregated
 
-
     def add_geometric_mean_to_scaled_metrics(
         self,
         scale_type="min_max",
@@ -324,7 +349,6 @@ class AttentionIndexer:
 
         return self.max_level_tax_aggregated
 
-
     def calculate_attention_index_at_level(
         self,
         level,
@@ -341,7 +365,6 @@ class AttentionIndexer:
 
         return_cols = self.taxonomy_level_columns + list(self._geometric_mean_column_names)
         return self.max_level_tax_aggregated[return_cols]
-
 
     def calculate_attention_index(
         self,
@@ -372,14 +395,14 @@ class AttentionIndexer:
             join_cols.append(f'tax_map_level{level}')
 
 
-        # the last level taxonomy category will be blank if it is not a match,
-        # But the parents are ok
-        # Fill in with the No_Level X and we can rename later
-        attention_index_df[f'tax_map_level{max_level}'] = attention_index_df.apply(
-            lambda x: x[f'tax_map_level{max_level}'] if x[f'tax_map_level{max_level}']
-            else f"No_Level_{max_level}_{x[f'tax_map_level{max_level - 1}']}",
-            axis=1
-        )
+        # # the last level taxonomy category will be blank if it is not a match,
+        # # But the parents are ok
+        # # Fill in with the No_Level X and we can rename later
+        # attention_index_df[f'tax_map_level{max_level}'] = attention_index_df.apply(
+        #     lambda x: x[f'tax_map_level{max_level}'] if x[f'tax_map_level{max_level}']
+        #     else f"No_Level_{max_level}_{x[f'tax_map_level{max_level - 1}']}",
+        #     axis=1
+        # )
 
         taxonomy_level_columns = [f'tax_map_level{i}' for i in range(0, max_level + 1)]
 

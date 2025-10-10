@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.15.2"
+__generated_with = "0.16.5"
 app = marimo.App(width="medium")
 
 
@@ -25,11 +25,17 @@ def _():
 
 @app.cell
 def _():
-    TAXONOMY_FILE = '../shared-data/data/taxonomies/oneearth/OE Solutions Terms 20250502_expanded.xlsx'
+    import marimo as mo
+    return (mo,)
+
+
+@app.cell
+def _():
+    TAXONOMY_FILE = '../shared-data/data/taxonomies/oneearth/OE Solutions Terms 20250502_expanded_VDL.xlsx'
 
     META_FILENAME = '../climate-landscape/data/results/cb_cd_li_meta.json'
     # Undistributed ones so we distribute to whichever levl
-    TAXONOMY_MAPPING_RESULTS_FILE = '../climate-landscape/data/results/one_earth_taxonomy_mapping_results.json'
+    TAXONOMY_MAPPING_RESULTS_FILE = '../grantham-neglectedness/data/results/cft_one_earth_taxonomy_mapping_results.json'
 
     DISTRIBUTED_FUNDING_LEVEL = 3
 
@@ -65,47 +71,6 @@ def _(taxonomy_mapping_results):
 
 
 @app.cell
-def _():
-    # distributed_funding_df = redistribute_funding_fracs(
-    #     df=taxonomy_mapping_results,
-    #     taxonomy=taxonomy,
-    #     id_attr='id',
-    #     keepcols=['Organization'],
-    #     max_level=DISTRIBUTED_FUNDING_LEVEL,
-    # )
-
-    # distributed_funding_df['uid'] = distributed_funding_df['id']
-    return
-
-
-@app.cell
-def _():
-    # meta_df = pd.read_json(META_FILENAME)
-    return
-
-
-@app.cell
-def _():
-    # round_df = fmcu.load_cb_round_data(FUNDING_ROUND_FILE)
-    # candid_funding_raw = pd.read_excel(CANDID_FUNDING_FILE)
-    # candid_funding_long = fmcu.reshape_candid_funding(candid_funding_raw, id_col='id')
-    # combined_funding_df = fmcu.combine_funding_data(round_df, candid_funding_long)
-    return
-
-
-@app.cell
-def _():
-    # meta_df_prefix = "meta"
-    # funding_df_prefix = "funding"
-    # tax_map_prefix = "tax_map"
-
-    # meta_df_renamed = fmcu.rename_df_cols(meta_df, meta_df_prefix)
-    # combined_funding_df_renamed = fmcu.rename_df_cols(combined_funding_df, funding_df_prefix)
-    # distr_funding_renamed = fmcu.rename_df_cols(distributed_funding_df, tax_map_prefix)
-    return
-
-
-@app.cell
 def _(
     fmcu,
     load_one_earth_taxonomy,
@@ -118,13 +83,18 @@ def _(
         meta_df_path,
         funding_round_path,
         candid_funding_path,
+        add_geo_engineering=False,
     ):
         taxonomy = load_one_earth_taxonomy(
             taxonomy_path,
-            add_geo_engineering=False
+            add_geo_engineering=add_geo_engineering
         )
         taxonomy_mapping_results = pd.read_json(taxonomy_mapping_results_path)
-        taxonomy_mapping_results = remove_mapping_name_suffix_from_taxonomy_results(taxonomy_mapping_results, "one_earth_category")
+        if add_geo_engineering:
+            category_suffix = 'one_earth'
+        else:
+            category_suffix = 'one_earth_category'
+        taxonomy_mapping_results = remove_mapping_name_suffix_from_taxonomy_results(taxonomy_mapping_results, category_suffix)
         meta_df = pd.read_json(meta_df_path)
         round_df = fmcu.load_cb_round_data(funding_round_path)
         candid_funding_raw = pd.read_excel(candid_funding_path)
@@ -162,7 +132,8 @@ def _(
         taxonomy_mapping_results_path=TAXONOMY_MAPPING_RESULTS_FILE,
         meta_df_path=META_FILENAME,
         funding_round_path=FUNDING_ROUND_FILE,
-        candid_funding_path=CANDID_FUNDING_FILE
+        candid_funding_path=CANDID_FUNDING_FILE,
+        add_geo_engineering=True,
     )
     return (
         candid_funding_long,
@@ -187,7 +158,7 @@ def _(
     aier = AttentionIndexer(
         taxonomy=taxonomy,
         taxonomy_mapping_results=taxonomy_mapping_results,
-        taxonomy_mapping_id_col='id',
+        taxonomy_mapping_id_col='uid',
         meta_df=meta_df.copy(),
         round_df=round_df.copy(),
         candid_funding_long=candid_funding_long.copy(),
@@ -195,28 +166,8 @@ def _(
         additional_rooting_factor=3,
         min_year=2018,
         max_year=2025,
-        rounds_to_include=['']
     )
     return (aier,)
-
-
-@app.cell
-def _():
-    # attention_index_3 = aier.calculate_attention_index()
-    return
-
-
-@app.cell
-def _():
-    # attention_index_3
-    return
-
-
-@app.cell
-def _():
-    # attention_index_2 = aier.calculate_attention_index(max_level=2)
-    # attention_index_2
-    return
 
 
 @app.cell
@@ -227,31 +178,23 @@ def _(aier):
 
 
 @app.cell
-def _():
-    return
-
-
-@app.cell
-def _(attention_index):
-    attention_index
-    return
-
-
-@app.cell
 def _(attention_index):
     import altair as alt
-    sort_order = attention_index.sort_values('zero_max_geometric_mean_level_1', ascending=False)['tax_map_level1'].unique()
+
+    _attention_index = attention_index
+
+    _sort_order = attention_index.sort_values('zero_max_geometric_mean_level_1', ascending=False)['tax_map_level1'].unique()
     # replace _df with your data source
-    chart = (
+    _chart = (
         alt.Chart(
-            attention_index,
+            _attention_index,
             height=800,
             width=1200,
         )
         .mark_circle()
         .encode(
             x=alt.X(field='min_max_scale_min_max_geometric_mean_level_3', type='quantitative'),
-            y=alt.Y(field='tax_map_level1', type='nominal', sort=sort_order),
+            y=alt.Y(field='tax_map_level1', type='nominal', sort=_sort_order),
             color=alt.Color(field='tax_map_level1', type='nominal'),
             tooltip=[
                 alt.Tooltip(field='tax_map_level1'),
@@ -270,25 +213,294 @@ def _(attention_index):
             }
         )
     )
-    chart
-    return (chart,)
+    _chart
+    return (alt,)
 
 
 @app.cell
-def _(chart):
-    with open('all_approaches_cft.html', 'w') as f:
-        f.write(chart.to_html())
-    return
-
-
-@app.cell
-def _(aier):
-    aier.max_level_tax_aggregated
+def _():
     return
 
 
 @app.cell
 def _():
+    list(range(2010, 2021))
+    return
+
+
+@app.cell
+def _(approach_results):
+    approach_results[2010].drop_duplicates(subset=['tax_map_level0', 'tax_map_level1', 'tax_map_level2'])
+    return
+
+
+@app.cell
+def _(solution_results):
+    solution_results[2010]
+    return
+
+
+@app.cell
+def _(
+    AttentionIndexer,
+    candid_funding_long,
+    combined_funding_df,
+    meta_df,
+    round_df,
+    taxonomy,
+    taxonomy_mapping_results,
+):
+    start_year = 2010
+
+    approach_results = {}
+    solution_results = {}
+
+    for start_year in range(2010, 2021):
+        end_year = start_year + 5
+        print(start_year)
+        _aier = AttentionIndexer(
+            taxonomy=taxonomy,
+            taxonomy_mapping_results=taxonomy_mapping_results,
+            taxonomy_mapping_id_col='uid',
+            meta_df=meta_df.copy(),
+            round_df=round_df.copy(),
+            candid_funding_long=candid_funding_long.copy(),
+            combined_funding_df=combined_funding_df.copy(),
+            additional_rooting_factor=3,
+            min_year=start_year,
+            max_year=end_year,
+            rounds_to_include=['pre_seed', 'seed', 'angel', 'series_a'],
+        )
+
+        _approach_attention_index = _aier.calculate_attention_index(max_level=3)
+        _approach_attention_index['start_year'] = start_year
+        _approach_attention_index['end_year'] = end_year
+
+        approach_results[start_year] = _approach_attention_index
+
+        _solution_attention_index = _approach_attention_index.drop_duplicates(subset=['tax_map_level0', 'tax_map_level1', 'tax_map_level2']).copy()
+        solution_results[start_year] = _solution_attention_index
+    return approach_results, solution_results
+
+
+@app.cell
+def _(approach_results, solution_results):
+    for k, v in approach_results.items():
+        v['start_year'] = k
+        v['end_year'] = k + 5
+
+    for k, v in solution_results.items():
+        v['start_year'] = k
+        v['end_year'] = k + 5
+    return
+
+
+@app.cell
+def _(approach_results, pd, solution_results):
+    total_approach_results = pd.concat(approach_results.values())
+    total_solution_results = pd.concat(solution_results.values())
+
+    approach_metric_cols = [x for x in total_solution_results.columns if x.endswith('level_3')]
+    approach_metric_cols
+
+    approach_metric_cols.append('tax_map_level3')
+
+    total_solution_results = total_solution_results.drop(approach_metric_cols, axis=1)
+    return total_approach_results, total_solution_results
+
+
+@app.cell
+def _():
+    return
+
+
+@app.cell
+def _(total_approach_results, total_solution_results):
+    total_approach_results.to_json('/Users/zeintawil/Downloads/approach_results.json', orient='records')
+
+
+    total_solution_results.to_json('/Users/zeintawil/Downloads/solutions_results.json', orient='records')
+    return
+
+
+@app.cell
+def _(total_solution_results):
+    energy_total_solution_results = total_solution_results[total_solution_results['tax_map_level0'] == 'Energy Transition']
+
+    energy_total_solution_results = energy_total_solution_results[energy_total_solution_results['tax_map_level2'].apply(lambda x: ":" not in x and "No_" not in x)]
+    return (energy_total_solution_results,)
+
+
+@app.cell
+def _(alt, energy_total_solution_results, mo):
+    # replace _df with your data source
+    _chart = (
+        alt.Chart(energy_total_solution_results)
+        .mark_line()
+        .encode(
+            x=alt.X(field='end_year', type='nominal'),
+            y=alt.Y(field='min_max_scale_min_max_geometric_mean_level_2', type='quantitative'),
+            color=alt.Color(field='tax_map_level2', type='nominal'),
+            tooltip=[
+                alt.Tooltip(field='end_year', format=',.0f'),
+                alt.Tooltip(field='min_max_scale_min_max_geometric_mean_level_2', aggregate='mean', format=',.2f'),
+                alt.Tooltip(field='tax_map_level2'),
+                alt.Tooltip(field='tax_map_level1')
+            ]
+        )
+        .properties(
+            height=290,
+            width='container',
+            title="Attention over Time Energy Transition",
+            config={
+                'axis': {
+                    'grid': False
+                }
+            }
+        )
+    )
+    mo.ui.altair_chart(_chart)
+    _chart
+    return
+
+
+@app.cell
+def _(alt, energy_total_solution_results, mo):
+    # replace _df with your data source
+    _chart = (
+        alt.Chart(energy_total_solution_results[energy_total_solution_results['tax_map_level1'] == 'Renewable Power'])
+        .mark_line()
+        .encode(
+            x=alt.X(field='end_year', type='nominal'),
+            y=alt.Y(field='min_max_scale_min_max_geometric_mean_level_2', type='quantitative'),
+            color=alt.Color(field='tax_map_level2', type='nominal'),
+            tooltip=[
+                alt.Tooltip(field='end_year', format=',.0f'),
+                alt.Tooltip(field='min_max_scale_min_max_geometric_mean_level_2', aggregate='mean', format=',.2f'),
+                alt.Tooltip(field='tax_map_level2'),
+                alt.Tooltip(field='tax_map_level1')
+            ]
+        )
+        .properties(
+            height=290,
+            width='container',
+            title="Attention over Time Renewable Power",
+            config={
+                'axis': {
+                    'grid': False
+                }
+            }
+        )
+    )
+
+    mo.ui.altair_chart(_chart)
+    _chart
+    return
+
+
+@app.cell
+def _(alt, energy_total_solution_results, mo):
+    # replace _df with your data source
+    _chart = (
+        alt.Chart(energy_total_solution_results[
+                (energy_total_solution_results['tax_map_level1'] == 'Renewable Power') &
+                (energy_total_solution_results['start_year'].isin([2010, 2020]))
+            ])
+        .mark_line()
+        .encode(
+            x=alt.X(field='end_year', type='nominal'),
+            y=alt.Y(field='min_max_scale_min_max_geometric_mean_level_2', type='quantitative'),
+            color=alt.Color(field='tax_map_level2', type='nominal'),
+            tooltip=[
+                alt.Tooltip(field='end_year', format=',.0f'),
+                alt.Tooltip(field='min_max_scale_min_max_geometric_mean_level_2', aggregate='mean', format=',.2f'),
+                alt.Tooltip(field='tax_map_level2'),
+                alt.Tooltip(field='tax_map_level1')
+            ]
+        )
+        .properties(
+            height=290,
+            width='container',
+            title="Attention Change Renewable Power",
+            config={
+                'axis': {
+                    'grid': False
+                }
+            }
+        )
+    )
+    mo.ui.altair_chart(_chart)
+    _chart
+    return
+
+
+@app.cell
+def _(alt, mo, total_solution_results):
+    # replace _df with your data source
+    total_subpill_results = total_solution_results.drop_duplicates(subset=['tax_map_level0', 'tax_map_level1', 'start_year'])
+
+    total_subpill_results = total_subpill_results[total_subpill_results['tax_map_level1'].apply(lambda x: 'No_' not in x and 'Cross' not in x)]
+
+    _chart = (
+        alt.Chart(total_subpill_results)
+        .mark_line()
+        .encode(
+            x=alt.X(field='end_year', type='nominal'),
+            y=alt.Y(field='min_max_scale_min_max_geometric_mean_level_1', type='quantitative'),
+            color=alt.Color(field='tax_map_level1', type='nominal'),
+            tooltip=[
+                alt.Tooltip(field='end_year', format=',.0f'),
+                alt.Tooltip(field='min_max_scale_min_max_geometric_mean_level_1', aggregate='mean', format=',.2f'),
+                alt.Tooltip(field='tax_map_level1')
+            ]
+        )
+        .properties(
+            height=290,
+            width='container',
+            title="Attention over Time by Subpillars",
+            config={
+                'axis': {
+                    'grid': False
+                }
+            }
+        )
+    )
+    mo.ui.altair_chart(_chart)
+
+    return (total_subpill_results,)
+
+
+@app.cell
+def _(alt, mo, total_subpill_results):
+    # replace _df with your data source
+
+
+    _chart = (
+        alt.Chart(total_subpill_results[total_subpill_results['start_year'].isin([2010, 2020])])
+        .mark_line()
+        .encode(
+            x=alt.X(field='end_year', type='nominal'),
+            y=alt.Y(field='min_max_scale_min_max_geometric_mean_level_1', type='quantitative'),
+            color=alt.Color(field='tax_map_level1', type='nominal'),
+            tooltip=[
+                alt.Tooltip(field='end_year', format=',.0f'),
+                alt.Tooltip(field='min_max_scale_min_max_geometric_mean_level_1', aggregate='mean', format=',.2f'),
+                alt.Tooltip(field='tax_map_level1')
+            ]
+        )
+        .properties(
+            height=290,
+            width='container',
+            title="Attention Change Subpillars",
+            config={
+                'axis': {
+                    'grid': False
+                }
+            }
+        )
+    )
+    mo.ui.altair_chart(_chart)
+    # _chart
     return
 
 
