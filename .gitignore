@@ -22,3 +22,4 @@ tag2network/tag2network/Data/Example/Example*
 shared-tools/shared_tools/baseten_models/tw_adaptation_2024/data/model
 google_sheets_token.pickle
 models/
+paths.ini
