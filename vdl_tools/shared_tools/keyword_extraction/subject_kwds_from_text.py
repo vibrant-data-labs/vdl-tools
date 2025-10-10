@@ -173,7 +173,7 @@ def embed_keywords(
 def group_keywords_by_embedding_cluster(
         keywords_list,
         min_cluster_size: int = 2,
-        output_csv_path="./vdl_tools/shared_tools/keyword_extraction/kwd_dic.csv"
+        output_csv_path="../shared-data/data/keyword_extraction_test/kwd_dic.csv"
 ):
     """Group keywords by embedding similarity using HDBSCAN clustering.
     Select a master term for each cluster based on centrality.
@@ -227,7 +227,7 @@ def group_keywords_by_embedding_cluster(
              "review": True}
             for kw in outliers
         ]
-    df_out = pd.concat([df_out, pd.DataFrame(outlier_rows)], ignore_index=True)
+        df_out = pd.concat([df_out, pd.DataFrame(outlier_rows)], ignore_index=True)
 
     df_out.to_csv(output_csv_path, index=False)
 
@@ -322,24 +322,24 @@ if __name__ == "__main__":
     if generate_new_kwd_dict:
         # read the txt with list of kwds
 
-        with open('./vdl_tools/shared_tools/keyword_extraction/keywords.txt', 'r') as f:
+        with open('../shared-data/data/keyword_extraction_test/keywords.txt', 'r') as f:
             initial_kwds = [line.strip() for line in f if line.strip()]
         logger.info(f"Read {len(initial_kwds)} initial keywords")
         kwd_dict = group_keywords_by_embedding_cluster(initial_kwds)  # group them by embedding cluster
-        df_kwds = pd.read_csv("./vdl_tools/shared_tools/keyword_extraction/kwd_dic.csv")
+        df_kwds = pd.read_csv("../shared-data/data/keyword_extraction_test/kwd_dic.csv")
 
         # Parse the list-like strings into actual Python lists
         df_kwds["search_terms"] = df_kwds["search_terms"].apply(ast.literal_eval)
 
     if expand_kwds_with_new:
         # read new kwds from a text file
-        with open('./vdl_tools/shared_tools/keyword_extraction/keywords_extended.txt', 'r') as f:
+        with open('../shared-data/data/keyword_extraction_test/keywords_extended.txt', 'r') as f:
             new_kwds = [line.strip() for line in f if line.strip()]
         logger.info(f"Read {len(new_kwds)} new keywords")
         df_updated = append_new_kwords_to_dict(
-            kwd_dict_path="./vdl_tools/shared_tools/keyword_extraction/kwd_dic.csv",
+            kwd_dict_path="../shared-data/data/keyword_extraction_test/kwd_dic.csv",
             list_new_kwds=new_kwds,
             similarity_threshold=0.8,
             emb_model="text-embedding-3-small",
-            output_csv_path="./vdl_tools/shared_tools/keyword_extraction/kwd_dic_expanded.csv"
+            output_csv_path="../shared-data/data/keyword_extraction_test/kwd_dic_expanded.csv"
         )
