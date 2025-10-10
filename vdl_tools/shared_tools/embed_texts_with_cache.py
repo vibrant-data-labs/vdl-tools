@@ -14,7 +14,7 @@ EMBEDDING_PROVIDER = {
 def embed_texts_with_cache(
     ids_texts: list[tuple[str, str]],
     use_cached_result: bool = True,
-    n_per_commit: int = 1000,
+    n_per_commit: int = 1500,
     max_workers=3,
     return_flat: bool = True,
     embedding_provider="openai",
