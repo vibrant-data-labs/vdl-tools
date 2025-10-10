@@ -6,11 +6,13 @@ import pathlib as pl
 
 import numpy as np
 import pandas as pd
+import re
 
 import vdl_tools.shared_tools.openai.openai_api_utils as oai_utils
 import vdl_tools.tag2network.Network.BuildNetwork as bn
 import vdl_tools.shared_tools.taxonomy_mapping.taxonomy_mapping as tm
 import vdl_tools.shared_tools.project_config as pc
+from vdl_tools.shared_tools.tools.logger import logger
 
 paths = pc.get_paths()
 # %%
@@ -111,7 +113,7 @@ def define_assistant_prompt(subject):
     return assistant_prompt
 
 
-def get_text_for_entities(n_tags, entities_texts):
+def format_kwds_prompt(n_tags, entities_texts):
     n_tags_expanded = n_tags + 5
     # use gpt to extract cluster name from top n entities
     preamble = dedent(
@@ -146,7 +148,7 @@ def get_text_for_entities(n_tags, entities_texts):
     return prompt
 
 
-def get_text_for_summaries(entities_texts, subject):
+def format_summaries_prompt(entities_texts, subject):
 
     # use gpt to extract cluster name from top n entities
     preamble = dedent(
@@ -176,7 +178,7 @@ def get_text_for_summaries(entities_texts, subject):
     return prompt
 
 
-def get_short_sentence(entities_texts, subject):
+def format_short_sentence_prompt(entities_texts, subject):
 
     preamble = dedent(
         f"""
@@ -214,7 +216,7 @@ def get_short_sentence(entities_texts, subject):
     return prompt
 
 
-def get_one_sentence(entities_texts, subject):
+def format_one_sentence_prompt(entities_texts, subject):
 
     preamble = dedent(
         f"""
@@ -261,7 +263,7 @@ def get_one_sentence(entities_texts, subject):
     return prompt
 
 
-def review_one_sentence(clusters_df, clusattr):
+def format_prompt_review_titles(clusters_df, clusattr):
     preamble = dedent(
         f"""
     **Task:**  
@@ -329,6 +331,99 @@ def add_text_below_token_limit(cdf, textcol, model, max_tokens=120000):
 
     return cluster_texts
 
+def sample_cluster_texts_by_percentile(
+    nodesdf,
+    textcol,
+    clusattr="Cluster",
+    max_samples=50,
+    centrality_col="ClusterCentrality",
+):
+    """
+    If cluster size <= max_samples: return ALL texts, sorted by centrality (desc).
+    - Else: stratify by centrality percentiles, sample proportionally, and then
+      refill if necessary to guarantee exactly max_samples.
+    """
+    cluster_samples = {}
+
+    # Iterate over clusters
+    for clus, cdf in nodesdf.groupby(clusattr):
+        # Work on a COPY so the original df is untouched
+        cdf = cdf.copy()
+        n_total = len(cdf)
+        n_samples = min(n_total, max_samples)
+
+        # Small clusters: take all, sorted by centrality
+        if n_total <= max_samples:
+            out = (
+                cdf.sort_values(centrality_col, ascending=False)[textcol]
+                .tolist()
+            )
+            cluster_samples[clus] = out
+            continue
+
+        # --- Stratified Sampling for Large Clusters ---
+
+        # Bin by centrality percentiles (5 bins). fewer bins may be returned.
+        cdf.loc[:, "cent_bin"] = pd.qcut(
+                cdf[centrality_col], 5, labels=False, duplicates="drop"
+            )
+
+        # Allocate sample sizes proportional to bin populations
+        bin_counts = cdf["cent_bin"].value_counts(normalize=True).sort_index()
+        raw_alloc = bin_counts * n_samples
+        n_per_bin = np.floor(raw_alloc).astype(int)
+
+        # Distribute the remainder from rounding
+        remainder = n_samples - n_per_bin.sum()
+        if remainder > 0:
+            frac_part = raw_alloc - np.floor(raw_alloc)
+            # Add remainder to bins with the largest fractional parts
+            for idx in frac_part.nlargest(remainder).index:
+                n_per_bin[idx] += 1
+
+        # Draw initial samples from each bin
+        sampled_indices = []
+        for bin_idx, count in n_per_bin.items():
+            if count <= 0:
+                continue
+            bin_cdf = cdf[cdf["cent_bin"] == bin_idx]
+
+            # 1. GUARD: Never sample more than what's available in the bin
+            n_to_sample = min(count, len(bin_cdf))
+
+            sampled_indices.extend(
+                    bin_cdf.sample(n=n_to_sample, random_state=42).index.tolist()
+                )
+
+        # 2. REFILL: Top up if we under-sampled due to small bins
+        n_refill = n_samples - len(sampled_indices)
+        if n_refill > 0:
+            # Get indices of items not yet sampled
+            remaining_indices = cdf.index.difference(sampled_indices)
+
+            # Randomly sample from the remainder to meet the target
+            refill_indices = np.random.choice(remaining_indices, n_refill, replace=False)
+            sampled_indices.extend(refill_indices)
+
+        # Retrieve the final list of texts using the sampled indices
+        cluster_samples[clus] = cdf.loc[sampled_indices, textcol].tolist()
+
+    return cluster_samples
+
+
+
+def simple_text_sampling(nodesdf, clusattr, textcol, centrality_col, model):
+    """
+    Samples texts for each cluster, sorted by centrality, up to the model's token limit.
+    Returns a dict: {cluster_id: [sampled_texts]}
+    """
+    sample_texts = {}
+    clusters = nodesdf[clusattr].unique()
+    for clus in clusters:
+        cdf = nodesdf[nodesdf[clusattr] == clus].sort_values(centrality_col, ascending=False)
+        sample_texts[clus] = add_text_below_token_limit(cdf, textcol, model)
+    return sample_texts
+
 
 # Optionally filter out repeated keywords
 def filter_keywords(cluster_kwd_dict, n_tags, filename=None):
@@ -366,88 +461,48 @@ def parse_keyword_response(response_obj):
 
 
 
-
-def get_cluster_sentences_from_text(
-    nodesdf,
-    textcol,
-    clusattr='Cluster',
-    subject=None,
-    model="gpt-4.1-mini",
-):
-
-    clus_centrality = "ClusterCentrality"
-    assistant_prompt = define_assistant_prompt(subject)
-    nodesdf["wtd_cc"] = nodesdf[clus_centrality]
-
-    # ids_text_prompts_all = []
-    ids_text_sums_short = []
-    ids_text_sums_all = []
-    cluster_texts_all_list = {}
-
-    for clus, cdf in nodesdf.groupby(clusattr):
-        sorted_cdf = cdf.sort_values("wtd_cc", ascending=False)
-
-        cluster_texts_all = add_text_below_token_limit(sorted_cdf, textcol, model)
-        # a- short sentence
-        short_sentences_all = get_short_sentence(cluster_texts_all, subject)
-        ids_text_sums_short.append((clus, short_sentences_all))
-        # b - longer one sentence
-        one_sentences_all = get_one_sentence(cluster_texts_all, subject)
-        ids_text_sums_all.append((clus, one_sentences_all))
-
-        cluster_texts_all_list[clus] = cluster_texts_all
-
-    # Get sentences
-    prompt_name = "sentences_for_cluster"
-    if subject:
-        prompt_name += f"_{subject.replace(' ', '_').lower()}"
-    with get_session() as session:
-        sums_cache = SummaryPromptResponseCache(
-            prompt_str=assistant_prompt,
-            model=model,
-            session=session,
-            prompt_name=prompt_name,
-        )
-        cluster_id_to_shortsentence_all = sums_cache.bulk_get_cache_or_run(
-            given_ids_texts=ids_text_sums_short,
-            model=model,
-            use_cached_result=False,
-        )
-        cluster_id_to_onesentence_all = sums_cache.bulk_get_cache_or_run(
-            given_ids_texts=ids_text_sums_all,
-            model=model,
-            use_cached_result=False,
-        )
-
-    cluster_id_to_shorts_all = {
-        clus: resp["response_text"]
-        for clus, resp in cluster_id_to_shortsentence_all.items()
-    }
-    cluster_id_to_sums_all = {
-        clus: resp["response_text"]
-        for clus, resp in cluster_id_to_onesentence_all.items()
-    }
-
-    # Assign results back to nodesdf in separate columns
-    nodesdf["clus_sentence_short"] = nodesdf[clusattr].map(cluster_id_to_shorts_all)
-    nodesdf["clus_sentence_long"] = nodesdf[clusattr].map(cluster_id_to_sums_all)
-
-    # # Capture how many entities went into the all-entities approach
-    # nodesdf["clus_sentence_count_all"] = nodesdf["Cluster"].map(
-    #     {clus: len(txt_arr) for clus, txt_arr in cluster_texts_all_list.items()}
-    # )
-    return nodesdf
+# def _suffix_from_col_name(colname: str) -> str:
+#     m = re.search(r'(_L\d+)$', str(colname))
+#     return m.group(1) if m else ""
 
 
-def improve_one_sentences(nodesdf, clusattr='Cluster', subject="education", model="o3-mini"):
 
-    df = nodesdf[
-        [clusattr, "clus_sentence_short", "clus_sentence_long"]
-    ].drop_duplicates()
-    # print(df.shape)
+def improve_one_sentences(nodesdf,
+                          clusattr='Cluster',
+                          clusname=None,  # Use this for short sentence column name
+                          subject="education",
+                          model="o3-mini",
+                          short_col=None,
+                          long_col=None):
+    """
+    Improves and replaces the short one-sentence summaries for each cluster in the DataFrame.
+
+    Parameters:
+        nodesdf (pd.DataFrame): The input DataFrame containing cluster and sentence columns.
+        clusattr (str): The column name for cluster identifiers.
+        clusname (str, optional): Base name for the short sentence column. If provided, infers column names.
+        subject (str): The subject area for prompt context.
+        model (str): The model name to use for generating improved sentences.
+        short_col (str, optional): The column name for the short sentence. If not provided, inferred from clusname or defaults.
+        long_col (str, optional): The column name for the long sentence. If not provided, inferred from clusname or defaults.
+
+    Returns:
+        pd.DataFrame: A copy of the input DataFrame with the improved short sentence column replaced.
+
+    Raises:
+        KeyError: If any of the required columns are missing from the DataFrame.
+    """
+    out = nodesdf.copy()
+    for col in (clusattr, short_col, long_col):
+        if col not in out.columns:
+            raise KeyError(f"Expected column '{col}' not found.")
+
+        # Minimal table for prompt
+    df_min = out[[clusattr, short_col, long_col]].drop_duplicates()
+    
     assistant_prompt = define_assistant_prompt(subject)
     # get the prompt for the cluster
-    review_prompt = review_one_sentence(df, clusattr)
+    review_prompt = format_prompt_review_titles(df_min, clusattr)
 
     response = oai_utils.CLIENT.chat.completions.create(
         model=model,
@@ -469,52 +524,142 @@ def improve_one_sentences(nodesdf, clusattr='Cluster', subject="education", mode
 
     # get the response json
     json_resp = json.loads(response.choices[0].message.content)
-    nodesdf["clus_sentence_reviewed"] = nodesdf[clusattr].map(json_resp)
-    return nodesdf
-    # nodesdf["clus_sentence_reviewed"] = nodesdf["Cluster"].map(cluster_id_to_review)
-    # return nodesdf
+    out[short_col] = out[clusattr].map(json_resp)
+    return out
 
 
-def get_cluster_names_from_text(
+
+def get_cluster_sentences_from_text(
     nodesdf,
     textcol,
-    clusattr,
-    clusname,               # column name for the cluster names
-    n_tags,
+    clusattr='Cluster',
+    clusname=None,             # Use this for short sentence column name
     subject=None,
-    n_entities=20,          # int → use top‑k; None → token‑limit fallback
-    weight_param=None,
     model="gpt-4.1-mini",
+    n_tags = None,
+    n_entities=None,
+    sample_texts=None,
+    improve = False,
+    improve_model="o3-mini",# Model for improving one-sentence summaries
+    centrality_col = "ClusterCentrality"
 ):
-    """
-    Adds two columns to *nodesdf*:
-        • clusname : list[str]   (up to n_tags keywords)
-        • clus_sum : str         (one‑sentence summary)
-    ------------
-    • Optional *n_entities* (top‑k) with fallback to add_text_below_token_limit.
-
-    """
-
-    clus_centrality = "ClusterCentrality"
+    
     assistant_prompt = define_assistant_prompt(subject)
 
-    if weight_param is not None:
-        nodesdf["wtd_cc"] = nodesdf[clus_centrality] * nodesdf[weight_param]
+    ids_text_sums_short = []
+    ids_text_sums_all = []
+
+    # Use provided sample_texts if given, else fallback to internal sampling
+    if sample_texts is not None:
+        clusters = sample_texts.keys()
     else:
-        nodesdf["wtd_cc"] = nodesdf[clus_centrality]
+        sample_texts = simple_text_sampling(nodesdf, clusattr, textcol, centrality_col, model)
+        clusters = sample_texts.keys()
 
-    ids_text_prompts, ids_text_sums = [], []
+    for clus in clusters:
+        cluster_texts_all = sample_texts[clus]
 
-    for clus, cdf in nodesdf.groupby(clusattr):
-        cdf_sorted = cdf.sort_values("wtd_cc", ascending=False)
+        # short sentence prompt
+        short_sentences_all = format_short_sentence_prompt(cluster_texts_all, subject)
+        ids_text_sums_short.append((clus, short_sentences_all))
 
-        if n_entities is None:
-            cluster_texts = add_text_below_token_limit(cdf_sorted, textcol, model)
-        else:
-            cluster_texts = cdf_sorted.iloc[:n_entities][textcol].values
+        # longer one sentence prompt
+        one_sentences_all = format_one_sentence_prompt(cluster_texts_all, subject)
+        ids_text_sums_all.append((clus, one_sentences_all))
 
-        ids_text_prompts.append((clus, get_text_for_entities(n_tags, cluster_texts)))
-        ids_text_sums.append((clus, get_text_for_summaries(cluster_texts, subject)))
+    prompt_name = "sentences_for_cluster"
+    if subject:
+        prompt_name += f"_{subject.replace(' ', '_').lower()}"
+
+    with get_session() as session:
+        sums_cache = SummaryPromptResponseCache(
+            prompt_str=assistant_prompt,
+            model=model,
+            session=session,
+            prompt_name=prompt_name,
+        )
+        cluster_id_to_shortsentence_all = sums_cache.bulk_get_cache_or_run(
+            given_ids_texts=ids_text_sums_short,
+            model=model,
+            use_cached_result=True,
+        )
+        cluster_id_to_onesentence_all = sums_cache.bulk_get_cache_or_run(
+            given_ids_texts=ids_text_sums_all,
+            model=model,
+            use_cached_result=True,
+        )
+
+    cluster_id_to_shorts_all = {
+        clus: resp["response_text"]
+        for clus, resp in cluster_id_to_shortsentence_all.items()
+    }
+    cluster_id_to_sums_all = {
+        clus: resp["response_text"]
+        for clus, resp in cluster_id_to_onesentence_all.items()
+    }
+
+    # Use clusname for short sentence column if provided; else fallback to 'clus_sentence_short'
+    short_col = clusname if clusname else "clus_sentence_short"
+    long_col = f"{clusname}_long" if clusname else "clus_sentence_long"
+
+    nodesdf[short_col] = nodesdf[clusattr].map(cluster_id_to_shorts_all)
+    nodesdf[long_col] = nodesdf[clusattr].map(cluster_id_to_sums_all)
+
+    if improve:
+        logger.info(f"Improving one-sentence summaries for {clusattr}...")
+        nodesdf = improve_one_sentences(
+            nodesdf,
+            clusattr=clusattr,
+            clusname=clusname,  # no special base needed; uses the names we just wrote
+            subject=subject,
+            model=improve_model,
+            short_col=short_col,
+            long_col=long_col
+
+        )
+    return nodesdf
+
+def get_cluster_kwdnames_from_text(
+        nodesdf,
+        textcol,
+        clusattr,
+        clusname,  # column name for the cluster names
+        n_tags,
+        subject=None,
+        n_entities=20,  # int → use top‑k; None → token‑limit fallback
+        model="gpt-4.1-mini",
+        sample_texts=None,
+        improve=False,
+        improve_model='o3-mini'
+
+):
+    """
+    Adds one column to *nodesdf*:
+        • clusname : list[str]   (up to n_tags keywords)
+
+    If sample_texts are provided, it uses those; otherwise, it calculates new samples.
+    """
+    # Define centrality column directly
+    centrality_col = "ClusterCentrality"
+
+    assistant_prompt = define_assistant_prompt(subject)
+
+    ids_text_prompts = []
+
+    # Use pre-calculated sample texts if provided, otherwise sample new ones
+    if sample_texts is not None:
+        # If sample_texts are provided, use them directly
+        cluster_samples = {clus: sample_texts[clus] for clus in nodesdf[clusattr].unique()}
+    else:
+        # Get the cluster samples using stratified sampling based on centrality
+        cluster_samples = sample_cluster_texts_by_percentile(
+            nodesdf, textcol, clusattr, max_samples=n_entities
+        )
+
+    # Iterate over the clusters and prepare the cluster texts
+    for clus, sampled_texts in cluster_samples.items():
+        # Use the sampled texts for each cluster
+        ids_text_prompts.append((clus, format_kwds_prompt(n_tags, sampled_texts)))
 
     kw_prompt_name = "keywords_for_cluster"
     if subject:
@@ -538,7 +683,35 @@ def get_cluster_names_from_text(
         for clus, resp in raw_kw.items()
     }
     cluster_to_cleaned_keywords = filter_keywords(cluster_id_to_keywords, n_tags)
+    nodesdf[clusname] = nodesdf[clusattr].map(cluster_to_cleaned_keywords)
+    return nodesdf
 
+
+def get_cluster_summaries_from_text(
+    nodesdf,
+    textcol,
+    clusattr,
+    summary_col="cluster_summary",            # column name for the summaries
+    subject=None,
+    n_entities=20,
+    model="gpt-4.1-mini",
+):
+    """
+    Adds one column to *nodesdf*:
+        • summary_col : str   (a longer, structured cluster summary)
+    """
+    centrality_col = "ClusterCentrality"
+    assistant_prompt = define_assistant_prompt(subject)
+    ids_text_sums = []
+
+    for clus, cdf in nodesdf.groupby(clusattr):
+        cdf_sorted = cdf.sort_values(centrality_col, ascending=False)
+        if n_entities is None:
+            cluster_texts = add_text_below_token_limit(cdf_sorted, textcol, model)
+        else:
+            cluster_texts = cdf_sorted.iloc[:n_entities][textcol].values
+        ids_text_sums.append((clus, format_summaries_prompt(cluster_texts, subject)))
+    "TODO: change to use already sampled texts if available"
     sum_prompt_name = "keyword_cluster_summaries"
     if subject:
         sum_prompt_name += f"_{subject.replace(' ', '_').lower()}"
@@ -553,21 +726,31 @@ def get_cluster_names_from_text(
         raw_sum = sum_cache.bulk_get_cache_or_run(
             given_ids_texts=ids_text_sums,
             model=model,
-            use_cached_result=False,
+            use_cached_result=True,
         )
 
     cluster_id_to_summaries = {
         clus: resp["response_text"] for clus, resp in raw_sum.items()
     }
-
-    nodesdf[clusname] = nodesdf[clusattr].map(cluster_to_cleaned_keywords)
-    nodesdf["clus_summary"] = nodesdf[clusattr].map(cluster_id_to_summaries)
-
+    nodesdf[summary_col] = nodesdf[clusattr].map(cluster_id_to_summaries)
     return nodesdf
 
+NAMING_FUNCTIONS = {
+    "keywords": get_cluster_kwdnames_from_text,
+    "title_sentence": get_cluster_sentences_from_text,
+}
 
 def build_embedding_network(
-    df, params: bn.BuildEmbeddingNWParams, debug=False, subject=None, n_entities=20
+    df,
+    params: bn.BuildEmbeddingNWParams,
+    debug=False,
+    subject=None,
+    model="gpt-4.1-mini",
+    clusattr='Cluster',
+    n_entities=50,
+    naming_strategy="keywords",
+    improve = False,
+    improve_model="o3-mini"  # Model for improving one-sentence summaries
 ):
     emb_file = pl.Path("embeddings.npy")
 
@@ -584,11 +767,26 @@ def build_embedding_network(
     np.fill_diagonal(sims, 0)
     df.reset_index(drop=True, inplace=True)
     nodesdf, edgesdf, clusters = bn.buildSimilarityNetwork(df, sims.copy(), params)
-    # compute and assign cluster names
+
+    naming_func = NAMING_FUNCTIONS.get(naming_strategy, get_cluster_kwdnames_from_text)
+    logger.info(f"Using naming function: {naming_func.__name__}")
+
+    sampled_texts_by_level = {}
+    # Assign cluster names with provided function or default
     if params.clusName is not None:
         for idx, clattr in enumerate(clusters):
             clName = params.clusName if idx == 0 else f"{params.clusName}_L{idx + 1}"
-            nodesdf = get_cluster_names_from_text(
+            logger.info(f"sampling texts for {clattr} with {n_entities} n_entities" )
+            sampled_texts = sample_cluster_texts_by_percentile(
+                nodesdf,
+                textcol=params.textcol,
+                clusattr=clattr,
+                max_samples=n_entities
+            )
+            sampled_texts_by_level[clattr] = sampled_texts
+            # Call the naming function, passing sampled texts
+            logger.info(f"Assigning names for cluster {clattr} with {len(sampled_texts)} clusters")
+            nodesdf = naming_func(
                 nodesdf,
                 textcol=params.textcol,
                 clusattr=clattr,
@@ -596,5 +794,11 @@ def build_embedding_network(
                 n_tags=params.n_tags,
                 subject=subject,
                 n_entities=n_entities,
+                sample_texts=sampled_texts,
+                model=model,
+                improve=improve,
+                improve_model=improve_model
             )
-    return nodesdf, edgesdf, sims
+
+    return nodesdf, edgesdf, sims, sampled_texts_by_level
+
