@@ -9,7 +9,7 @@ _base_url = "https://api.coresignal.com/cdapi/v2"
 
 
 ENDPOINTS = {
-    'member': 'member',
+    'member': 'employee_base',
     'company': 'company_base',
     'historical_headcount': 'historical_headcount',
     'clean_company': 'company_clean',
