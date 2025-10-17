@@ -178,9 +178,45 @@ class InvestorAnalysis:
         Returns:
             pd.DataFrame: A DataFrame containing funding round data for the specified investors.
         """
-        if self.raw_investor_funding_rounds is None or force_query:
-            cached_compute = memory.cache(funding_rounds_query_by_investor_id)
-            self.raw_investor_funding_rounds = cached_compute(sorted(investor_ids))
+        def _funding_rounds_query_by_investor_id(investor_ids, **kwargs):
+            # A wrapper of the funding_rounds_query_by_investor_id to keep only the columns we need for storage optimization
+            _cols_to_keep = [
+                'name',
+                'permalink',
+                'announced_on',
+                'investor_identifiers',
+                'funded_organization_identifier',
+                'identifier',
+                'investment_type',
+                'uuid',
+                'funded_organization_funding_stage',
+                'money_raised',
+                'investment_stage',
+                'closed_on',
+                'target_money_raised'
+            ]
+            logger.info("Querying Crunchbase for funding rounds associated with the given investor IDs: %s", investor_ids)
+            funding_rounds = funding_rounds_query_by_investor_id(investor_ids, **kwargs)
+            return funding_rounds[_cols_to_keep]
+
+        if self.raw_investor_funding_rounds is None or not self.use_cache:
+            cached_query = memoize_to_postgres()(_funding_rounds_query_by_investor_id)
+            if self.filter_rounds_date_range:
+                date_range_filter = [
+                    api.between(
+                        "announced_on",
+                        self.filter_rounds_date_range[0],
+                        self.filter_rounds_date_range[1]
+                        )
+                ]
+                self.raw_investor_funding_rounds = cached_query(
+                    sorted(investor_ids),
+                    extra_filters=date_range_filter
+                )
+            else:
+                self.raw_investor_funding_rounds = cached_query(sorted(investor_ids))
+        # The cached query returns a list of dictionaries, so we need to convert it to a DataFrame
+        self.raw_investor_funding_rounds = _convert_to_dataframe(self.raw_investor_funding_rounds)
         return self.raw_investor_funding_rounds
 
     def _get_investors_porfolios(
