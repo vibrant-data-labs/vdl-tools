@@ -3,6 +3,7 @@ from itertools import combinations
 import pandas as pd
 import numpy as np
 
+import vdl_tools.scrape_enrich.crunchbase.api as api
 from vdl_tools.scrape_enrich.crunchbase.organizations_api_extended import (
     companies_id_query,
     people_query,
@@ -15,10 +16,7 @@ from vdl_tools.shared_tools.tools.falsey_checks import coerced_bool
 
 PATHS = get_paths()
 
-
-from joblib import Memory
-location = './crunchbase_investors_cachedir'
-memory = Memory(location, verbose=0)
+from vdl_tools.shared_tools.tools.postgres_memoization import memoize_to_postgres
 
 
 AGGREGATION_DICT = {
@@ -26,6 +24,15 @@ AGGREGATION_DICT = {
     "count_total_companies{metric_suffix}": ('company_id', 'nunique'),
     "median_money_raised{metric_suffix}": ('money_raised', 'median'),
 }
+
+
+def _convert_to_dataframe(data):
+    """
+    Converts the data to a DataFrame if it is not already a DataFrame.
+    """
+    if not isinstance(data, pd.DataFrame):
+        data = pd.DataFrame(data)
+    return data
 
 class InvestorAnalysis:
     def __init__(
@@ -36,6 +43,8 @@ class InvestorAnalysis:
         original_alias: str = "climate",
         filter_out_other_investors: bool = True,
         aggregation_dict: dict = AGGREGATION_DICT,
+        filter_rounds_date_range: tuple[str] = None,
+        use_cache: bool = True,
     ):
         self.company_df = company_df
         self.investor_column_name = investor_column_name
@@ -49,9 +58,11 @@ class InvestorAnalysis:
         self.people_investor_metadata = None
         self.company_investor_metadata = None
         self.investor_metadata = None
+        self.filter_rounds_date_range = filter_rounds_date_range
+        self.use_cache = use_cache
 
 
-    def get_company_investors_metadata(self, investor_ids, use_cache=True):
+    def get_company_investors_metadata(self, investor_ids):
         """
         Retrieves investor data from the Crunchbase API for the given investor IDs.
 
@@ -61,11 +72,12 @@ class InvestorAnalysis:
         Returns:
             pd.DataFrame: A DataFrame containing investor data.
         """
-        if use_cache:
-            investors_cached_query = memory.cache(companies_id_query)
+        if self.use_cache:
+            investors_cached_query = memoize_to_postgres()(companies_id_query)
         else:
             investors_cached_query = companies_id_query
         investor_metadata = investors_cached_query(investor_ids)
+        investor_metadata = _convert_to_dataframe(investor_metadata)
         investor_metadata.rename(
             columns={
                 "uuid": "investor_id",
@@ -82,13 +94,14 @@ class InvestorAnalysis:
         self.company_investor_metadata = investor_metadata
         return self.company_investor_metadata
 
-    def get_people_investors_metadata(self, investor_ids, use_cache=True):
-        if use_cache:
-            investors_cached_query = memory.cache(people_query)
+    def get_people_investors_metadata(self, investor_ids):
+        if self.use_cache:
+            investors_cached_query = memoize_to_postgres()(people_query)
         else:
             investors_cached_query = people_query
 
         investor_metadata = investors_cached_query(investor_ids)
+        investor_metadata = _convert_to_dataframe(investor_metadata)
         investor_metadata.rename(
             columns={
                 "uuid": "investor_id",
@@ -101,13 +114,13 @@ class InvestorAnalysis:
         self.people_investor_metadata = investor_metadata
         return self.people_investor_metadata
 
-    def get_investors_metadata(self, investor_ids, use_cache=True):
-        company_investor_metadata = self.get_company_investors_metadata(investor_ids, use_cache=use_cache)
+    def get_investors_metadata(self, investor_ids):
+        company_investor_metadata = self.get_company_investors_metadata(investor_ids)
         company_investor_metadata['investor_entity_type'] = 'organization'
 
         leftover_investor_ids = list(set(investor_ids).difference(set(company_investor_metadata.index)))
 
-        people_investor_metadata = self.get_people_investors_metadata(leftover_investor_ids, use_cache=use_cache)
+        people_investor_metadata = self.get_people_investors_metadata(leftover_investor_ids)
         people_investor_metadata['investor_entity_type'] = 'person'
         investor_metadata = pd.concat([
             company_investor_metadata[['investor_name', 'investor_entity_type', 'is_government_investor']],
@@ -147,10 +160,15 @@ class InvestorAnalysis:
         self.investor_funding_round_company_df = self._get_investors_porfolios(
             filter_out_other_investors=self.filter_out_other_investors
         )
+        if self.filter_rounds_date_range is not None:
+            self.investor_funding_round_company_df = self.investor_funding_round_company_df[
+                (self.investor_funding_round_company_df['date_announced_dt'] >= pd.to_datetime(self.filter_rounds_date_range[0])) &
+                (self.investor_funding_round_company_df['date_announced_dt'] <= pd.to_datetime(self.filter_rounds_date_range[1]))
+            ]
         self.investor_funding_round_company_df = self.filter_to_original_investors()
         return self.investor_funding_round_company_df
 
-    def _query_crunchbase_for_investor_portfolios(self, investor_ids, force_query=False):
+    def _query_crunchbase_for_investor_portfolios(self, investor_ids):
         """
         Queries the Crunchbase API for funding rounds associated with the given investor IDs.
 
@@ -173,7 +191,6 @@ class InvestorAnalysis:
         Retrieves the portfolios of investors from a given DataFrame of companies.
 
         Args:
-            company_df (pd.DataFrame): A DataFrame containing company data, including investor information.
             filter_out_other_investors (bool, optional): If True, filters out investors not present in the original DataFrame. Defaults to True.
 
         Returns:

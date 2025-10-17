@@ -150,14 +150,15 @@ def funding_rounds_query(companies_uuids):
     )
 
 
-def funding_rounds_query_by_investor_id(investor_uuids):
+def funding_rounds_query_by_investor_id(investor_uuids, extra_filters=[]):
     print('Querying funding rounds by organization identifier...')
     return __iterative_query(
         funding_rounds.query,
         funding_rounds.all_fields,
         "investor_identifiers",
         investor_uuids,
-        operator="includes"
+        operator="includes",
+        extra_filters=extra_filters
     )
 
 

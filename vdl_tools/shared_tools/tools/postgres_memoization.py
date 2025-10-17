@@ -1,4 +1,5 @@
 import psycopg2
+import pandas as pd
 import json
 from functools import wraps
 
@@ -47,6 +48,8 @@ def memoize_to_postgres(conn_params=CONN_PARAMS):
 
                     # Compute result if not found in cache
                     result = func(*args, **kwargs)
+                    if isinstance(result, pd.DataFrame):
+                        result = result.to_dict(orient='records')
                     result = json.dumps({"result": result})
 
                     # Store result in cache table
