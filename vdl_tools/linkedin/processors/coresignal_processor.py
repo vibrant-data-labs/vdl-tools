@@ -107,13 +107,13 @@ __awards = {
     'unique': ['title', 'issuer', 'date']
 }
 __cert = {
-    'keep': ['name', 'authority', 'url', 'date_from', 'date_to'],
-    'unique': ['name', 'authority', 'date_from', 'date_to']
+    'keep': ['name', 'issuer', 'url', 'date_from', 'date_to'],
+    'unique': ['name', 'issuer', 'date_from', 'date_to']
 }
 
 __edu = {
-    'keep': ['title', 'subtitle', 'date_from', 'date_to', 'activities_and_societies', 'description', 'school_url'],
-    'unique': ['title', 'subtitle', 'date_from', 'date_to']
+    'keep': ['program',  'date_from', 'date_to', 'activities_and_societies', 'description', 'institution_url'],
+    'unique': ['program', 'date_from', 'date_to']
 }
 
 __exp = {
@@ -122,40 +122,40 @@ __exp = {
 }
 
 __groups = {
-    'keep': ['name', 'url'],
-    'unique': ['name']
+    'keep': ['title', 'url'],
+    'unique': ['title']
 }
 
 __proj = {
-    'keep': ['name', 'url', 'description', 'date_from', 'date_to', 'team_members'],
+    'keep': ['name', 'project_url', 'description', 'date_from', 'date_to', 'team_members'],
     'unique': ['name']
 }
 
 __skills = {
-    'keep': ['skill_id', 'member_skill_list'],
-    'unique': ['skill_id'],
+    'keep': ['skill',],
+    'unique': ['skill'],
 }
 
 __vol = {
-    'keep': ['organization', 'role', 'date_from', 'date_to', 'description', 'member_volunteering_positions_cause_list'],
+    'keep': ['organization', 'role', 'date_from', 'date_to', 'description', 'cause'],
     'unique': ['organization', 'role', 'date_from', 'date_to']
 }
 
 __website = {
-    'keep': ['website'],
-    'unique': ['website']
+    'keep': ['personal_website'],
+    'unique': ['personal_website']
 }
 
 __lang = {
-    'keep': ['member_language_list', 'member_language_proficiency_list'],
-    'unique': ['language_id', 'proficiency_id']
+    'keep': ['language', 'proficiency'],
+    'unique': ['id', 'language']
 }
 
 
 def __process_profile_arr(data: List[dict], map_config) -> List[dict]:
     getter = itemgetter(*map_config['unique'])
     profile_data = data
-    profile_data.sort(key=lambda x: x["created"], reverse=True)
+    profile_data.sort(key=lambda x: x["created_at"], reverse=True)
     res = list({getter(v):v for v in profile_data}.values())
     for item in profile_data:
         item_keys = list(item.keys())
@@ -166,7 +166,7 @@ def __process_profile_arr(data: List[dict], map_config) -> List[dict]:
     return res
 
 def process_profile(profile: dict) -> dict:
-    cols_to_remove = [
+    cols_to_remove = {
         'id',
         'hash',
         'recommendations_count',
@@ -195,40 +195,25 @@ def process_profile(profile: dict) -> dict:
         'member_volunteering_cares_collection',
         'member_volunteering_opportunities_collection',
         'member_volunteering_supports_collection'        
-    ]
+    }
 
     updated_profile = deepcopy(profile)
-    for key in cols_to_remove:
+    for key in cols_to_remove.intersection(updated_profile.keys()):
         updated_profile.pop(key, None)
 
 
-    updated_profile['member_awards_collection'] = __process_profile_arr(updated_profile['member_awards_collection'], __awards)
-    updated_profile['member_certifications_collection'] = __process_profile_arr(updated_profile['member_certifications_collection'], __cert)
-    updated_profile['member_education_collection'] = __process_profile_arr(updated_profile['member_education_collection'], __edu)
-    updated_profile['member_experience_collection'] = __process_profile_arr(updated_profile['member_experience_collection'], __exp)
-    updated_profile['member_experience_collection'] = updated_profile['member_experience_collection'][:updated_profile['experience_count']]
-    updated_profile['member_groups_collection'] = __process_profile_arr(updated_profile['member_groups_collection'], __groups)
-    updated_profile['member_languages_collection'] = __process_profile_arr(updated_profile['member_languages_collection'], __lang)
-    for item in updated_profile['member_languages_collection']:
-        item['language'] = item["member_language_list"]["language"]
-        if 'proficiency' in item["member_language_proficiency_list"]:
-            item['proficiency'] = item["member_language_proficiency_list"]['proficiency']
-        item.pop('member_language_list', None)
-        item.pop('member_language_proficiency_list', None)
+    updated_profile['member_awards_collection'] = __process_profile_arr(updated_profile['awards'], __awards)
+    updated_profile['member_certifications_collection'] = __process_profile_arr(updated_profile['certifications'], __cert)
+    updated_profile['member_education_collection'] = __process_profile_arr(updated_profile['education'], __edu)
+    updated_profile['member_experience_collection'] = __process_profile_arr(updated_profile['experience'], __exp)
+    updated_profile['member_experience_collection'] = len(updated_profile['experience'])
+    updated_profile['member_groups_collection'] = __process_profile_arr(updated_profile['groups'], __groups)
+    updated_profile['member_languages_collection'] = __process_profile_arr(updated_profile['languages'], __lang)
 
-    updated_profile['member_projects_collection'] = __process_profile_arr(updated_profile['member_projects_collection'], __proj)
-    updated_profile['member_skills_collection'] = __process_profile_arr(updated_profile['member_skills_collection'], __skills)
-    for item in updated_profile['member_skills_collection']:
-        item['skill'] = item['member_skill_list']["skill"]
-        item.pop('member_skill_list', None)
+    updated_profile['member_projects_collection'] = __process_profile_arr(updated_profile['projects'], __proj)
+    updated_profile['member_volunteering_positions_collection'] = __process_profile_arr(updated_profile['volunteering_positions'], __vol)
 
-    updated_profile['member_volunteering_positions_collection'] = __process_profile_arr(updated_profile['member_volunteering_positions_collection'], __vol)
-    for item in updated_profile['member_volunteering_positions_collection']:
-        cause = item['member_volunteering_positions_cause_list']['cause'] if ('cause' in item['member_volunteering_positions_cause_list']) else None
-        item['cause'] = cause
-        item.pop('member_volunteering_positions_cause_list', None)
-
-    updated_profile['member_websites_collection'] = __process_profile_arr(updated_profile['member_websites_collection'], __website)
+    updated_profile['member_websites_collection'] = __process_profile_arr(updated_profile['websites'], __website)
     return updated_profile
 
 
