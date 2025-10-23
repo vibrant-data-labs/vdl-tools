@@ -69,7 +69,6 @@ def get_people_profile(
         chunk_processed_results = []
         for url, linkedin_id in chunk:
             result = cs_query.get_profile(linkedin_id, api_key)
-
             if not result:
                 logger.warning("No result for %s", url)
                 result_clean = {
@@ -113,7 +112,11 @@ if __name__ == '__main__':
     config = get_configuration()
     with get_session() as session:
         df = get_people_profile(
-            ['https://www.linkedin.com/in/zeintawil/'],
+            [
+                'https://www.linkedin.com/in/zeintawil/',
+                'https://www.linkedin.com/in/eric-berlow/'
+            ],
             session,
             config['linkedin']['coresignal_api_key'],
+            skip_existing=False,
         )
