@@ -1,7 +1,7 @@
 import marimo
 
 __generated_with = "0.16.5"
-app = marimo.App(width="medium", auto_download=["ipynb"])
+app = marimo.App(width="medium")
 
 
 @app.cell
@@ -57,19 +57,6 @@ def _():
         TAXONOMY_FILE,
         TAXONOMY_MAPPING_RESULTS_FILE,
     )
-
-
-@app.cell
-def _():
-    # taxonomy = load_one_earth_taxonomy(
-    #     TAXONOMY_FILE,
-    #     add_geo_engineering=False
-    # )
-
-    # taxonomy_mapping_results = pd.read_json(TAXONOMY_MAPPING_RESULTS_FILE)
-
-    # taxonomy_mapping_results = remove_mapping_name_suffix_from_taxonomy_results(taxonomy_mapping_results, "one_earth_category")
-    return
 
 
 @app.cell
