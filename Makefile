@@ -1,4 +1,4 @@
-.PHONY: help install test test-all test-cov test-deps check-deps verify-dep-update lint format typing clean build version version-patch version-minor version-major publish publish-test shell create-migration run-migration
+.PHONY: help install test test-all test-cov test-deps check-deps verify-dep-update lint format typing clean build version version-patch version-minor version-major release-patch release-minor release-major publish publish-test shell create-migration run-migration
 
 help:  ## Show this help message
 	@echo "Available commands:"
@@ -65,6 +65,15 @@ version-minor:  ## Bump minor version (0.X.0)
 version-major:  ## Bump major version (X.0.0)
 	hatch version major
 	@echo "New version: $$(hatch version)"
+
+release-patch:  ## Create and release a patch version (tests, commits, tags, pushes)
+	@./scripts/release.sh patch
+
+release-minor:  ## Create and release a minor version (tests, commits, tags, pushes)
+	@./scripts/release.sh minor
+
+release-major:  ## Create and release a major version (tests, commits, tags, pushes)
+	@./scripts/release.sh major
 
 publish-test:  ## Publish to TestPyPI
 	hatch publish -r test
