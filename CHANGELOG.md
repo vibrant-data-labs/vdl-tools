@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Improved `pyproject.toml` with optional dependencies and Hatch environments
 - Enhanced build and publishing workflow using Hatch
 
-## [0.0.5] - 2024-10-24
+## [1.0.1] - 2024-10-24
 
 ### Changed
 - Previous release (details to be filled in from git history)
