@@ -6,19 +6,21 @@ build-backend = "hatchling.build"
 name = "vdl-tools"
 dynamic = ["version"]
 dependencies = [
-    "alembic",
+    "alembic>=1.13.0,<2.0.0",         # tied to sqlalchemy
+    "altair",
     "awscli",
     "bokeh",
-    "boto3",
+    "boto3>=1.34.0",                  # AWS - generally stable but frequent updates
     "cairosvg",
     "circlify",
     "datasets",
     "dataclasses_json",
     "geopy",
     "geotext",
-    "google-auth-oauthlib",
-    "google-cloud-translate",
-    "google-api-python-client",
+    "GitPython",
+    "google-api-python-client>=2.100.0",
+    "google-cloud-translate>=3.11.0",
+    "google-auth-oauthlib>=1.0.0",
     "igraph",
     "instructor",
     "jsonlines",
@@ -28,10 +30,10 @@ dependencies = [
     "more-itertools",
     "networkx",
     "nltk",
-    "numpy",
-    "openai",
+    "numpy>=2.3.0,<3.0.0",
+    "openai>=1.0.0,<2.0.0",           # OpenAI frequently changes API
     "openpyxl",
-    "pandas",
+    "pandas>=2.0.0,<3.0.0",
     "plotly",
     "psycopg2-binary",
     "PySocks",
@@ -39,16 +41,16 @@ dependencies = [
     "regex",
     "requests",
     "requests-cache",
-    "scikit-learn",
+    "scikit-learn>=1.7.0,<2.0.0",     # sklearn changes APIs
     "scikit-network",
-    "scipy",
-    "selenium",
-    "sqlalchemy",
+    "scipy>=1.11.0,<2.0.0",           # scientific computing - be cautious
+    "selenium>=4.15.0,<5.0.0",        # selenium 4 was major change
+    "sqlalchemy>=2.0.0,<3.0.0",       # 2.0 was major rewrite
     "sqlalchemy-utils",
     "tiktoken",
     "treelib",
-    "torch",
-    "transformers",
+    "torch>=2.0.0,<3.0.0",            # torch major versions incompatible
+    "transformers>=4.35.0,<5.0.0",    # frequent API changes
     "umap",
     "url-normalize",
     "webdriver_manager",

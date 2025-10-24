@@ -1,4 +1,4 @@
-.PHONY: help install test test-all test-cov test-deps check-deps verify-dep-update lint format typing clean build version version-patch version-minor version-major release-patch release-minor release-major publish publish-test shell create-migration run-migration
+.PHONY: help install setup-cursor test test-all test-cov test-deps check-deps verify-dep-update lint format typing clean build version version-patch version-minor version-major release-patch release-minor release-major publish publish-test shell create-migration run-migration
 
 help:  ## Show this help message
 	@echo "Available commands:"
@@ -6,6 +6,9 @@ help:  ## Show this help message
 
 install:  ## Install package in development mode
 	hatch env create
+
+setup-cursor:  ## Configure Cursor to use Hatch environment
+	@./scripts/setup_cursor.sh
 
 test:  ## Run tests with current Python
 	hatch run test
