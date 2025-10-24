@@ -411,7 +411,7 @@ class InvestorAnalysis:
         if self.investor_funding_round_company_df is None:
             logger.warning("Investor funding round company DataFrame is empty. Running get_investors_porfolios() first.")
             self.get_investors_porfolios()
-        
+
         self.add_original_data(columns_to_count=columns_to_count)
 
         columns_to_count = self.columns_to_count if columns_to_count is None else columns_to_count
