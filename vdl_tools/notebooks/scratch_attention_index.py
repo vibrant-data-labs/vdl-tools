@@ -239,6 +239,12 @@ def _(edited_df):
 
 
 @app.cell
+def _(aier):
+    aier.taxonomy
+    return
+
+
+@app.cell
 def _(aier, edited_df, redistribute_funding_fracs):
     redistribute_funding_fracs(
         df=edited_df.value.copy(),
