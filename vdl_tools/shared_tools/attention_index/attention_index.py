@@ -217,8 +217,8 @@ class AttentionIndexer:
             self.filtered_funding_mapped_to_taxonomy_df.groupby(['tax_map_uid'] + taxonomy_level_columns)
             .agg({
                  # Sum up all the distributed_funding for all the lower levels 
-                 # Because we are at the round level this will have been multiplied for each round, so take the mean of it
                 "distributed_funding": "sum",
+                # Because we are at the round level this will have been multiplied for each round, so take the mean of it
                 "tax_map_fundingfrac": "mean",
             })
         ).reset_index()
@@ -254,8 +254,8 @@ class AttentionIndexer:
         self.level_tax_aggregated = (
             self.org_level_aggregation_df
             .groupby(taxonomy_level_columns)
-            .sum()
             [self._metric_column_names]
+            .sum()
             .reset_index()
         )
 
