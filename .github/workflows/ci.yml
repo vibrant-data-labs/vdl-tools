@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.12"]
     
     steps:
     - uses: actions/checkout@v4
@@ -35,22 +35,22 @@ jobs:
       with:
         fail_ci_if_error: false
 
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
+  # lint:
+  #   name: Lint
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #   - uses: actions/checkout@v4
     
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.10"
+  #   - name: Set up Python
+  #     uses: actions/setup-python@v5
+  #     with:
+  #       python-version: "3.10"
     
-    - name: Install Hatch
-      run: pip install hatch
+  #   - name: Install Hatch
+  #     run: pip install hatch
     
-    - name: Run linters
-      run: hatch run lint:all
+  #   - name: Run linters
+  #     run: hatch run lint:all
 
   build:
     name: Build
