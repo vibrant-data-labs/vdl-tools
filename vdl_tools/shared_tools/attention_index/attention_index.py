@@ -115,6 +115,8 @@ class AttentionIndexer:
         **kwargs,
     ):
         logger.info("Redistributing funding fractions")
+
+        # This function is what adds the No_Level categories to the funding mapped to taxonomy df
         self.distributed_funding_df = redistribute_funding_fracs(
             df=self.taxonomy_mapping_results,
             taxonomy=self.taxonomy,
@@ -125,6 +127,7 @@ class AttentionIndexer:
         if self._taxonomy_mapping_id_col != 'uid':
             self.distributed_funding_df['uid'] = self.distributed_funding_df[self._taxonomy_mapping_id_col]
         self.distributed_funding_df = self.distributed_funding_df[self.distributed_funding_df['FundingFrac'] > 0]
+
         self._additional_redistribution_modifications(**kwargs)
         return self.distributed_funding_df
 
@@ -198,6 +201,8 @@ class AttentionIndexer:
 
     def aggregate_funding_to_orgs(
         self,
+        level,
+        **kwargs,
     ):
         """
         After filtering the rounds, we aggregate the funding to the orgs
@@ -206,19 +211,15 @@ class AttentionIndexer:
         with the distributed funding amounts for that organization / taxonomy level combination
         """
 
-        self.taxonomy_level_columns = []
-        for i in range(0, self.distributed_funding_level + 1):
-            self.taxonomy_level_columns.append(f"tax_map_level{i}")
-
-        # Apply level-specific filtering before aggregation
-        # changed_df = self._change_df_at_level(self.distributed_funding_level, self.filtered_funding_mapped_to_taxonomy_df)
-        changed_df = self.filtered_funding_mapped_to_taxonomy_df
+        taxonomy_level_columns = self._make_taxonomy_level_columns(level)
 
         self.org_level_aggregation_df = (
-            changed_df.groupby(['tax_map_uid'] + self.taxonomy_level_columns)
+            self.filtered_funding_mapped_to_taxonomy_df.groupby(['tax_map_uid'] + taxonomy_level_columns)
             .agg({
-                "distributed_funding": "sum", # Sum up all the distributed_funding for all the lower levels 
-                "tax_map_fundingfrac": "mean", # Because we are at the round level this will have been multiplied for each round, so take the mean of it
+                 # Sum up all the distributed_funding for all the lower levels 
+                 # Because we are at the round level this will have been multiplied for each round, so take the mean of it
+                "distributed_funding": "sum",
+                "tax_map_fundingfrac": "mean",
             })
         ).reset_index()
 
@@ -231,7 +232,7 @@ class AttentionIndexer:
 
         return self.org_level_aggregation_df
 
-    def aggregate_to_max_level(self):
+    def aggregate_to_level(self, level):
         """
         Aggregate the funding to the max level
 
@@ -248,21 +249,23 @@ class AttentionIndexer:
             # "whole_orgs"
         ]
 
-        self.max_level_tax_aggregated = (
+        taxonomy_level_columns = self._make_taxonomy_level_columns(level)
+
+        self.level_tax_aggregated = (
             self.org_level_aggregation_df
-            .groupby(self.taxonomy_level_columns)
+            .groupby(taxonomy_level_columns)
             .sum()
             [self._metric_column_names]
             .reset_index()
         )
 
-        self.max_level_tax_aggregated['funding_per_company'] = (
-            self.max_level_tax_aggregated['distributed_funding'] /
-            self.max_level_tax_aggregated['fractional_orgs']
+        self.level_tax_aggregated['funding_per_company'] = (
+            self.level_tax_aggregated['distributed_funding'] /
+            self.level_tax_aggregated['fractional_orgs']
         )
         self._metric_column_names.append('funding_per_company')
 
-        self.min_max_metrics = self.max_level_tax_aggregated.agg({
+        self.min_max_metrics = self.level_tax_aggregated.agg({
             metric: ["min", "max"]
             for metric in self._metric_column_names
         })
@@ -270,10 +273,10 @@ class AttentionIndexer:
         self._min_max_column_names = []
         for _col in self._metric_column_names:
             for agg_name in ["min", "max"]:
-                self.max_level_tax_aggregated[f"{_col}_{agg_name}"] = self.min_max_metrics[_col][agg_name]
+                self.level_tax_aggregated[f"{_col}_{agg_name}"] = self.min_max_metrics[_col][agg_name]
                 self._min_max_column_names.append(f"{_col}_{agg_name}")
 
-        return self.max_level_tax_aggregated
+        return self.level_tax_aggregated
 
     def _zero_max_scale_function(self, x, min_value, max_value):
         return max_min_normalization(x, max_value=max_value, min_value=0)
@@ -295,13 +298,13 @@ class AttentionIndexer:
             scaled_column_name = f"{scale_type}_scale_{_col}"
             self._scaled_column_names.add(scaled_column_name)
 
-            self.max_level_tax_aggregated[scaled_column_name] = (
-                self.max_level_tax_aggregated.apply(
+            self.level_tax_aggregated[scaled_column_name] = (
+                self.level_tax_aggregated.apply(
                     lambda x: scale_function(x[_col], min_value=x[f"{_col}_min"], max_value=x[f"{_col}_max"]),
                     axis=1
                 )
             )
-        return self.max_level_tax_aggregated
+        return self.level_tax_aggregated
 
     def add_geometric_mean_to_scaled_metrics(
         self,
@@ -324,8 +327,8 @@ class AttentionIndexer:
         ]
 
         geo_mean_column_name = f'{scale_type}_geometric_mean'
-        self.max_level_tax_aggregated[geo_mean_column_name] = (
-            self.max_level_tax_aggregated.apply(
+        self.level_tax_aggregated[geo_mean_column_name] = (
+            self.level_tax_aggregated.apply(
                 lambda x: geometric_mean_values(x[columns_for_calc]),
                 axis=1
             ) ** (1.0 / additional_rooting_factor)
@@ -333,12 +336,12 @@ class AttentionIndexer:
         self._geometric_mean_column_names = self._geometric_mean_column_names or set()
         self._geometric_mean_column_names.add(geo_mean_column_name)
 
-        min_geo_mean = self.max_level_tax_aggregated[geo_mean_column_name].min()
-        max_geo_mean = self.max_level_tax_aggregated[geo_mean_column_name].max()
+        min_geo_mean = self.level_tax_aggregated[geo_mean_column_name].min()
+        max_geo_mean = self.level_tax_aggregated[geo_mean_column_name].max()
 
         rescaled_geo_mean_column_name = f'{scale_type}_scale_{geo_mean_column_name}'
         self._geometric_mean_column_names.add(rescaled_geo_mean_column_name)
-        self.max_level_tax_aggregated[rescaled_geo_mean_column_name] = self.max_level_tax_aggregated.apply(
+        self.level_tax_aggregated[rescaled_geo_mean_column_name] = self.level_tax_aggregated.apply(
             lambda x: scale_function(
                 x[geo_mean_column_name],
                 min_value=min_geo_mean,
@@ -347,24 +350,30 @@ class AttentionIndexer:
             axis=1
         )
 
-        return self.max_level_tax_aggregated
+        return self.level_tax_aggregated
+
+    def _make_taxonomy_level_columns(self, level):
+        taxonomy_level_columns = []
+        for i in range(0, level + 1):
+            taxonomy_level_columns.append(f"tax_map_level{i}")
+        return taxonomy_level_columns
 
     def calculate_attention_index_at_level(
         self,
         level,
     ):
 
-        self.distributed_funding_level = level
-
-        self.aggregate_funding_to_orgs()
-        self.aggregate_to_max_level()
+        self.aggregate_funding_to_orgs(level)
+        self.aggregate_to_level(level)
         self.scale_metrics(scale_type="min_max")
         self.scale_metrics(scale_type="zero_max")
         self.add_geometric_mean_to_scaled_metrics(scale_type="min_max")
         self.add_geometric_mean_to_scaled_metrics(scale_type="zero_max")
 
-        return_cols = self.taxonomy_level_columns + list(self._geometric_mean_column_names)
-        return self.max_level_tax_aggregated[return_cols]
+        taxonomy_level_columns = self._make_taxonomy_level_columns(level)
+
+        return_cols = taxonomy_level_columns + list(self._geometric_mean_column_names)
+        return self.level_tax_aggregated[return_cols]
 
     def calculate_attention_index(
         self,
@@ -390,21 +399,9 @@ class AttentionIndexer:
                     how='left',
                     suffixes=('', f'_level_{level}'),
                 )
-                # drop_cols = [x for x in attention_index_df.columns if x.endswith(f'_level_{level}')]
-                # attention_index_df = attention_index_df.drop(columns=drop_cols)
             join_cols.append(f'tax_map_level{level}')
 
-
-        # # the last level taxonomy category will be blank if it is not a match,
-        # # But the parents are ok
-        # # Fill in with the No_Level X and we can rename later
-        # attention_index_df[f'tax_map_level{max_level}'] = attention_index_df.apply(
-        #     lambda x: x[f'tax_map_level{max_level}'] if x[f'tax_map_level{max_level}']
-        #     else f"No_Level_{max_level}_{x[f'tax_map_level{max_level - 1}']}",
-        #     axis=1
-        # )
-
-        taxonomy_level_columns = [f'tax_map_level{i}' for i in range(0, max_level + 1)]
+        taxonomy_level_columns = self._make_taxonomy_level_columns(max_level)
 
         column_order = taxonomy_level_columns + [x for x in attention_index_df.columns if x not in taxonomy_level_columns]
         return attention_index_df[column_order]

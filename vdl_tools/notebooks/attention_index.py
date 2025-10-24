@@ -172,7 +172,7 @@ def _(
 
 @app.cell
 def _(aier):
-    attention_index = aier.calculate_attention_index(max_level=3)
+    attention_index = aier.calculate_attention_index(max_level=2)
     attention_index
     return (attention_index,)
 
@@ -193,14 +193,15 @@ def _(attention_index):
         )
         .mark_circle()
         .encode(
-            x=alt.X(field='min_max_scale_min_max_geometric_mean_level_3', type='quantitative'),
+            # x=alt.X(field='min_max_scale_min_max_geometric_mean_level_3', type='quantitative'),
+            x=alt.X(field='min_max_scale_min_max_geometric_mean_level_2', type='quantitative'),
             y=alt.Y(field='tax_map_level1', type='nominal', sort=_sort_order),
             color=alt.Color(field='tax_map_level1', type='nominal'),
             tooltip=[
                 alt.Tooltip(field='tax_map_level1'),
                 alt.Tooltip(field='tax_map_level2'),
-                alt.Tooltip(field='tax_map_level3'),
-                alt.Tooltip(field='min_max_scale_min_max_geometric_mean_level_3')
+                # alt.Tooltip(field='tax_map_level3'),
+                # alt.Tooltip(field='min_max_scale_min_max_geometric_mean_level_3')
             ]
         )
         .properties(
@@ -256,7 +257,7 @@ def _(
     solution_results = {}
 
     for start_year in range(2010, 2021):
-        end_year = start_year + 5
+        end_year = start_year + 3
         print(start_year)
         _aier = AttentionIndexer(
             taxonomy=taxonomy,
@@ -466,7 +467,6 @@ def _(alt, mo, total_solution_results):
         )
     )
     mo.ui.altair_chart(_chart)
-
     return (total_subpill_results,)
 
 
