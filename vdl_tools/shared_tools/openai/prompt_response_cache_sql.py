@@ -386,7 +386,10 @@ class PromptResponseCacheSQL():
             )
             return data.to_dict()
 
+        if len(unfound_rows) == 0:
+            return res
         n_run = 0
+
         with ThreadPool(max_workers=max_workers) as executor:
             for chunk in chunked(unfound_rows, n_per_commit):
                 given_ids, _ = zip(*chunk)

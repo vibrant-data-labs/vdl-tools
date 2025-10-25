@@ -9,6 +9,7 @@ dependencies = [
     "alembic>=1.13.0,<2.0.0",         # tied to sqlalchemy
     "altair",
     "awscli",
+    "beautifulsoup4>=4.14.0<5.0.0",
     "bokeh",
     "boto3>=1.34.0",                  # AWS - generally stable but frequent updates
     "cairosvg",
@@ -52,6 +53,7 @@ dependencies = [
     "torch>=2.0.0,<3.0.0",            # torch major versions incompatible
     "transformers>=4.35.0,<5.0.0",    # frequent API changes
     "umap",
+    "unstructured[all-docs]>=0.16.12,<1.0.0",
     "url-normalize",
     "webdriver_manager",
     "xlsxwriter",
