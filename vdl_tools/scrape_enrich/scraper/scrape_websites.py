@@ -423,7 +423,7 @@ def scrape_websites_psql(
                             newly_scraped_data.append(webpage_obj.to_dict())
                         session.commit()
                     except KeyboardInterrupt:
-                        logger.warn("Received KeyboardInterrupt, returning the currently scraped data...")
+                        logger.warning("Received KeyboardInterrupt, returning the currently scraped data...")
                         break
 
         # Combine existing and newly scraped data
@@ -439,13 +439,6 @@ def scrape_websites_psql(
             # Add cleaned_home_key to the dataframe so we can look up the data by home_url
             scraped_df_for_combining = all_scraped_data_df.copy()
             scraped_df_for_combining['cleaned_home_key'] = scraped_df_for_combining['source'].apply(extract_website_name)
-
-            # scraped_df_for_combining = scraped_df_for_combining[
-            #     ~(
-            #         (scraped_df_for_combining['text'].isnull()) |
-            #         (scraped_df_for_combining['text'].apply(lambda x: len(x) <= MIN_TEXT_LENGTH))
-            #     )
-            # ]
 
             # Only combine data for websites that exist in WebPagesScraped but not in WebPagesParsed
             unfound_index_rows = [

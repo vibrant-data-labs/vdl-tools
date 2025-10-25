@@ -1,11 +1,8 @@
-from io import BytesIO
-
-from bs4 import BeautifulSoup, ResultSet
+from bs4 import BeautifulSoup
 import re
 import logging
 
 from unstructured.partition.html import partition_html
-from unstructured.partition.pdf import partition_pdf
 
 from vdl_tools.shared_tools.web_summarization.page_choice.constants import PATHS_TO_KEEP
 from vdl_tools.shared_tools.web_summarization.page_choice.choose_pages import filter_links
@@ -15,7 +12,6 @@ from vdl_tools.shared_tools.tools.text_cleaning import clean_scraped_text
 logging.getLogger("urllib3").setLevel(logging.CRITICAL)
 logging.getLogger("unstructured").setLevel(logging.WARNING)
 logging.getLogger('datasets').setLevel(logging.WARNING)
-
 
 
 def parse_out_sections(elements, add_section_links=False):
@@ -103,14 +99,17 @@ def create_page_text(elements, add_section_links=False):
     return page_text.strip()
 
 
-def get_page_text(url, html, add_section_links=False):
+def get_page_text(
+    url,
+    html,
+    add_section_links=False
+):
     if isinstance(html, bytes):
         return ""
 
-    if url.endswith('pdf'):
-        elements = partition_pdf(file=BytesIO(html))
-        page_text = create_page_text([x.to_dict() for x in elements])
-        return page_text
+    if url.endswith('.pdf'):
+        logger.warning(f"PDF file detected for {url}, skipping")
+        return ""
 
     html = html.replace("<strong>", "<b>").replace("</strong>", "</b>")
     html = html.replace("<em>", "<i>").replace("</em>", "</i>")
