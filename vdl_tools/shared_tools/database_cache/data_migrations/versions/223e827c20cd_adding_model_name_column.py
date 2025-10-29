@@ -11,6 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
+from vdl_tools.shared_tools.tools.logger import logger
+
 # revision identifiers, used by Alembic.
 revision: str = '223e827c20cd'
 down_revision: Union[str, None] = '0702935bb23f'
@@ -33,4 +35,7 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_prompt_response_model_name'), table_name='prompt_response')
     op.drop_constraint('prompt_response_pkey', 'prompt_response', type_='primary')
     op.drop_column('prompt_response', 'model_name')
+    # Drop rows that have multiple (prompt_id, given_id) combinations
+    logger.info("Dropping rows that have multiple (prompt_id, given_id) combinations")
+    op.execute("DELETE FROM prompt_response WHERE (prompt_id, given_id) IN (SELECT prompt_id, given_id FROM prompt_response GROUP BY prompt_id, given_id HAVING COUNT(*) > 1)")
     op.create_primary_key('prompt_response_pkey', 'prompt_response', ['prompt_id', 'given_id'])
