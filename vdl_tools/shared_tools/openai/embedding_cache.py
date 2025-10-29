@@ -144,7 +144,7 @@ class EmbeddingCache():
             given_id=given_id,
             input_text=text,
             response_full={"data": response},
-            embedding=np.array(response),
+            embedding=response,
         )
 
         self.session.merge(embedding_obj)
