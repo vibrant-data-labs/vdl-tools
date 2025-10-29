@@ -291,10 +291,12 @@ class FewShotCache(InstructorPRC):
         given_id: str,
         text,
         response,
+        model: Optional[str] = None,
     ):
         prompt_response_obj = PromptResponse(
             prompt_id=self.prompt.id,
             given_id=given_id,
+            model_name=model,
             input_text=json.dumps(text),
             response_full=response.dict(),
             response_text=json.dumps(response.choices[0].message.tool_calls[0].function.parsed_arguments.dict()),

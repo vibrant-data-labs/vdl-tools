@@ -84,10 +84,12 @@ class InstructorPRC(PromptResponseCacheSQL):
         given_id: str,
         text,
         response,
+        model: str = None,
     ):
         prompt_response_obj = PromptResponse(
             prompt_id=self.prompt.id,
             given_id=given_id,
+            model_name=model,
             input_text=text,
             response_full=response._raw_response.model_dump(),
             response_text=json.dumps(response.dict()),
