@@ -26,7 +26,11 @@ import vdl_tools.scrape_enrich.geocode as geocode
 import vdl_tools.scrape_enrich.process_images as images
 import vdl_tools.scrape_enrich.tags_from_text as tft
 import vdl_tools.shared_tools.common_functions as cf
-import vdl_tools.shared_tools.gpt_relevant_for_thinning as gpt
+from vdl_tools.shared_tools.model_caches.climate_relevance_cache import (
+    CB_CD_MODEL_4OMINI,
+    DEFAULT_CLIMATE_SYSTEM_PROMPT,
+    DEFAULT_CLIMATE_PROMPT_FORMAT,
+)
 
 
 GLOBAL_CONFIG = get_configuration()
@@ -398,9 +402,9 @@ def log_major_step(text):
 
 def run_pipeline(
     paths,
-    relevance_model_name=gpt.cb_cd_model_4omini,
-    relevance_model_system_prompt=None,
-    relevance_model_prompt_format=None,
+    relevance_model_name=CB_CD_MODEL_4OMINI,
+    relevance_model_system_prompt=DEFAULT_CLIMATE_SYSTEM_PROMPT,
+    relevance_model_prompt_format=DEFAULT_CLIMATE_PROMPT_FORMAT,
     adaptation_model_id=adp.CPI_ADAPTATION_MODEL_2024_ID,
     num_records=None,
     run_process_images=False,
