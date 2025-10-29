@@ -12,10 +12,11 @@ def backfill_climate_relevance_predictions(
 ):
     df = df[df['text_for_relevance_model'].notna()]
 
-    df = pd.concat([
-        df[df['Data Source'] == "Crunchbase"].iloc[:num_records_per_source],
-        df[df['Data Source'] == "Candid"].iloc[:num_records_per_source],
-    ])
+    if num_records_per_source:
+        df = pd.concat([
+            df[df['Data Source'] == "Crunchbase"].iloc[:num_records_per_source],
+            df[df['Data Source'] == "Candid"].iloc[:num_records_per_source],
+        ])
     predictions = generate_climate_relevance_predictions(
         df=df,
         column_text='text_for_relevance_model',
