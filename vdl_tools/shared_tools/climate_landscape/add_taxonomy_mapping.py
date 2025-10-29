@@ -27,6 +27,56 @@ def add_taxonomy_mapping(
     mapping_name=None,
     max_distr_funding_level=2,
 ):
+    """
+    Add taxonomy mapping to a dataframe.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The dataframe to add taxonomy mapping to.
+    entity_embeddings : pandas.DataFrame
+        The entity embeddings to use for the taxonomy mapping.
+    taxonomy : list of dict
+        The taxonomy to use for the taxonomy mapping.
+    id_col : str
+        The column name of the id column.
+    text_col : str
+        The column name of the text column.
+    name_col : str, optional
+        The column name of the name column.
+    nmax : int, optional
+        The maximum number of entities to match.
+    threshold : int, optional
+        The threshold for the taxonomy mapping.
+    pct_delta : int, optional
+        The percentage delta for the taxonomy mapping.
+    run_fewshot_classification : bool, optional
+        Whether to run fewshot classification.
+    filter_fewshot_classification : bool, optional
+        Whether to filter fewshot classification.
+    fewshot_examples : list of dict, optional
+        The fewshot examples to use for the taxonomy mapping.
+    use_cached_results : bool, optional
+        Whether to use cached results.
+    max_workers : int, optional
+        The maximum number of workers to use.
+    force_parents : bool, optional
+        Whether to force parents.
+    distribute_funding : bool, optional
+        Whether to distribute funding.
+    mapping_name : str, optional
+        The name of the mapping.
+    max_distr_funding_level : int, optional
+        The maximum depth of the funding distribution.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The dataframe with the taxonomy mapping.
+    pandas.DataFrame
+        The distributed funding dataframe.
+    """
+
     logger.info("Starting Taxonomy mapping for %s", mapping_name)
     if entity_embeddings is None:
         entity_embeddings = tm.get_or_compute_embeddings(

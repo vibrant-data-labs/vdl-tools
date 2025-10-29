@@ -87,7 +87,11 @@ class RelevanceCache(PromptResponseCacheSQL):
             **kwargs
         )
 
-    def _parse_prediction_and_probability(self, pred_text: str, logprob: float = None) -> Tuple[Optional[int], Optional[float]]:
+    def _parse_prediction_and_probability(
+        self,
+        pred_text: str,
+        logprob: float = None
+    ) -> Tuple[Optional[int], Optional[float]]:
         """Parse prediction text and logprob into prediction and probability.
 
         Parameters
@@ -338,7 +342,7 @@ def generate_predictions(
             )
 
             # Prepare data for bulk processing
-            given_ids_texts = list(zip(df[idn], df[column_text]))
+            given_ids_texts =(zip(df[idn], df[column_text]))
 
             # Get predictions using bulk method
             results = cache.bulk_get_relevance(

@@ -10,36 +10,37 @@ from vdl_tools.shared_tools.model_caches.relevance_cache import generate_predict
 from vdl_tools.shared_tools.tools.logger import logger
 
 
-# Fine-tuned model definitions
-CB_CD_MODEL_4OMINI = 'ft:gpt-4o-mini-2024-07-18:vibrant-data-labs:cb-cd-just-conservative:9x1MMlJz'
-CB_CD_MODEL_4OMINI_TAILWIND = "ft:gpt-4o-mini-2024-07-18:vibrant-data-labs:cb-cd-tw-airtable:A9l2oRot"
+# Fine-tuned model definitions for ARPA-H / Health relevance
+ARPAH_MODEL = 'ft:gpt-4.1-mini-2025-04-14:vibrant-data-labs:arpa-h:Bzr8QOcl'
+ARPAH_CONSERVATIVE = 'ft:gpt-4.1-mini-2025-04-14:vibrant-data-labs:without-maybe:CMM6fpnL'
 
 
-DEFAULT_CLIMATE_SYSTEM_PROMPT = "You are a climate change expert."
-DEFAULT_CLIMATE_PROMPT_FORMAT = (
-    "Categorize the following company descriptions as either pertinent (1) or irrelevant (0) to addressing the climate crisis: {text} -> \n#"
+DEFAULT_HEALTH_SYSTEM_PROMPT = "You are a health and biomedical research expert."
+DEFAULT_HEALTH_PROMPT_FORMAT = (
+    "Categorize the following company descriptions as either pertinent (1) or irrelevant (0) to ARPA-H's mission of advancing health and biomedical research: {text} -> \n#"
 )
 
-# This is technically unneccsary but convenience function
-def generate_climate_relevance_predictions(
+# Convenience function for ARPA-H / Health relevance predictions
+def generate_health_relevance_predictions(
     df: pd.DataFrame,
     column_text: str,
     idn: str = "uuid",
-    model: str = CB_CD_MODEL_4OMINI,
+    model: str = ARPAH_CONSERVATIVE,
     max_workers: int = 3,
     n_per_commit: int = 50,
     use_cached_results: bool = True,
     label_override_dict: Dict[str, int] = None,
-    system_prompt: str = DEFAULT_CLIMATE_SYSTEM_PROMPT,
-    prompt_format: str = DEFAULT_CLIMATE_PROMPT_FORMAT,
-    prompt_name: str = "climate_relevance_classification",
+    label_override_filepath: str = None,
+    system_prompt: str = DEFAULT_HEALTH_SYSTEM_PROMPT,
+    prompt_format: str = DEFAULT_HEALTH_PROMPT_FORMAT,
+    prompt_name: str = "health_relevance_classification",
     session=None,
 ) -> Dict[str, Tuple[Optional[int], Optional[float]]]:
-    """Generate climate relevance predictions for a DataFrame.
+    """Generate health/ARPA-H relevance predictions for a DataFrame.
 
     This is a standalone function that provides a similar interface to the original
     generate_predictions function in gpt_relevant_for_thinning.py, but uses the
-    modern ClimateRelevanceCache with database caching.
+    modern RelevanceCache with database caching.
 
     Parameters
     ----------
@@ -49,7 +50,7 @@ def generate_climate_relevance_predictions(
         Name of the column containing the text to classify.
     idn : str, default "uuid"
         Name of the column containing unique identifiers.
-    model : str, default CB_CD_MODEL_4OMINI
+    model : str, default ARPAH_CONSERVATIVE
         Fine-tuned model to use for predictions.
     max_workers : int, default 3
         Number of worker threads for parallel processing.
@@ -59,30 +60,31 @@ def generate_climate_relevance_predictions(
         Whether to use cached results.
     label_override_dict : dict of str to int, optional
         Optional dict of {id: label} overrides.
-    system_prompt : str, default DEFAULT_CLIMATE_SYSTEM_PROMPT
+    label_override_filepath: str, optional
+        Optional filepath to the label_override dict
+    system_prompt : str, default DEFAULT_HEALTH_SYSTEM_PROMPT
         System prompt for the model.
-    prompt_format : str, default DEFAULT_CLIMATE_PROMPT_FORMAT
+    prompt_format : str, default DEFAULT_HEALTH_PROMPT_FORMAT
         Format string for the user prompt.
-    prompt_name : str, default "climate_relevance_classification"
+    prompt_name : str, default "health_relevance_classification"
         Name for the prompt in the database.
     session : sqlalchemy.orm.Session, optional
         Database session. If None, creates a new session.
 
     Returns
     -------
-    dict of str to tuple of (int or None, float or None)
-        Dictionary mapping IDs to (prediction, probability) tuples.
+    pd.DataFrame
+        DataFrame with added 'prediction' and 'probability' columns.
 
     Examples
     --------
     >>> import pandas as pd
     >>> df = pd.DataFrame({
     ...     'uuid': ['org_1', 'org_2'],
-    ...     'description': ['Solar panel manufacturer', 'Restaurant chain']
+    ...     'description': ['Biotech developing cancer therapies', 'Restaurant chain']
     ... })
-    >>> predictions = generate_predictions(df, 'description', 'uuid')
-    >>> print(predictions)
-    {'org_1': (1, 0.95), 'org_2': (0, 0.98)}
+    >>> df_with_predictions = generate_health_relevance_predictions(df, 'description', 'uuid')
+    >>> print(df_with_predictions[['uuid', 'prediction', 'probability']])
     """
     return generate_predictions(
         df=df,
@@ -93,8 +95,10 @@ def generate_climate_relevance_predictions(
         n_per_commit=n_per_commit,
         use_cached_results=use_cached_results,
         label_override_dict=label_override_dict,
+        label_override_filepath=label_override_filepath,
         system_prompt=system_prompt,
         prompt_format=prompt_format,
         prompt_name=prompt_name,
         session=session,
     )
+

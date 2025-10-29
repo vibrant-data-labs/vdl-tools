@@ -21,6 +21,7 @@ from vdl_tools.shared_tools.web_summarization.website_summarization_cache_psql i
 )
 from vdl_tools.shared_tools.web_summarization.website_summarization_psql import summarize_scraped_df
 
+from vdl_tools.shared_tools.model_caches.climate_relevance_cache import generate_climate_relevance_predictions
 import vdl_tools.scrape_enrich.geocode as geocode
 import vdl_tools.scrape_enrich.process_images as images
 import vdl_tools.scrape_enrich.tags_from_text as tft
@@ -267,34 +268,26 @@ def run_relevance_model(
     prompt_format=None,
 ):
 
-    model_name_safe = model_name.replace("-", "_").replace(":", "_")
-
-    # Replace the MODEL_NAME_HOLDER with the model name it's in the parent directory
-    save_path = str(save_path).replace("MODEL_NAME_HOLDER", model_name_safe)
-
     if label_override_filepath:
         label_override_filepath = str(label_override_filepath).replace("MODEL_NAME_HOLDER", model_name_safe)
 
-    predictions = gpt.generate_predictions(
-        df,
-        500,
-        column_text= column_text, #'text_for_relevance_model',
-        save_path=save_path,
-        model=model_name,
+    df_with_predictions = generate_climate_relevance_predictions(
+        df=df,
+        column_text=column_text,
         idn=idn,
-        label_override_filepath=label_override_filepath,
+        model=model_name,
         use_cached_results=use_cached_results,
         system_prompt=system_prompt,
         prompt_format=prompt_format,
+        label_override_filepath=label_override_filepath,
     )
 
-    df['prediction_relevant'], df['probability_relevant'] = (
-        zip(*df[idn].map(lambda x: predictions.get(x, (None, None))))
-    )
-    good_predictions_mask = df["prediction_relevant"].isin([0, 1])
-    errors = df[~good_predictions_mask].copy()
-    df = df[good_predictions_mask].copy()
-    return df, errors
+    df_with_predictions.rename(columns={"prediction": "prediction_relevant", "probability": "probability_relevant"}, inplace=True)
+
+    good_predictions_mask = df_with_predictions["prediction_relevant"].isin([0, 1])
+    errors = df_with_predictions[~good_predictions_mask].copy()
+    df_with_predictions = df_with_predictions[good_predictions_mask].copy()
+    return df_with_predictions, errors
 
 
 def add_geotags(
@@ -444,7 +437,6 @@ def run_pipeline(
         prompt_format=relevance_model_prompt_format,
         column_text='text_for_relevance_model',
         idn=id_col,
-        save_path=paths['relevance_model_predictions_path'],
         label_override_filepath=label_override_filepath,
     )
     df_cb_cd.to_json(paths['relevance_model_results'], orient='records')
