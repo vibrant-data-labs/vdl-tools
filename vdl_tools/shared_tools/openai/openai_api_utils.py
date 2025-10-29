@@ -73,9 +73,11 @@ def _get_completion_kwargs(
     presence_penalty=0,
     stop=None,
     response_format_type="text",
+    logprobs=None,
+    top_logprobs=None,
 ):
 
-    model_name = MODEL_DATA[model]["model_name"]
+
     messages = messages or []
     if not messages and prompt:
         messages = [
@@ -89,7 +91,7 @@ def _get_completion_kwargs(
 
 
     kwargs = {
-        "model": model_name,
+        "model": model,
         "temperature": temperature,
         "messages": messages,
         "max_tokens": max_tokens,
@@ -100,10 +102,22 @@ def _get_completion_kwargs(
         "stop": stop,
         "response_format": {"type": response_format_type},
     }
+    
+    # Add logprobs if specified
+    if logprobs is not None:
+        kwargs["logprobs"] = logprobs
+        if top_logprobs is not None:
+            kwargs["top_logprobs"] = top_logprobs
 
-    if model_name == "o3-mini":
+    if model in ("o3-mini", "gpt-5", "gpt-5-nano", "gpt-5-mini"):
         max_tokens = kwargs.pop("max_tokens")
         kwargs["max_completion_tokens"] = max_tokens
+        kwargs.pop("top_p")
+        kwargs.pop("temperature")
+        kwargs.pop("seed")
+        kwargs.pop("frequency_penalty")
+        kwargs.pop("presence_penalty")
+        kwargs.pop("stop")
 
     return kwargs
 
@@ -123,6 +137,8 @@ async def get_completion_async(
     response_format_type="text",
     return_all=True,
     dry_run=False,
+    logprobs=None,
+    top_logprobs=None,
 ):
     kwargs = _get_completion_kwargs(
         prompt,
@@ -137,6 +153,8 @@ async def get_completion_async(
         presence_penalty=presence_penalty,
         stop=stop,
         response_format_type=response_format_type,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
     )
     if dry_run:
         return kwargs
@@ -162,6 +180,8 @@ def get_completion(
     return_all=True,
     verbose=False,
     response_format_type="text",
+    logprobs=None,
+    top_logprobs=None,
 ):
     if not verbose:
         logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -181,7 +201,9 @@ def get_completion(
         frequency_penalty=frequency_penalty,
         presence_penalty=presence_penalty,
         stop=stop,
-    response_format_type=response_format_type
+        response_format_type=response_format_type,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
     )
 
     completion = CLIENT.chat.completions.create(**kwargs)

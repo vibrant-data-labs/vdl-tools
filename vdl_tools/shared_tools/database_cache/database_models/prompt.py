@@ -6,6 +6,7 @@ from sqlalchemy import (
     Integer,
     ForeignKey,
     String,
+    PrimaryKeyConstraint,
 )
 from sqlalchemy_utils import generic_repr
 from sqlalchemy.dialects.postgresql import JSONB
@@ -53,13 +54,20 @@ class PromptResponse(BaseMixin):
     """Table to hold the responses for prompts"""
     __tablename__ = 'prompt_response'
 
+    __table_args__ = (
+        PrimaryKeyConstraint('prompt_id', 'given_id', 'model_name', name='unique_prompt_given_id_model_name'),
+    )
+
     prompt_id = Column(String, ForeignKey('prompt.id', onupdate="CASCADE", ondelete="CASCADE"), primary_key=True, index=True)
     given_id = Column(String, primary_key=True, index=True)
+    model_name = Column(String, primary_key=True, index=True, nullable=True)
     text_id = Column(String, index=True)
     input_text = Column(String, nullable=False)
     response_full = Column(JSONB, nullable=False)
     response_text = Column(String, nullable=True)
     num_errors = Column(Integer, nullable=True)
+
+
 
     def __init__(self, **kwargs):
         if 'text_id' not in kwargs:
