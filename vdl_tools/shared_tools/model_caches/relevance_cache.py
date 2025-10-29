@@ -25,7 +25,7 @@ class RelevanceCache(PromptResponseCacheSQL):
         model: str,
         system_prompt: str,
         prompt_format: str,
-        prompt_name: str = "climate_relevance_classification",
+        prompt_name: str,
     ):
         """Initialize the ClimateRelevanceCache.
 
@@ -33,16 +33,15 @@ class RelevanceCache(PromptResponseCacheSQL):
         ----------
         session : sqlalchemy.orm.Session
             Database session for caching operations.
-        model : str, default CB_CD_MODEL_4OMINI
+        model : str,
             Fine-tuned model to use for predictions.
-        system_prompt : str, default DEFAULT_CLIMATE_SYSTEM_PROMPT
+        system_prompt : str,
             System prompt for the model.
-        prompt_format : str, default DEFAULT_CLIMATE_PROMPT_FORMAT
+        prompt_format : str,
             Format string for the user prompt (should include {text} placeholder).
-        prompt_name : str, default "climate_relevance_classification"
+        prompt_name : str,
             Name for the prompt in the database.
         """
-        self.model = model
         self.system_prompt = system_prompt
         self.prompt_format = prompt_format
 
@@ -50,6 +49,7 @@ class RelevanceCache(PromptResponseCacheSQL):
             session=session,
             prompt_str=prompt_format,  # Just use the prompt format directly
             prompt_name=prompt_name,
+            model=model,
             filter_by_model=True,  # Must be true since model is very important
         )
 

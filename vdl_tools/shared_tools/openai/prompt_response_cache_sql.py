@@ -146,6 +146,7 @@ class PromptResponseCacheSQL():
             PromptResponse.prompt_id == self.prompt.id,
             PromptResponse.text_id.in_(text_ids),
         ]
+
         if self.filter_by_model:
             filters.append(PromptResponse.model_name == self.model)
 

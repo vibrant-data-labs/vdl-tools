@@ -125,7 +125,6 @@ def extract_keywords_from_text(
         )
         raw_kw = kw_cache.bulk_get_cache_or_run(
             given_ids_texts=ids_text_prompts,
-            model=model,
             use_cached_result=True,
         )
 
