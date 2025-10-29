@@ -1,9 +1,4 @@
-
-import math
-import logging
-from typing import Optional, Tuple, List, Dict, Any
-import json
-from pathlib import Path
+from typing import Optional, Tuple, Dict
 
 import pandas as pd
 
@@ -72,7 +67,6 @@ def generate_health_relevance_predictions(
     prompt_name: str = "health_relevance_classification",
     session=None,
 ) -> Dict[str, Tuple[Optional[int], Optional[float]]]:
-
     """Generate health/ARPA-H relevance predictions for a DataFrame.
 
     This is a standalone function that provides a similar interface to the original
