@@ -102,6 +102,7 @@ class FewShotCache(InstructorPRC):
         self,
         session,
         model="gpt-4.1-mini",
+        filter_by_model=False,
     ):
         prompt_str = "You are an expert in climate mitigation, adaptation, resilience, and general climate change topics."
 
@@ -112,6 +113,7 @@ class FewShotCache(InstructorPRC):
             prompt_name=prompt_name,
             model=model,
             response_model=IsRelevant,
+            filter_by_model=filter_by_model,
         )
 
     def _format_messages(

@@ -53,7 +53,7 @@ class RelevanceCache(PromptResponseCacheSQL):
             filter_by_model=True,  # Must be true since model is very important
         )
 
-    def get_completion(self, prompt_str: str, text: str, model: str = None, **kwargs) -> Any:
+    def get_completion(self, prompt_str: str, text: str, **kwargs) -> Any:
         """Override the base get_completion to handle fine-tuned models with logprobs.
 
         Parameters
@@ -72,7 +72,6 @@ class RelevanceCache(PromptResponseCacheSQL):
         Any
             OpenAI completion response with logprobs.
         """
-        model = model or self.model
 
         # Format the text using our prompt format
         formatted_text = self.prompt_format.format(text=text)
@@ -81,7 +80,7 @@ class RelevanceCache(PromptResponseCacheSQL):
         return get_completion(
             prompt=self.system_prompt,
             text=formatted_text,
-            model=model,
+            model=self.model,
             logprobs=True,
             top_logprobs=1,
             **kwargs
@@ -165,7 +164,6 @@ class RelevanceCache(PromptResponseCacheSQL):
         self, 
         given_id: str, 
         text: str, 
-        model: str = None,
         use_cached_result: bool = True
     ) -> Tuple[Optional[int], Optional[float]]:
         """Get climate relevance prediction for a single text.
@@ -189,7 +187,6 @@ class RelevanceCache(PromptResponseCacheSQL):
         result = self.get_cache_or_run(
             given_id=given_id,
             text=text,
-            model=model or self.model,
             use_cached_result=use_cached_result
         )
         return self._parse_stored_response(result)
@@ -197,7 +194,6 @@ class RelevanceCache(PromptResponseCacheSQL):
     def bulk_get_relevance(
         self,
         given_ids_texts: List[Tuple[str, str]],
-        model: str = None,
         use_cached_result: bool = True,
         n_per_commit: int = 50,
         max_workers: int = 3,
@@ -209,8 +205,6 @@ class RelevanceCache(PromptResponseCacheSQL):
         ----------
         given_ids_texts : list of tuple of (str, str)
             List of (given_id, text) tuples.
-        model : str, optional
-            Model to use (defaults to self.model).
         use_cached_result : bool, default True
             Whether to use cached results.
         n_per_commit : int, default 50
@@ -227,7 +221,6 @@ class RelevanceCache(PromptResponseCacheSQL):
         """
         results = self.bulk_get_cache_or_run(
             given_ids_texts=given_ids_texts,
-            model=model or self.model,
             use_cached_result=use_cached_result,
             n_per_commit=n_per_commit,
             max_workers=max_workers,
@@ -331,7 +324,6 @@ def generate_predictions(
         # Get predictions using bulk method
         results = cache.bulk_get_relevance(
             given_ids_texts=given_ids_texts,
-            model=model,
             use_cached_result=use_cached_results,
             n_per_commit=n_per_commit,
             max_workers=max_workers,
