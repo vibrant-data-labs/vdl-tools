@@ -260,13 +260,13 @@ def run_relevance_model(
     df,
     model_name,
     idn,
-    save_path,
     column_text='text_for_relevance_model',
     label_override_filepath=None,
     use_cached_results=True,
     system_prompt=None,
     prompt_format=None,
 ):
+    model_name_safe = model_name.replace("-", "_").replace(":", "_")
 
     if label_override_filepath:
         label_override_filepath = str(label_override_filepath).replace("MODEL_NAME_HOLDER", model_name_safe)

@@ -1,3 +1,4 @@
+
 import math
 import logging
 from typing import Optional, Tuple, List, Dict, Any
@@ -15,10 +16,45 @@ ARPAH_MODEL = 'ft:gpt-4.1-mini-2025-04-14:vibrant-data-labs:arpa-h:Bzr8QOcl'
 ARPAH_CONSERVATIVE = 'ft:gpt-4.1-mini-2025-04-14:vibrant-data-labs:without-maybe:CMM6fpnL'
 
 
-DEFAULT_HEALTH_SYSTEM_PROMPT = "You are a health and biomedical research expert."
-DEFAULT_HEALTH_PROMPT_FORMAT = (
-    "Categorize the following company descriptions as either pertinent (1) or irrelevant (0) to ARPA-H's mission of advancing health and biomedical research: {text} -> \n#"
-)
+DEFAULT_HEALTH_SYSTEM_PROMPT = """
+You are an expert evaluator. You are classifying organizations based on whether they work on the intersection of health outcomes and environmental
+drivers
+"""
+
+DEFAULT_HEALTH_PROMPT_FORMAT = """
+Definitions
+Relevant:
+The organization clearly addresses an environmental factor that affects human health, either by:
+-Explicitly describing both the environmental driver and the health link, or
+-Offering a solution that clearly helps people adapt to or reduce exposure to an environmental health hazard, 
+even if the environmental driver and health outcome are not stated together.
+
+Not Relevant:
+The organization does not clearly work on environmental health. This includes:
+-General environmental work (e.g., carbon markets, recycling technology, clean energy) with no health linkage
+-General health work (e.g., medical devices, pharmaceuticals, diagnostics, or vaccines) without any connection to environmental exposure or risk
+-Work on preventing environmental events (e.g., flood levees, emissions reduction) unless they address human exposure or vulnerability
+-Health innovations (including vaccines, therapeutics, or diagnostics) are Not Relevant unless they are explicitly 
+linked to an environmental driver of health (e.g., air quality, water contamination, heat, disease vectors)
+-Lifestyle/behavior interventions (e.g., smoking cessation, fitness apps) unless tied to environmental exposures
+-Any case that is vague, peripheral, or mixed should be labeled as Not Relevant
+
+Environmental Drivers Examples
+Air pollution, water contamination, chemical exposures (lead, PFAS, pesticides), extreme heat, wildfires, flooding, droughts,
+mold, noise, radiation, vector-borne disease, poor sanitation, food security, sea level rise, and indoor air quality.
+
+Health Impact Examples
+Asthma, cancer, cardiovascular disease, heat stroke, infections, allergies, neurotoxicity, 
+mental health impacts from environmental stress, malnutrition, chronic disease, and premature mortality.
+
+Description: {text}
+\n
+Output
+label 1 if Relevant
+label 0 if Not Relevant
+\n
+"""
+
 
 # Convenience function for ARPA-H / Health relevance predictions
 def generate_health_relevance_predictions(

@@ -305,11 +305,21 @@ def generate_predictions(
     {'org_1': (1, 0.95), 'org_2': (0, 0.98)}
     """
 
+    if 'prediction' in df.columns or 'probability' in df.columns:
+        raise Exception(
+            "DataFrame already has 'prediction' or 'probability' columns. "
+            "Please remove/rename them before running this function."
+        )
+
     if label_override_dict and label_override_filepath:
         raise Exception("Cannot provide both label overrides as a dict and filepath")
 
+    # Prepare data for bulk processing
+    given_ids_texts = df[[idn, column_text]].values.tolist()
+
     # Use provided session or create a new one
-    if session is not None:
+    # Create session using context manager
+    with get_session(session=session) as session:
         cache = RelevanceCache(
             session=session,
             model=model,
@@ -317,9 +327,6 @@ def generate_predictions(
             prompt_format=prompt_format,
             prompt_name=prompt_name,
         )
-
-        # Prepare data for bulk processing
-        given_ids_texts = list(zip(df[idn], df[column_text]))
 
         # Get predictions using bulk method
         results = cache.bulk_get_relevance(
@@ -329,29 +336,6 @@ def generate_predictions(
             n_per_commit=n_per_commit,
             max_workers=max_workers,
         )
-
-    else:
-        # Create session using context manager
-        with get_session() as session:
-            cache = RelevanceCache(
-                session=session,
-                model=model,
-                system_prompt=system_prompt,
-                prompt_format=prompt_format,
-                prompt_name=prompt_name,
-            )
-
-            # Prepare data for bulk processing
-            given_ids_texts =(zip(df[idn], df[column_text]))
-
-            # Get predictions using bulk method
-            results = cache.bulk_get_relevance(
-                given_ids_texts=given_ids_texts,
-                model=model,
-                use_cached_result=use_cached_results,
-                n_per_commit=n_per_commit,
-                max_workers=max_workers,
-            )
 
         # Load label overrides if provided
         if label_override_filepath:
