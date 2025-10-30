@@ -372,7 +372,7 @@ def clean_spaces_linebreaks_all(df):
     # remove any line breaks, tabs, carriage returns
     try:
         df.replace(to_replace=[r"\\t|\\n|\\r", "\t|\n|\r"], value=["", ""], regex=True, inplace=True)
-        df.replace('\s+', ' ', regex=True, inplace=True)  # replace repeated spaces with one
+        df.replace(r'\s+', ' ', regex=True, inplace=True)  # replace repeated spaces with one
     except Exception as ex:
         print(ex)
         raise ex
@@ -381,7 +381,7 @@ def clean_spaces_linebreaks_all(df):
 def clean_spaces_linebreaks_col(df: pd.DataFrame, col: str):
     # remove any line breaks, tabs, carriage returns
     df[col].replace(to_replace=[r"\\t|\\n|\\r", "\t|\n|\r"], value=["", ""], regex=True, inplace=True)
-    df[col].replace('\s+', ' ', regex=True, inplace=True)  # replace repeated spaces with one
+    df[col].replace(r'\s+', ' ', regex=True, inplace=True)  # replace repeated spaces with one
 
 
 def write_network_to_excel(ndf, ldf, outname):
