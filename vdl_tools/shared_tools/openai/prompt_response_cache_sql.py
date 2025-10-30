@@ -33,6 +33,8 @@ def register_prompt(prompt: Prompt, session):
     return prompt_obj
 
 
+DEFAULT_MODEL = "gpt-4.1-mini"
+
 class PromptResponseCacheSQL():
 
     def __init__(
@@ -44,6 +46,7 @@ class PromptResponseCacheSQL():
         prompt_name: str = "",
         prompt_description: str = "",
         filter_by_model: bool = False,
+        model=DEFAULT_MODEL,
     ):
         if not any([prompt is not None, prompt_str, prompt_id]):
             raise Exception("Need to give at least one of prompt, prompt_str, prompt_id")
@@ -57,7 +60,7 @@ class PromptResponseCacheSQL():
             prompt_description=prompt_description,
         )
         self.filter_by_model = filter_by_model
-
+        self.model = model
 
     def _set_prompt_obj(
         self, prompt, prompt_str, prompt_id, prompt_name, prompt_description):
@@ -108,7 +111,7 @@ class PromptResponseCacheSQL():
             temp_prompt = all_prompts[temp_prompt.id]
         return temp_prompt
 
-    def get_prompt_response_obj(self, given_id: str, text: str, model: Optional[str] = None):
+    def get_prompt_response_obj(self, given_id: str, text: str):
         text_id = PromptResponse.create_text_id(text)
 
         filters = [
@@ -116,8 +119,8 @@ class PromptResponseCacheSQL():
                 PromptResponse.text_id == text_id,
                 PromptResponse.given_id == given_id,
         ]
-        if self.filter_by_model and model:
-            filters.append(PromptResponse.model_name == model)
+        if self.filter_by_model:
+            filters.append(PromptResponse.model_name == self.model)
 
         prompt_response_obj = (
             self.session
@@ -129,7 +132,6 @@ class PromptResponseCacheSQL():
     def get_prompt_response_obj_bulk(
         self,
         given_ids_texts: list[tuple[str, str]],
-        model: Optional[str] = None,
     ):
         logger.info(
             "Starting to pull %s previous results for prompt: %s",
@@ -144,8 +146,9 @@ class PromptResponseCacheSQL():
             PromptResponse.prompt_id == self.prompt.id,
             PromptResponse.text_id.in_(text_ids),
         ]
-        if self.filter_by_model and model:
-            filters.append(PromptResponse.model_name == model)
+
+        if self.filter_by_model:
+            filters.append(PromptResponse.model_name == self.model)
 
         found_rows = (
             self.session
@@ -171,7 +174,6 @@ class PromptResponseCacheSQL():
         given_id: str,
         text,
         response_full,
-        model: Optional[str] = None,
     ):
         logger.info("Storing error for %s, %s", self.prompt.name, given_id)
         text_id = PromptResponse.create_text_id(text)
@@ -196,7 +198,7 @@ class PromptResponseCacheSQL():
             prompt_response_obj = PromptResponse(
                 prompt_id=self.prompt.id,
                 given_id=given_id,
-                model_name=model,
+                model_name=self.model,
                 input_text=text,
                 response_full=response_full,
                 num_errors=1,
@@ -209,12 +211,11 @@ class PromptResponseCacheSQL():
         given_id: str,
         text,
         response,
-        model: Optional[str] = None,
     ):
         prompt_response_obj = PromptResponse(
             prompt_id=self.prompt.id,
             given_id=given_id,
-            model_name=model,
+            model_name=self.model,
             input_text=text,
             response_full=response.model_dump_json(),
             response_text=response.choices[0].message.content,
@@ -225,9 +226,9 @@ class PromptResponseCacheSQL():
         self.session.merge(prompt_response_obj)
         return prompt_response_obj
 
-    def get_completion_catch_error(self, prompt_str, text, model="gpt-4.1-mini", **kwargs):
+    def get_completion_catch_error(self, prompt_str, text, **kwargs):
         try:
-            completion = self.get_completion(prompt_str, text, model=model, **kwargs)
+            completion = self.get_completion(prompt_str, text, **kwargs)
             return completion, False
         except Exception as ex:
             logger.error("Error getting completion: %s", ex)
@@ -236,7 +237,7 @@ class PromptResponseCacheSQL():
             }
             return response, True
 
-    def get_completion(self, prompt_str, text, model="gpt-4.1-mini", **kwargs):
+    def get_completion(self, prompt_str, text, **kwargs):
         """Adding this method here in case a subclass wants to override it.
 
         Returns the completion and a boolean indicating if there was an error.
@@ -244,7 +245,7 @@ class PromptResponseCacheSQL():
         return get_completion(
             prompt=prompt_str,
             text=text,
-            model=model,
+            model=self.model,
             **kwargs,
         )
 
@@ -252,7 +253,6 @@ class PromptResponseCacheSQL():
         self,
         given_id: str,
         text,
-        model="gpt-4.1-mini",
         use_cached_result: bool = True,
         **kwargs
     ) -> str:
@@ -261,7 +261,6 @@ class PromptResponseCacheSQL():
             data = self.get_prompt_response_obj(
                 given_id=given_id,
                 text=text,
-                model=model,
             )
             if data:
                 logger.info("Found cached response for %s", given_id)
@@ -270,7 +269,6 @@ class PromptResponseCacheSQL():
         response, error = self.get_completion_catch_error(
             prompt_str=self.prompt.prompt_str,
             text=text,
-            model=model,
             return_all=True,
             **kwargs
         )
@@ -279,7 +277,6 @@ class PromptResponseCacheSQL():
                 given_id=given_id,
                 text=text,
                 response=response,
-                model=model,
             )
         else:
             logger.warning("No response text for %s", given_id)
@@ -287,7 +284,6 @@ class PromptResponseCacheSQL():
                 given_id=given_id,
                 text=text,
                 response_full=response,
-                model=model,
             )
             return None
         return data.to_dict()
@@ -296,14 +292,12 @@ class PromptResponseCacheSQL():
         self,
         given_id: str,
         text,
-        model="gpt-4.1-mini",
         use_cached_result: bool = True,
         **kwargs,
     ):
         return self._get_cache_or_run(
             given_id=given_id,
             text=text,
-            model=model,
             use_cached_result=use_cached_result,
             **kwargs,
         )
@@ -311,7 +305,6 @@ class PromptResponseCacheSQL():
     def _bulk_get_cache_or_run(
         self,
         given_ids_texts: list[tuple[str, str]],
-        model="gpt-4.1-mini",
         use_cached_result: bool = True,
         n_per_commit: int = 50,
         max_workers=3,
@@ -330,8 +323,6 @@ class PromptResponseCacheSQL():
             A list of `(given_id, text)` tuples to run the completion on.
             given_id can be a string identifier that helps a human look up what the completion was for.
             An example would be a URL if this is a website summarization task.
-        model : str, optional
-            OpenAI model to use, by default "gpt-4.1-mini"
         use_cached_result : bool, optional
             Whether to use the cached result, by default True
         n_per_commit : int, optional
@@ -360,7 +351,6 @@ class PromptResponseCacheSQL():
         if use_cached_result:
             found_rows, unfound_ids_errors = self.get_prompt_response_obj_bulk(
                 given_ids_texts,
-                model=model,
             )
             unfound_rows = []
             for given_id, text in given_ids_texts:
@@ -387,7 +377,6 @@ class PromptResponseCacheSQL():
             response, error = self.get_completion_catch_error(
                 prompt_str=self.prompt.prompt_str,
                 text=text,
-                model=model,
                 return_all=True,
                 **kwargs
             )
@@ -396,7 +385,6 @@ class PromptResponseCacheSQL():
                     given_id=given_id,
                     text=text,
                     response_full=response,
-                    model=model,
                 )
                 return None
 
@@ -404,7 +392,6 @@ class PromptResponseCacheSQL():
                 given_id=given_id,
                 text=text,
                 response=response,
-                model=model,
             )
             return data.to_dict()
 
@@ -438,7 +425,6 @@ class PromptResponseCacheSQL():
     def bulk_get_cache_or_run(
         self,
         given_ids_texts: list[tuple[str, str]],
-        model="gpt-4.1-mini",
         use_cached_result: bool = True,
         n_per_commit: int = 50,
         max_workers=3,
@@ -447,7 +433,6 @@ class PromptResponseCacheSQL():
     ):
         return self._bulk_get_cache_or_run(
             given_ids_texts=given_ids_texts,
-            model=model,
             use_cached_result=use_cached_result,
             n_per_commit=n_per_commit,
             max_workers=max_workers,
