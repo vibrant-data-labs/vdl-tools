@@ -94,9 +94,11 @@ class GeoTaggingPromptCache(PromptResponseCacheSQL):
             session=session,
             prompt_str=prompt_str,
             prompt_name=prompt_name,
+            model='gpt-4.1-mini',
+            filter_by_model=False,
         )
 
-    def get_completion(self, prompt_str, text, model="gpt-4.1-mini", **kwargs):
+    def get_completion(self, prompt_str, text, **kwargs):
         """Writes a custom get completion with ignores a system prompt and focuses on the text prompt.
         
         This was built using the optomized prompting through DsPy work
@@ -111,7 +113,7 @@ class GeoTaggingPromptCache(PromptResponseCacheSQL):
         return get_completion(
             prompt=None,
             text=full_text,
-            model=model,
+            model=self.model,
             return_all=True,
             temperature=0,
             max_tokens=4096,

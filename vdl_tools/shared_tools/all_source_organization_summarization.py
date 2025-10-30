@@ -18,6 +18,8 @@ def generate_summary_of_summaries(
     use_cached_results: bool=True,
     prompt_string: str=BASE_SUMMARY_OF_SUMMARIES_PROMPT,
     max_workers: int=10,
+    model: str="gpt-4.1-mini",
+    filter_by_model: bool=False,
 ):
     """Creates a summary of a set of texts.
 
@@ -47,6 +49,8 @@ def generate_summary_of_summaries(
             session=session,
             prompt_str=prompt_string,
             prompt_name="summary_of_summaries",
+            model=model,
+            filter_by_model=filter_by_model,
         )
 
         ids_to_response = prompt_response.bulk_get_cache_or_run(

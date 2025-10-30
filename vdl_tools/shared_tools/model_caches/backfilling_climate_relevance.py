@@ -9,6 +9,8 @@ from vdl_tools.shared_tools.model_caches.climate_relevance_cache import (
 def backfill_climate_relevance_predictions(
     df,
     num_records_per_source: int = 100,
+    max_workers: int = 10,
+    n_per_commit: int = 100,
 ):
     df = df[df['text_for_relevance_model'].notna()]
 
@@ -22,6 +24,8 @@ def backfill_climate_relevance_predictions(
         column_text='text_for_relevance_model',
         idn='id',
         model=CB_CD_MODEL_4OMINI,
+        max_workers=max_workers,
+        n_per_commit=n_per_commit,
     )
     return predictions
 

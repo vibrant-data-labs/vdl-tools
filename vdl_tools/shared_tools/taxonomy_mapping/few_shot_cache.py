@@ -3,12 +3,13 @@ from textwrap import dedent
 
 from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type
 
-from openai import OpenAI, pydantic_function_tool, APIConnectionError
+from openai import pydantic_function_tool, APIConnectionError
 from pydantic import BaseModel, field_validator
-from typing import Literal, Optional
+from typing import  Optional
 
 from vdl_tools.shared_tools.database_cache.database_models.prompt import PromptResponse
 from vdl_tools.shared_tools.openai.openai_api_utils import CLIENT
+from vdl_tools.shared_tools.openai.prompt_response_cache_sql import DEFAULT_MODEL
 from vdl_tools.shared_tools.openai.openai_constants import MODEL_DATA
 from vdl_tools.shared_tools.openai.prompt_response_cache_instructor import InstructorPRC
 from vdl_tools.shared_tools.tools.logger import logger
@@ -101,7 +102,8 @@ class FewShotCache(InstructorPRC):
     def __init__(
         self,
         session,
-        model="gpt-4.1-mini",
+        model=DEFAULT_MODEL,
+        filter_by_model=False,
     ):
         prompt_str = "You are an expert in climate mitigation, adaptation, resilience, and general climate change topics."
 
@@ -110,8 +112,9 @@ class FewShotCache(InstructorPRC):
             session=session,
             prompt_str=prompt_str,
             prompt_name=prompt_name,
-            model=model,
             response_model=IsRelevant,
+            filter_by_model=filter_by_model,
+            model=model,
         )
 
     def _format_messages(
@@ -161,7 +164,6 @@ class FewShotCache(InstructorPRC):
     def bulk_get_cache_or_run(
         self,
         given_ids_texts: list[tuple[str, EntityActivityDictExamplesDict]],
-        model="gpt-4.1-mini",
         use_cached_result: bool = True,
         n_per_commit: int = 50,
         max_workers=5,
@@ -175,7 +177,6 @@ class FewShotCache(InstructorPRC):
         ]
         ids_to_responses = self._bulk_get_cache_or_run(
             given_ids_texts=given_ids_texts,
-            model=model,
             use_cached_result=use_cached_result,
             n_per_commit=n_per_commit,
             max_workers=max_workers,
@@ -193,7 +194,6 @@ class FewShotCache(InstructorPRC):
         given_id: str,
         activity_entity_dict: EntityActivityDict|dict,
         examples_dicts: list[dict]=None,
-        model="gpt-4.1-mini",
         use_cached_result: bool = True,
         **kwargs
     ):
@@ -209,7 +209,6 @@ class FewShotCache(InstructorPRC):
         return self._get_cache_or_run(
             given_id=given_id,
             text=entity_activity_dict_examples_dicts,
-            model=model,
             use_cached_result=use_cached_result,
             **kwargs,
         )
@@ -291,12 +290,11 @@ class FewShotCache(InstructorPRC):
         given_id: str,
         text,
         response,
-        model: Optional[str] = None,
     ):
         prompt_response_obj = PromptResponse(
             prompt_id=self.prompt.id,
             given_id=given_id,
-            model_name=model,
+            model_name=self.model,
             input_text=json.dumps(text),
             response_full=response.dict(),
             response_text=json.dumps(response.choices[0].message.tool_calls[0].function.parsed_arguments.dict()),
