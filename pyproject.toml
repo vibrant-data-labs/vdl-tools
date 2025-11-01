@@ -2,221 +2,80 @@
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[project]
-name = "vdl-tools"
-dynamic = ["version"]
-dependencies = [
-    "alembic>=1.13.0,<2.0.0",         # tied to sqlalchemy
-    "altair",
-    "awscli",
-    "beautifulsoup4>=4.14.0,<5.0.0",
-    "bokeh",
-    "boto3>=1.34.0",                  # AWS - generally stable but frequent updates
-    "cairosvg",
-    "circlify",
-    "datasets",
-    "dataclasses_json",
-    "geopy",
-    "geotext",
-    "GitPython",
-    "google-api-python-client>=2.100.0",
-    "google-cloud-translate>=3.11.0",
-    "google-auth-oauthlib>=1.0.0",
-    "igraph",
-    "instructor",
-    "jsonlines",
-    "jsonschema",
-    "markdown",
-    "markdown3-newtab",
-    "more-itertools",
-    "networkx",
-    "nltk",
-    "numpy>=2.3.0,<3.0.0",
-    "openai>=1.0.0,<2.0.0",           # OpenAI frequently changes API
-    "openpyxl",
-    "pandas>=2.0.0,<3.0.0",
-    "plotly",
-    "psycopg2-binary",
-    "PySocks",
-    "pyyaml",
-    "regex",
-    "requests",
-    "requests-cache",
-    "scikit-learn>=1.7.0,<2.0.0",     # sklearn changes APIs
-    "scikit-network",
-    "scipy>=1.11.0,<2.0.0",           # scientific computing - be cautious
-    "selenium>=4.15.0,<5.0.0",        # selenium 4 was major change
-    "sqlalchemy>=2.0.0,<3.0.0",       # 2.0 was major rewrite
-    "sqlalchemy-utils",
-    "tiktoken",
-    "treelib",
-    "torch>=2.0.0,<3.0.0",            # torch major versions incompatible
-    "transformers>=4.35.0,<5.0.0",    # frequent API changes
-    "umap",
-    "unstructured[all-docs]>=0.16.12,<1.0.0",
-    "url-normalize",
-    "webdriver_manager",
-    "xlsxwriter",
-    "Wikipedia-API"
-]
-requires-python = ">=3.12,<3.13"
-description = "VDL Tools"
-readme = "README.md"
-authors = [
-    {name = "Vibrant Data Labs"},
-]
-classifiers = [
-    "Development Status :: 4 - Beta",
-    "Programming Language :: Python :: 3.12",
-]
-
-[project.optional-dependencies]
-test = [
-    "pytest>=7.0.0",
-    "pytest-cov>=4.0.0",
-    "pytest-mock>=3.12.0",
-]
-lint = [
-    "ruff>=0.1.0",
-    "black>=23.0.0",
-    "mypy>=1.0.0",
-]
-docs = [
-    "mkdocs>=1.5.0",
-    "mkdocs-material>=9.0.0",
-]
-
 [tool.hatch.version]
 path = "vdl_tools/__init__.py"
 
 [tool.hatch.build.targets.sdist]
 exclude = [
-    "/.github",
-    "/docs",
-    "/tests",
-    "*.pyc",
-    "__pycache__",
+  "/.github",
+  "/docs",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["vdl_tools"]
 
-# Hatch Environments
-[tool.hatch.envs.default]
+[tool.setuptools.dynamic]
+version = {attr = "vdl_tools.__version__"}
+
+[project]
+name = "vdl-tools"
+dynamic = ["version"]
 dependencies = [
-    "pytest>=7.0.0",
-    "pytest-cov>=4.0.0",
+    "alembic>=1.13.1,<2.0.0",
+    "awscli>=1.36.34,<2.0.0",
+    "bokeh>=3.6.1,<4.0.0",
+    "boto3>=1.35.93,<2.0.0",
+    "cairosvg>=2.6.0,<3.0.0",
+    "circlify>=0.15.0,<1.0.0",
+    "datasets>=3.1.0,<4.0.0",
+    "dataclasses_json>=0.6.3,<1.0.0",
+    "geopy>=2.3.0,<3.0.0",
+    "geotext>=0.4.0,<1.0.0",
+    "google-auth-oauthlib>=1.2.1,<2.0.0",
+    "google-cloud-translate>=3.11.0,<4.0.0",
+    "google-api-python-client==2.166.0",
+    "igraph>=0.11.8,<1.0.0",
+    "instructor>=1.7.0,<2.0.0",
+    "jsonlines>=4.0.0,<5.0.0",
+    "jsonschema>=4.17.3,<5.0.0",
+    "markdown>=3.4.1,<4.0.0",
+    "markdown3-newtab>=0.2.0,<1.0.0",
+    "more-itertools>=9.1.0,<10.0.0",
+    "networkx>=3.0,<4.0.0",
+    "nltk>=3.8.1,<4.0.0",
+    "numpy>=1.24.2,<2.0.0",
+    "openai>=1.57.0,<2.0.0",
+    "openpyxl>=3.1.1,<4.0.0",
+    "pandas>=1.5.3,<2.0.0",
+    "plotly>=5.24.1,<6.0.0",
+    "psycopg2-binary>=2.9.9,<3.0.0",
+    "PySocks>=1.7.1,<2.0.0",
+    "pyyaml>=6.0.1,<7.0.0",
+    "regex>=2022.10.31,<2023.0.0",
+    "requests>=2.32.3,<3.0.0",
+    "requests-cache>=0.9.8,<1.0.0",
+    "scikit-learn==1.6.1",
+    "scikit-network>=0.33.1,<1.0.0",
+    "scipy>=1.10.1,<2.0.0",
+    "selenium~=4.22.0",
+    "sqlalchemy>=2.0.21,<3.0.0",
+    "sqlalchemy-utils>=0.41.2,<1.0.0",
+    "tiktoken>=0.9.0,<1.0.0",
+    "treelib>=1.7.0,<2.0.0",
+    "torch>=1.13.1,<2.0.0",
+    "transformers>=4.26.1,<5.0.0",
+    "umap>=0.1.1,<1.0.0",
+    "unstructured>=0.16.12,<1.0.0",
+    "url-normalize>=1.4.3,<2.0.0",
+    "webdriver_manager>=4.0.1,<5.0.0",
+    "xlsxwriter>=3.0.9,<4.0.0",
+    "Wikipedia-API>=0.7.1,<1.0.0",
 ]
+requires-python = ">=3.10"
+description = "VDL Tools"
+readme = "README.md"
 
-[tool.hatch.envs.default.scripts]
-test = "pytest {args:tests/}"
-test-cov = "pytest --cov=vdl_tools --cov-report=term-missing --cov-report=html {args:tests/}"
-cov-report = "coverage report"
-
-[tool.hatch.envs.lint]
-detached = true
-dependencies = [
-    "ruff>=0.1.0",
-    "black>=23.0.0",
-    "mypy>=1.0.0"
-]
-
-[tool.hatch.envs.lint.scripts]
-style = [
-    "ruff check {args:.}",
-    "black --check --diff {args:.}",
-]
-fmt = [
-    "black {args:.}",
-    "ruff check --fix {args:.}",
-    "style",
-]
-typing = "mypy --install-types --non-interactive {args:vdl_tools}"
-all = [
-    "style",
-    "typing",
-]
-
-# Test matrix for multiple Python versions
-[tool.hatch.envs.test]
-dependencies = [
-    "pytest>=7.0.0",
-    "pytest-cov>=4.0.0",
-]
-
-[[tool.hatch.envs.test.matrix]]
-python = ["3.12"]
-
-[tool.hatch.envs.test.scripts]
-run = "pytest {args:tests/}"
-run-cov = "pytest --cov=vdl_tools --cov-report=term-missing --cov-report=xml {args:tests/}"
-
-# Docs environment
-[tool.hatch.envs.docs]
-dependencies = [
-    "mkdocs>=1.5.0",
-    "mkdocs-material>=9.0.0",
-]
-
-[tool.hatch.envs.docs.scripts]
-build = "mkdocs build --clean --strict"
-serve = "mkdocs serve --dev-addr localhost:8000"
-
-# Publishing configuration
-[tool.hatch.publish.index]
-disable = false
-
-# Ruff configuration
-[tool.ruff]
-line-length = 100
-target-version = "py310"
-
-[tool.ruff.lint]
-select = [
-    "E",  # pycodestyle errors
-    "W",  # pycodestyle warnings
-    "F",  # pyflakes
-    "I",  # isort
-    "B",  # flake8-bugbear
-    "C4", # flake8-comprehensions
-    "UP", # pyupgrade
-]
-ignore = [
-    "E501", # line too long, handled by black
-    "B008", # do not perform function calls in argument defaults
-    "C901", # too complex
-]
-
-[tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["F401"]
-
-# Black configuration
-[tool.black]
-line-length = 100
-target-version = ["py310"]
-
-# Pytest configuration
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
-addopts = "-v --tb=short"
-
-# Coverage configuration
-[tool.coverage.run]
-source = ["vdl_tools"]
-omit = [
-    "*/tests/*",
-    "*/test_*.py",
-]
-
-[tool.coverage.report]
-exclude_lines = [
-    "pragma: no cover",
-    "def __repr__",
-    "raise AssertionError",
-    "raise NotImplementedError",
-    "if __name__ == .__main__.:",
-    "if TYPE_CHECKING:",
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python"
 ]
