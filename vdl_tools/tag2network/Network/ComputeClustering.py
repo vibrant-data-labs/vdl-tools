@@ -142,7 +142,7 @@ def add_cluster_metrics(nodesdf, nw, groupVars):
 def reassign_small_clusters(nodes_df, edges_df, sims, clus_name, parent_clus,
                             size_ratio=10, top_n=5, max_size=40):
     # compute intra- and inter-cluster similarities
-    clusters = nodes_df[clus_name][~nodes_df[clus_name].isna()].unique()
+    clusters = nodes_df[clus_name].unique()
     cluster_similarities = []
     for idx, clus1 in enumerate(clusters):
         for jdx, clus2 in enumerate(clusters):

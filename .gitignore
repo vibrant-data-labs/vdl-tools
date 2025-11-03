@@ -23,17 +23,3 @@ shared-tools/shared_tools/baseten_models/tw_adaptation_2024/data/model
 google_sheets_token.pickle
 models/
 paths.ini
-
-# Coverage reports
-htmlcov/
-.coverage
-.coverage.*
-coverage.xml
-*.cover
-
-# Hatch
-.hatch/
-.hatch.toml
-
-# Ruff cache
-.ruff_cache/
