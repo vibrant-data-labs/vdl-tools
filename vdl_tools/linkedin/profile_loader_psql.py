@@ -14,7 +14,7 @@ from vdl_tools.linkedin.utils.linkedin_url import extract_linkedin_id
 MAX_ERRORS = 5
 
 
-def get_people_profile(
+def get_base_profile(
     urls: pd.Series,
     session,
     api_key,
