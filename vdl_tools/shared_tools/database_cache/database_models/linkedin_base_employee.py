@@ -28,12 +28,13 @@ class LinkedInBaseEmployee(BaseMixin):
     checked_at = Column(DateTime, nullable=False)
     public_profile_id = Column(String, nullable=True)
     profile_url = Column(String, nullable=False, index=True)
+    original_url = Column(String, nullable=True, index=True)  # URL used to query this profile
     location = Column(String, nullable=True)
     industry = Column(String, nullable=True)
     summary = Column(String, nullable=True)
     services = Column(String, nullable=True)
     profile_photo_url = Column(String, nullable=True)
-    deleted = Column(Integer, nullable=False, default=0)
+    deleted = Column(Integer, nullable=False)
     country = Column(String, nullable=True)
     country_iso_2 = Column(String, nullable=True)
     country_iso_3 = Column(String, nullable=True)
@@ -43,10 +44,8 @@ class LinkedInBaseEmployee(BaseMixin):
     experience_count = Column(Integer, nullable=True)
     shorthand_name = Column(String, nullable=False)
     canonical_shorthand_name = Column(String, nullable=False)
-    received_at = Column(DateTime, nullable=False)
-    is_latest = Column(Integer, nullable=False, default=1)
     
-    # Array/nested fields stored as JSONB
+    # All nested/array fields stored as JSONB
     regions = Column(JSONB, nullable=True)
     shorthand_names = Column(JSONB, nullable=False)
     historical_ids = Column(JSONB, nullable=False)
@@ -77,4 +76,5 @@ class LinkedInBaseEmployee(BaseMixin):
     course_suggestions = Column(JSONB, nullable=False)
     activity = Column(JSONB, nullable=False)
     hidden_details = Column(JSONB, nullable=False)
-
+    original_url = Column(String, nullable=True, index=True)  # URL used to query this profile
+    full_result = Column(JSONB, nullable=False)

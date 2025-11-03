@@ -1,8 +1,8 @@
-"""add_linkedin_base_and_clean_employee_tables
+"""add_linkedin_employee_base_and_clean_tables
 
-Revision ID: 2f883db0f7a5
+Revision ID: d3ccdfd2c4ba
 Revises: 223e827c20cd
-Create Date: 2025-10-31 08:16:53.540856
+Create Date: 2025-11-03 10:18:34.807452
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '2f883db0f7a5'
+revision: str = 'd3ccdfd2c4ba'
 down_revision: Union[str, None] = '223e827c20cd'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -33,6 +33,7 @@ def upgrade() -> None:
     sa.Column('checked_at', sa.DateTime(), nullable=False),
     sa.Column('public_profile_id', sa.String(), nullable=True),
     sa.Column('profile_url', sa.String(), nullable=False),
+    sa.Column('original_url', sa.String(), nullable=True),
     sa.Column('location', sa.String(), nullable=True),
     sa.Column('industry', sa.String(), nullable=True),
     sa.Column('summary', sa.String(), nullable=True),
@@ -48,8 +49,6 @@ def upgrade() -> None:
     sa.Column('experience_count', sa.Integer(), nullable=True),
     sa.Column('shorthand_name', sa.String(), nullable=False),
     sa.Column('canonical_shorthand_name', sa.String(), nullable=False),
-    sa.Column('received_at', sa.DateTime(), nullable=False),
-    sa.Column('is_latest', sa.Integer(), nullable=False),
     sa.Column('regions', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
     sa.Column('shorthand_names', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
     sa.Column('historical_ids', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
@@ -80,72 +79,75 @@ def upgrade() -> None:
     sa.Column('course_suggestions', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
     sa.Column('activity', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
     sa.Column('hidden_details', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+    sa.Column('full_result', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
     sa.Column('date_added', sa.DateTime(), server_default=sa.text('now()'), nullable=True),
     sa.Column('date_updated', sa.DateTime(), nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
+    op.create_index(op.f('ix_linkedin_base_employee_original_url'), 'linkedin_base_employee', ['original_url'], unique=False)
     op.create_index(op.f('ix_linkedin_base_employee_profile_url'), 'linkedin_base_employee', ['profile_url'], unique=False)
     op.create_table('linkedin_clean_employee',
-    sa.Column('member_id', sa.BigInteger(), nullable=False),
-    sa.Column('member_full_name', sa.String(), nullable=True),
-    sa.Column('member_name_first', sa.String(), nullable=True),
-    sa.Column('member_name_middle', sa.String(), nullable=True),
-    sa.Column('member_name_last', sa.String(), nullable=True),
-    sa.Column('member_websites_linkedin', sa.String(), nullable=True),
-    sa.Column('member_picture_url', sa.String(), nullable=True),
-    sa.Column('member_public_profile_id', sa.String(), nullable=True),
-    sa.Column('member_description', sa.String(), nullable=True),
-    sa.Column('member_job_title', sa.String(), nullable=True),
-    sa.Column('is_decision_maker', sa.Integer(), nullable=True),
-    sa.Column('member_job_description', sa.String(), nullable=True),
-    sa.Column('company_id', sa.BigInteger(), nullable=True),
-    sa.Column('member_recommendations_count', sa.Integer(), nullable=True),
-    sa.Column('member_connections_count', sa.Integer(), nullable=True),
-    sa.Column('member_location_raw_address', sa.String(), nullable=True),
-    sa.Column('member_location_country', sa.String(), nullable=True),
-    sa.Column('member_location_regions', sa.String(), nullable=True),
-    sa.Column('member_last_updated', sa.Date(), nullable=True),
-    sa.Column('member_is_deleted', sa.Integer(), nullable=True),
-    sa.Column('member_department', sa.String(), nullable=True),
-    sa.Column('member_management_level', sa.String(), nullable=True),
-    sa.Column('is_working', sa.Integer(), nullable=True),
-    sa.Column('member_sort_score', sa.Integer(), nullable=True),
-    sa.Column('member_quality', sa.Integer(), nullable=True),
+    sa.Column('id', sa.BigInteger(), nullable=False),
+    sa.Column('public_profile_id', sa.BigInteger(), nullable=True),
+    sa.Column('full_name', sa.String(), nullable=True),
+    sa.Column('name_first', sa.String(), nullable=True),
+    sa.Column('name_middle', sa.String(), nullable=True),
+    sa.Column('name_last', sa.String(), nullable=True),
+    sa.Column('headline', sa.String(), nullable=True),
+    sa.Column('generated_headline', sa.String(), nullable=True),
+    sa.Column('websites_linkedin', sa.String(), nullable=True),
+    sa.Column('shorthand_names', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('last_updated', sa.DateTime(), nullable=True),
+    sa.Column('is_deleted', sa.Integer(), nullable=True),
     sa.Column('is_hidden', sa.Integer(), nullable=True),
-    sa.Column('member_generated_headline', sa.String(), nullable=True),
-    sa.Column('member_headline', sa.String(), nullable=True),
-    sa.Column('member_follower_count', sa.Integer(), nullable=True),
+    sa.Column('picture_url', sa.String(), nullable=True),
+    sa.Column('description', sa.String(), nullable=True),
+    sa.Column('location_raw_address', sa.String(), nullable=True),
+    sa.Column('location_country', sa.String(), nullable=True),
+    sa.Column('location_regions', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('connections_count', sa.Integer(), nullable=True),
+    sa.Column('follower_count', sa.Integer(), nullable=True),
+    sa.Column('is_working', sa.Integer(), nullable=True),
+    sa.Column('company_id', sa.BigInteger(), nullable=True),
+    sa.Column('job_title', sa.String(), nullable=True),
+    sa.Column('management_level', sa.String(), nullable=True),
+    sa.Column('is_decision_maker', sa.Integer(), nullable=True),
+    sa.Column('department', sa.String(), nullable=True),
+    sa.Column('job_description', sa.String(), nullable=True),
     sa.Column('total_experience_duration', sa.String(), nullable=True),
-    sa.Column('total_experience_duration_months', sa.BigInteger(), nullable=True),
-    sa.Column('op_created_at', sa.DateTime(), nullable=True),
-    sa.Column('op_updated_at', sa.DateTime(), nullable=True),
-    sa.Column('member_experience', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-    sa.Column('member_education', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-    sa.Column('member_languages', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-    sa.Column('member_certifications', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-    sa.Column('member_courses', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-    sa.Column('member_awards', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-    sa.Column('member_activity', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-    sa.Column('member_organizations', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-    sa.Column('member_patents', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-    sa.Column('member_publications', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-    sa.Column('member_recommendations', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-    sa.Column('member_skills', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-    sa.Column('member_shorthand_names', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('total_experience_duration_months', sa.Integer(), nullable=True),
+    sa.Column('experience', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('education', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('skills', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('recommendations_count', sa.Integer(), nullable=True),
+    sa.Column('recommendations', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('languages', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('courses', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('certifications', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('organizations', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('patents', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('publications', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('awards', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('activity', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('original_url', sa.String(), nullable=True),
+    sa.Column('full_result', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
     sa.Column('date_added', sa.DateTime(), server_default=sa.text('now()'), nullable=True),
     sa.Column('date_updated', sa.DateTime(), nullable=True),
-    sa.PrimaryKeyConstraint('member_id')
+    sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_linkedin_clean_employee_company_id'), 'linkedin_clean_employee', ['company_id'], unique=False)
-    op.create_index(op.f('ix_linkedin_clean_employee_member_websites_linkedin'), 'linkedin_clean_employee', ['member_websites_linkedin'], unique=False)
+    op.create_index(op.f('ix_linkedin_clean_employee_original_url'), 'linkedin_clean_employee', ['original_url'], unique=False)
+    op.create_index(op.f('ix_linkedin_clean_employee_websites_linkedin'), 'linkedin_clean_employee', ['websites_linkedin'], unique=False)
     # ### end Alembic commands ###
 
 
 def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
-    op.drop_index(op.f('ix_linkedin_clean_employee_member_websites_linkedin'), table_name='linkedin_clean_employee')
+    op.drop_index(op.f('ix_linkedin_clean_employee_websites_linkedin'), table_name='linkedin_clean_employee')
+    op.drop_index(op.f('ix_linkedin_clean_employee_original_url'), table_name='linkedin_clean_employee')
     op.drop_index(op.f('ix_linkedin_clean_employee_company_id'), table_name='linkedin_clean_employee')
     op.drop_table('linkedin_clean_employee')
     op.drop_index(op.f('ix_linkedin_base_employee_profile_url'), table_name='linkedin_base_employee')
+    op.drop_index(op.f('ix_linkedin_base_employee_original_url'), table_name='linkedin_base_employee')
     op.drop_table('linkedin_base_employee')
     # ### end Alembic commands ###
