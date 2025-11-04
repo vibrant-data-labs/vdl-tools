@@ -17,7 +17,7 @@ from vdl_tools.shared_tools.tools.logger import logger
 paths = pc.get_paths()
 # %%
 
-model = "gpt-4.1-mini"
+DEFAULT_MODEL = "gpt-4.1-mini"
 
 # %%
 
@@ -76,7 +76,8 @@ class KeywordsPromptResponseCache(InstructorPRC):
         session,
         prompt_str,
         prompt_name=None,
-        model="gpt-4.1-mini",
+        model=DEFAULT_MODEL,
+        filter_by_model=False,
         response_model=ExtractedKeywords,
     ):
         super().__init__(
@@ -85,6 +86,7 @@ class KeywordsPromptResponseCache(InstructorPRC):
             prompt_name=prompt_name,
             response_model=response_model,
             model=model,
+            filter_by_model=filter_by_model,
         )
 
 
@@ -94,15 +96,16 @@ class SummaryPromptResponseCache(PromptResponseCacheSQL):
         session,
         prompt_str,
         prompt_name=None,
-        model="gpt-4.1-mini",
+        model=DEFAULT_MODEL,
+        filter_by_model=False,
     ):
         super().__init__(
             session=session,
             prompt_str=prompt_str,
             prompt_name=prompt_name,
+            filter_by_model=filter_by_model,
+            model=model,
         )
-        self.model = model
-
 
 def define_assistant_prompt(subject):
     assistant_prompt = dedent(
@@ -535,7 +538,7 @@ def get_cluster_sentences_from_text(
     clusattr='Cluster',
     clusname=None,             # Use this for short sentence column name
     subject=None,
-    model="gpt-4.1-mini",
+    model=DEFAULT_MODEL,
     n_tags = None,
     n_entities=None,
     sample_texts=None,
@@ -580,12 +583,10 @@ def get_cluster_sentences_from_text(
         )
         cluster_id_to_shortsentence_all = sums_cache.bulk_get_cache_or_run(
             given_ids_texts=ids_text_sums_short,
-            model=model,
             use_cached_result=True,
         )
         cluster_id_to_onesentence_all = sums_cache.bulk_get_cache_or_run(
             given_ids_texts=ids_text_sums_all,
-            model=model,
             use_cached_result=True,
         )
 
@@ -627,7 +628,7 @@ def get_cluster_kwdnames_from_text(
         n_tags,
         subject=None,
         n_entities=20,  # int → use top‑k; None → token‑limit fallback
-        model="gpt-4.1-mini",
+        model=DEFAULT_MODEL,
         sample_texts=None,
         improve=False,
         improve_model='o3-mini'
@@ -674,7 +675,6 @@ def get_cluster_kwdnames_from_text(
         )
         raw_kw = kw_cache.bulk_get_cache_or_run(
             given_ids_texts=ids_text_prompts,
-            model=model,
             use_cached_result=False,
         )
 
@@ -694,7 +694,7 @@ def get_cluster_summaries_from_text(
     summary_col="cluster_summary",            # column name for the summaries
     subject=None,
     n_entities=20,
-    model="gpt-4.1-mini",
+    model=DEFAULT_MODEL,
 ):
     """
     Adds one column to *nodesdf*:
@@ -725,7 +725,6 @@ def get_cluster_summaries_from_text(
         )
         raw_sum = sum_cache.bulk_get_cache_or_run(
             given_ids_texts=ids_text_sums,
-            model=model,
             use_cached_result=True,
         )
 
@@ -745,8 +744,7 @@ def build_embedding_network(
     params: bn.BuildEmbeddingNWParams,
     debug=False,
     subject=None,
-    model="gpt-4.1-mini",
-    clusattr='Cluster',
+    model=DEFAULT_MODEL,
     n_entities=50,
     naming_strategy="keywords",
     improve = False,

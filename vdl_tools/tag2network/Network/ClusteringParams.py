@@ -4,7 +4,7 @@ from dataclasses import dataclass
 @dataclass
 class ClusteringParams:
     method: str = 'louvain'
-    resolution: float = 1.0        # leiden resolution parameter, if list then compute multiple levels
+    resolution: float = 1.0        # leiden resolution parameter - higher value = more clusters, if list then compute multiple levels
     merge_tiny: bool = False
     name_prefix: str = 'Cluster'
     reassign_size_ratio: int = 10  # size ratio between big and small (if small is less than 10% of big, reassign)

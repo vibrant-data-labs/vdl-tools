@@ -5,7 +5,7 @@ import instructor
 from openai import OpenAI
 
 from vdl_tools.shared_tools.database_cache.database_models.prompt import PromptResponse
-from vdl_tools.shared_tools.openai.prompt_response_cache_sql import PromptResponseCacheSQL
+from vdl_tools.shared_tools.openai.prompt_response_cache_sql import PromptResponseCacheSQL, DEFAULT_MODEL
 from vdl_tools.shared_tools.openai.openai_constants import MODEL_DATA
 from vdl_tools.shared_tools.tools.logger import logger
 from vdl_tools.shared_tools.openai.openai_api_utils import CLIENT
@@ -28,7 +28,8 @@ class InstructorPRC(PromptResponseCacheSQL):
         response_model,
         prompt_name=None,
         prompt_id=None,
-        model="gpt-4.1-mini",
+        model=DEFAULT_MODEL,
+        filter_by_model=False,
     ):
         # If None or "" is passed in
         prompt_str_w_schema = f"{prompt_str}\n{response_model.schema_json()}"
@@ -37,6 +38,8 @@ class InstructorPRC(PromptResponseCacheSQL):
             prompt_str=prompt_str_w_schema,
             prompt_name=prompt_name,
             prompt_id=prompt_id,
+            filter_by_model=filter_by_model,
+            model=model,
         )
         self.prompt_text = prompt_str
         self.response_model = response_model
@@ -49,9 +52,7 @@ class InstructorPRC(PromptResponseCacheSQL):
         max_tokens=4096,
         **kwargs
     ):
-        model = kwargs.pop("model", self.model)
         function_kwargs = dict(
-            model=MODEL_DATA[model]["model_name"],
             response_model=self.response_model,
             max_tokens=max_tokens,
             max_retries=1,
@@ -88,6 +89,7 @@ class InstructorPRC(PromptResponseCacheSQL):
         prompt_response_obj = PromptResponse(
             prompt_id=self.prompt.id,
             given_id=given_id,
+            model_name=self.model,
             input_text=text,
             response_full=response._raw_response.model_dump(),
             response_text=json.dumps(response.dict()),

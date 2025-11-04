@@ -47,33 +47,8 @@ def num_tokens_from_messages(messages, model="gpt-4o-mini-2024-07-18"):
     except KeyError:
         print("Warning: model not found. Using o200k_base encoding.")
         encoding = tiktoken.get_encoding("o200k_base")
-    if model in {
-        "gpt-3.5-turbo-0125",
-        "gpt-4-0314",
-        "gpt-4-32k-0314",
-        "gpt-4-0613",
-        "gpt-4-32k-0613",
-        "gpt-4o-mini-2024-07-18",
-        "gpt-4o-2024-08-06"
-        }:
-        tokens_per_message = 3
-        tokens_per_name = 1
-    elif "gpt-3.5-turbo" in model:
-        print("Warning: gpt-3.5-turbo may update over time. Returning num tokens assuming gpt-3.5-turbo-0125.")
-        return num_tokens_from_messages(messages, model="gpt-3.5-turbo-0125")
-    elif "gpt-4o-mini" in model:
-        print("Warning: gpt-4o-mini may update over time. Returning num tokens assuming gpt-4o-mini-2024-07-18.")
-        return num_tokens_from_messages(messages, model="gpt-4o-mini-2024-07-18")
-    elif "gpt-4o" in model:
-        print("Warning: gpt-4o and gpt-4o-mini may update over time. Returning num tokens assuming gpt-4o-2024-08-06.")
-        return num_tokens_from_messages(messages, model="gpt-4o-2024-08-06")
-    elif "gpt-4" in model:
-        print("Warning: gpt-4 may update over time. Returning num tokens assuming gpt-4-0613.")
-        return num_tokens_from_messages(messages, model="gpt-4-0613")
-    else:
-        raise NotImplementedError(
-            f"""num_tokens_from_messages() is not implemented for model {model}."""
-        )
+    tokens_per_message = 3
+    tokens_per_name = 1
     num_tokens = 0
     for message in messages:
         num_tokens += tokens_per_message
@@ -98,9 +73,11 @@ def _get_completion_kwargs(
     presence_penalty=0,
     stop=None,
     response_format_type="text",
+    logprobs=None,
+    top_logprobs=None,
 ):
 
-    model_name = MODEL_DATA[model]["model_name"]
+
     messages = messages or []
     if not messages and prompt:
         messages = [
@@ -114,7 +91,7 @@ def _get_completion_kwargs(
 
 
     kwargs = {
-        "model": model_name,
+        "model": model,
         "temperature": temperature,
         "messages": messages,
         "max_tokens": max_tokens,
@@ -125,10 +102,22 @@ def _get_completion_kwargs(
         "stop": stop,
         "response_format": {"type": response_format_type},
     }
+    
+    # Add logprobs if specified
+    if logprobs is not None:
+        kwargs["logprobs"] = logprobs
+        if top_logprobs is not None:
+            kwargs["top_logprobs"] = top_logprobs
 
-    if model_name == "o3-mini":
+    if model in ("o3-mini", "gpt-5", "gpt-5-nano", "gpt-5-mini"):
         max_tokens = kwargs.pop("max_tokens")
         kwargs["max_completion_tokens"] = max_tokens
+        kwargs.pop("top_p")
+        kwargs.pop("temperature")
+        kwargs.pop("seed")
+        kwargs.pop("frequency_penalty")
+        kwargs.pop("presence_penalty")
+        kwargs.pop("stop")
 
     return kwargs
 
@@ -148,6 +137,8 @@ async def get_completion_async(
     response_format_type="text",
     return_all=True,
     dry_run=False,
+    logprobs=None,
+    top_logprobs=None,
 ):
     kwargs = _get_completion_kwargs(
         prompt,
@@ -162,6 +153,8 @@ async def get_completion_async(
         presence_penalty=presence_penalty,
         stop=stop,
         response_format_type=response_format_type,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
     )
     if dry_run:
         return kwargs
@@ -187,6 +180,8 @@ def get_completion(
     return_all=True,
     verbose=False,
     response_format_type="text",
+    logprobs=None,
+    top_logprobs=None,
 ):
     if not verbose:
         logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -206,7 +201,9 @@ def get_completion(
         frequency_penalty=frequency_penalty,
         presence_penalty=presence_penalty,
         stop=stop,
-    response_format_type=response_format_type
+        response_format_type=response_format_type,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
     )
 
     completion = CLIENT.chat.completions.create(**kwargs)
