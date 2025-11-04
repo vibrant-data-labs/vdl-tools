@@ -171,3 +171,16 @@ def clean_no_level(df,
     )
 
     return df
+
+
+def clean_cft_oe_taxonomy(ndf):
+    logger.info('cleaning CFT taxonomies')
+    # remove No_Level_0 for sub-pillars
+    ndf = clean_no_level(ndf, taxonomy='one_earth', level=1)
+    # clean 'cross-cutting' category and tag labels
+    ndf = rename_one_earth_crosscutting_tags(ndf)
+    # clean and combine all one earth solutions
+    ndf = combine_one_earth_solution_tags(ndf)
+    ndf = combine_one_earth_intersectional_themes(ndf)
+    ndf = clean_one_earth_levers_of_change(ndf)
+    return ndf
