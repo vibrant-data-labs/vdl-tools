@@ -747,7 +747,6 @@ def build_embedding_network(
     debug=False,
     subject=None,
     model=DEFAULT_MODEL,
-    clusattr='Cluster',
     n_entities=50,
     naming_strategy="keywords",
     improve = False,
