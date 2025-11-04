@@ -106,8 +106,6 @@ class SummaryPromptResponseCache(PromptResponseCacheSQL):
             filter_by_model=filter_by_model,
             model=model,
         )
-        self.model = model
-
 
 def define_assistant_prompt(subject):
     assistant_prompt = dedent(
@@ -747,7 +745,6 @@ def build_embedding_network(
     debug=False,
     subject=None,
     model=DEFAULT_MODEL,
-    clusattr='Cluster',
     n_entities=50,
     naming_strategy="keywords",
     improve = False,

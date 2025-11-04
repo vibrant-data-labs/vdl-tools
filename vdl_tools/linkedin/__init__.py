@@ -1,2 +1,2 @@
-from vdl_tools.linkedin.profile_loader import scrape_profiles
 from vdl_tools.linkedin.org_loader import scrape_organizations
+from vdl_tools.linkedin.employee_loader_psql import get_employee_profiles

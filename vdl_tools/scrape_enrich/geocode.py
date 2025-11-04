@@ -76,7 +76,7 @@ def geocode_addresses(df, address, test=None, use_cached_result=True):
         df = df.head(test).copy()
     # only compute on facilities that have address info
     df = df.reset_index(drop=True)
-    df[address].fillna("", inplace=True)
+    df[address] = df[address].fillna("")
     for string1, string2 in geo_rename_dict.items():  # spell corrections for geocoding
         df.loc[:, address] = df[address].str.replace(string1, string2)
     # remove records with no address
@@ -211,6 +211,7 @@ def get_lat_long(
     df,
     idCol,
     address,
+    use_cached_result=True
 ):
     """
     Get lat lon.
@@ -224,7 +225,8 @@ def get_lat_long(
     # get lat long and city, state, country from final addresses
     print("geocoding addresses")
     df_geo = df[[idCol, "Address"]]
-    df_geo = geocode_addresses(df_geo, "Address")
+    df_geo = geocode_addresses(df_geo, "Address",
+                               use_cached_result=use_cached_result)
     df.drop(["Address"], axis=1, inplace=True)  # remove origional address for merging
     return df_geo
 
@@ -233,6 +235,7 @@ def add_geo_lat_long(
     df,
     idCol="id",  # unique id column
     address="Location",  # column with address
+    use_cached_result=True
 ):
     """
     Add geo lat lon to a dataframe with an address column
@@ -249,6 +252,7 @@ def add_geo_lat_long(
         df,
         idCol,
         address,
+        use_cached_result=use_cached_result
     )
 
     # merge geo data to main file
