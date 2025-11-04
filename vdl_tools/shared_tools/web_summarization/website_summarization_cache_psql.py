@@ -1,10 +1,4 @@
-from configparser import ConfigParser
-from urllib.parse import urlparse
-
-from vdl_tools.scrape_enrich.scraper.scrape_websites import BAD_URL_PATH_CHARS
-from vdl_tools.shared_tools.openai.prompt_response_cache_sql import PromptResponseCacheSQL
-from vdl_tools.shared_tools.tools.unique_ids import make_uuid
-
+from vdl_tools.shared_tools.openai.prompt_response_cache_sql import PromptResponseCacheSQL, DEFAULT_MODEL
 
 
 GENERIC_ORG_WEBSITE_PROMPT_TEXT = """
@@ -36,6 +30,7 @@ class WebsiteSummarizationCache(PromptResponseCacheSQL):
         session,
         prompt_str: str = GENERIC_ORG_WEBSITE_PROMPT_TEXT,
         prompt_name: str = "",
+        model=DEFAULT_MODEL,
     ):
 
         # If None or "" is passed in
@@ -45,4 +40,5 @@ class WebsiteSummarizationCache(PromptResponseCacheSQL):
             session=session,
             prompt_str=prompt_str,
             prompt_name=prompt_name,
+            model=model,
         )
