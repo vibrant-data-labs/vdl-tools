@@ -39,6 +39,7 @@ def add_theme_fracs(df, cluster, cat_col, cat_col_value, normalized=False, id_at
     return df
 
 
+### ADD CLUSTER METRICS IS MOVED TO https://github.com/vibrant-data-labs/vdl-tools/blob/308161920c56c3595822e51db102675c3c632a71/vdl_tools/tag2network/Network/ComputeClustering.py#L140
 def add_cluster_metrics(nodesdf, nw, groupVars, id_attr='__id__'):
     # add bridging, cluster centrality etc. for one or more grouping variables
     for groupVar in groupVars:

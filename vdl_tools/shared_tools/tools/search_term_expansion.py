@@ -145,7 +145,6 @@ class SearchTermExpansion(InstructorPRC):
             response = self.get_cache_or_run(
                 given_id=f"{self.topic} - {search_term}",
                 text=text,
-                model=self.model,
                 max_tokens=max_tokens,
                 use_cached_result=use_cached_result,
                 **kwargs

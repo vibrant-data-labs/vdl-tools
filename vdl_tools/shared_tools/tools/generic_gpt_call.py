@@ -10,6 +10,7 @@ def get_gpt_response(
     prompt_name=None,
     model="gpt-4.1-mini",
     use_cached_result=True,
+    filter_by_model=True,
     **kwargs
 ):
     with get_session(session) as passed_in_session:
@@ -18,6 +19,8 @@ def get_gpt_response(
             prompt_str=prompt_str,
             prompt_name=prompt_name,
             prompt_id=prompt_id,
+            filter_by_model=filter_by_model,
+            model=model,
             **kwargs
         )
         if isinstance(items, list):
@@ -32,7 +35,6 @@ def get_gpt_response(
 
         response = prc.bulk_get_cache_or_run(
             given_ids_texts=keys_items,
-            model=model,
             use_cached_result=use_cached_result,
             **kwargs
         )

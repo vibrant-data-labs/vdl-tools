@@ -9,7 +9,8 @@ _base_url = "https://api.coresignal.com/cdapi/v2"
 
 
 ENDPOINTS = {
-    'member': 'employee_base',
+    'base_person': 'employee_base',
+    'clean_person': 'employee_clean',
     'company': 'company_base',
     'historical_headcount': 'historical_headcount',
     'clean_company': 'company_clean',
@@ -65,8 +66,12 @@ def get_multi_source_company(id: str, api_key: str):
     return _get_coresignal_base(id, api_key, 'multi_source')
 
 
-def get_profile(id: str, api_key: str):
-    return _get_coresignal_base(id, api_key, 'member')
+def get_base_person(id: str, api_key: str):
+    return _get_coresignal_base(id, api_key, 'base_person')
+
+
+def get_clean_person(id: str, api_key: str):
+    return _get_coresignal_base(id, api_key, 'clean_person')
 
 
 def get_historical_headcount(id: str, api_key: str):
