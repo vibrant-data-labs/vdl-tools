@@ -73,7 +73,7 @@ def addLeidenClusters(nodesdf, nw, resolution=1.0, prefix='Cluster', min_clus_si
         either a single value of clustering resolution or a list of values, in which case clustering is hierarchical
     prefix: str, optional
         clustering attribute anme and value name prefix
-    min_clus_size: int
+    min_clus_size: int or list, optional
         cluster size below which hierarchical clustering is not computed
 
     Returns
@@ -211,7 +211,9 @@ def add_clustering(nodesdf, linksdf=None, nw=None, sims=None, params=ClusteringP
     if isinstance(nw, nx.DiGraph):
         nw = nx.Graph(nw)
     if params.method == 'leiden':
-        clusters = addLeidenClusters(nodesdf, nw, prefix=params.name_prefix, resolution=params.resolution)
+        clusters = addLeidenClusters(nodesdf, nw, prefix=params.name_prefix,
+                                     min_clus_size=params.min_clus_size,
+                                     resolution=params.resolution)
     elif params.method == 'louvain':
         addLouvainClusters(nodesdf, nw, prefix=params.name_prefix)
         clusters = [params.name_prefix]
