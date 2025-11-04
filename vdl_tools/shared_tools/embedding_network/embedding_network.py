@@ -106,8 +106,6 @@ class SummaryPromptResponseCache(PromptResponseCacheSQL):
             filter_by_model=filter_by_model,
             model=model,
         )
-        self.model = model
-
 
 def define_assistant_prompt(subject):
     assistant_prompt = dedent(
