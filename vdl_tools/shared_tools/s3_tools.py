@@ -141,22 +141,22 @@ def s3_file(
 ):
     """
     Context manager for working with S3 files as if they were local.
-    
+
     Args:
         s3_path: Path to file in S3 (and local path to use)
         bucket_name: S3 bucket name (default: 'shared-data-clone')
         mode: 'r' for read (download), 'w' for write (upload), 'rw' for both
         auto_upload: If True and mode includes 'r', upload the file on exit even in read mode
-    
+
     Usage:
         # Read from S3
         with s3_file('data/input.json', mode='r') as local_path:
             df = pd.read_json(local_path)
-        
+
         # Write to S3
         with s3_file('data/output.json', mode='w') as local_path:
             df.to_json(local_path)
-        
+
         # Read and write (download, modify, upload)
         with s3_file('data/file.json', mode='rw') as local_path:
             df = pd.read_json(local_path)
@@ -164,6 +164,9 @@ def s3_file(
             df.to_json(local_path)
     """
     local_path = s3_path
+    # if using Pathlib, the s3 path might have the full path
+    cwd = s3_path.cwd()
+    s3_path = s3_path.relative_to(cwd)
     downloaded = False
     try:
         # Download if reading
@@ -179,7 +182,7 @@ def s3_file(
 
         # Upload if writing or if auto_upload is enabled
         if mode in ('w', 'rw') or (downloaded and auto_upload):
-            save_file_to_s3(bucket_name, local_path)
+            save_file_to_s3(bucket_name, s3_path)
     finally:
         # Optionally clean up local file after upload (for temp files)
         if cleanup and os.path.exists(local_path):
@@ -281,7 +284,8 @@ def read_s3_json(
 
 
 def write_json_to_s3(
-    data, s3_path,
+    data,
+    s3_path,
     bucket_name='shared-data-clone',
     cleanup=True,
     **kwargs,
@@ -305,7 +309,7 @@ def write_json_to_s3(
     # Ensure the directory exists
     local_path = pl.Path(s3_path)
     local_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     with s3_file(s3_path, bucket_name=bucket_name, mode='w', cleanup=cleanup) as local_path:
         with open(local_path, 'w') as f:
             json.dump(data, f, **kwargs)
