@@ -99,3 +99,12 @@ intersectional_true_examples = [
 ]
 
 
+environmental_hazard_examples = [
+    {
+        "entity_description": "350 Seattle is a grassroots organization dedicated to climate justice, focusing on systemic change through various campaigns and projects. They work on resisting fossil fuels, promoting healthy alternatives, and advocating for climate justice, emphasizing collaboration with frontline communities and addressing environmental injustices. The organization supports workers transitioning to clean renewables and advocates for policies that drive ambitious and just climate solutions. Through their efforts, they aim to build a people's movement towards a future with renewable energy, healthy environments, and equitable living for all.",
+        "activity_name": "Social Justice",
+        "activity_description": "Social Justice acknowledges that climate change disproportionately impacts marginalized and vulnerable communities. Therefore, the fight against climate change is a fight for equality and fairness. This theme spotlights the need for climate policies that center equity, ensuring that those most affected by climate change have a voice in shaping solutions. Climate justice intersects with every solution pathway, insisting that whether we're transforming energy systems or protecting ecosystems, the rights and needs of all people must be front and center.",
+        "relevant": True,
+    },
+
+    ]
