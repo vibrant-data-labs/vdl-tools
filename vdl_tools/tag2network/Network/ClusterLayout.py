@@ -134,12 +134,15 @@ def compress_groups(nodes_df, layout_dict, cluster_attr, overlap_frac,
                 center = np.median(clus_pos, axis=0)
                 scale = np.sqrt(len(subg)) * scale_factor
                 dists = np.sqrt(((clus_pos - center) ** 2).sum(axis=1))
-                # use a truncated, normalized Mechelis-Menten function
-                # to rescale distance from center
-                om = max(dists)  # current max distance
-                nm = scale  # desired max distance
-                k = om * nm / (om - nm / 2)
-                rescale = np.clip(k / (k / 2 + dists), None, max_expansion)
+                if max(dists) > 0:
+                    # use a truncated, normalized Mechelis-Menten function
+                    # to rescale distance from center
+                    om = max(dists)  # current max distance
+                    nm = scale  # desired max distance
+                    k = om * nm / (om - nm / 2)
+                    rescale = np.clip(k / (k / 2 + dists), None, max_expansion)
+                else:
+                    rescale = np.ones(len(dists))
                 center = centers[clus]
                 new_center = new_centers[clus]
                 # change plot aspect ratio - aspect > 1 -> stretch x-axis]
