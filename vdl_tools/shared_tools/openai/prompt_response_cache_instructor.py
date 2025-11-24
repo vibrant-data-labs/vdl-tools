@@ -54,6 +54,7 @@ class InstructorPRC(PromptResponseCacheSQL):
     ):
         function_kwargs = dict(
             response_model=self.response_model,
+            model=self.model,
             max_tokens=max_tokens,
             max_retries=1,
             messages=[
