@@ -348,6 +348,7 @@ class PromptResponseCacheSQL():
         else:
             given_ids_texts = given_ids_texts
 
+        requested_given_ids = {given_id for given_id, _ in given_ids_texts}
         if use_cached_result:
             found_rows, unfound_ids_errors = self.get_prompt_response_obj_bulk(
                 given_ids_texts,
@@ -396,6 +397,7 @@ class PromptResponseCacheSQL():
             return data.to_dict()
 
         if len(unfound_rows) == 0:
+            res = {x: res[x] for x in requested_given_ids if x in res}
             return res
         n_run = 0
 
@@ -417,7 +419,6 @@ class PromptResponseCacheSQL():
                 if len(res) % 500 == 0:
                     logger.info("Completed %s of %s", len(res), len_unfound)
 
-        requested_given_ids = {given_id for given_id, _ in given_ids_texts}
         # filter res to only the requested given_ids
         res = {x: res[x] for x in requested_given_ids if x in res}
         return res
