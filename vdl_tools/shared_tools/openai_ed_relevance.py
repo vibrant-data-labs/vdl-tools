@@ -1,8 +1,6 @@
 import os
 from textwrap import dedent
 import pandas as pd
-from dotenv import load_dotenv
-from vdl_tools.shared_tools.all_source_organization_summarization import BASE_PROMPT
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 from vdl_tools.shared_tools.openai.prompt_response_cache_sql import (
     PromptResponseCacheSQL,
@@ -95,21 +93,10 @@ BASE_PROMPT = dedent(
 
 
 def get_bulk_relevancy(
-    ids_text_lists: list[tuple],
+    ids_texts: list[tuple],
     use_cached_results: bool = True,
     prompt_string: str = BASE_PROMPT,
 ):
-    ids_texts = []
-    for id_, text_list in ids_text_lists:
-        filtered_text_list = [x for x in text_list if x]
-        text = "\n\n".join(
-            [
-                f"Description {i + 1}\n{text}"
-                for i, text in enumerate(filtered_text_list)
-            ]
-        )
-        ids_texts.append((id_, text))
-
     with get_session() as session:
         prompt_response = PromptResponseCacheSQL(
             session=session,

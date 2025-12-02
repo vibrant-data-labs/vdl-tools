@@ -32,7 +32,15 @@ default_file_paths: OutputFilePaths = {
 }
 
 
-def __iterative_query(query_method, fields, search_field, query_list, extra_filters = [], operator = 'contains'):
+def __iterative_query(
+    query_method,
+    fields,
+    search_field,
+    query_list,
+    extra_filters = [],
+    operator = 'contains',
+    limit = None,
+):
     if operator == 'includes':
         method = api.includes
     elif operator == 'eq' or operator == 'equals':
@@ -45,6 +53,7 @@ def __iterative_query(query_method, fields, search_field, query_list, extra_filt
         method = api.contains
 
     result_dict = dict()
+    total_results = 0
     for i in range(0, len(query_list), __query_step):
         print(f'Filtering by items from {i + 1} to {i + __query_step} out of {len(query_list)}')
         result_dict[i] = query_method(
@@ -52,20 +61,25 @@ def __iterative_query(query_method, fields, search_field, query_list, extra_filt
             filters = [
                 method(search_field, query_list[i:i+__query_step]),
                 *extra_filters
-            ]
+            ],
+            limit=limit,
         )
-
+        total_results += len(result_dict[i])
+        if limit and total_results >= limit:
+            break
+    logger.info(f"Found {total_results} results")
     return pd.concat(result_dict, ignore_index=True)
 
 
-def companies_query(search_terms_list, extra_filters):
+def companies_query(search_terms_list, extra_filters, limit=None):
     print('Querying companies by description...')
     return __iterative_query(
         companies.query,
         companies.all_fields,
         "description",
         search_terms_list,
-        extra_filters=extra_filters
+        extra_filters=extra_filters,
+        limit=limit,
     )
 
 
@@ -91,7 +105,7 @@ def companies_id_query(ids):
     )
 
 
-def companies_industry_query(industry_ids, extra_filters=[]):
+def companies_industry_query(industry_ids, extra_filters=[], limit=None):
     print('Querying companies by industry...')
     return __iterative_query(
         companies.query,
@@ -99,7 +113,8 @@ def companies_industry_query(industry_ids, extra_filters=[]):
         "categories",
         industry_ids,
         extra_filters=extra_filters,
-        operator='includes'
+        operator='includes',
+        limit=limit,
     )
 
 
