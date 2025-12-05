@@ -137,22 +137,3 @@ def batch_generates_taxonomy_search_term_candidates(
     parsed_responses = pd.DataFrame(parsed_responses)
 
     return parsed_responses
-
-if __name__ == "__main__":
-    from vdl_tools.shared_tools.database_cache.database_utils import get_session
-
-    # How it works with the default prompt
-    # terms = single_generates_taxonomy_search_term_candidates(
-    #     topic="Education",
-    #     solution_name="Classroom Modernization",
-    #     parent_category="Operational systems - Facilities",
-    #     definition="The Classroom Modernization category within Operational Facilities encompasses the redesign, renovation, and technological upgrading of physical learning spaces to support evolving instructional models and diverse learner needs in pre-K and K-12 settings. This includes replacing outdated furniture with flexible, ergonomic seating and modular layouts that accommodate collaborative, project-based, and individualized learning formats. Schools integrate interactive whiteboards, advanced audiovisual systems, and wireless connectivity to enable seamless use of digital content and devices. Lighting, acoustics, and air quality improvements are implemented to create healthier, more comfortable environments. Modern classrooms often feature adaptable infrastructure such as movable walls and multi-functional zones to support varied activities and group sizes throughout the day. Technology-enabled spaces incorporate charging stations, device storage, and integrated control systems for environmental settings and digital tools. These upgrades are deployed through district-led initiatives, capital improvement programs, and partnerships with education technology providers. Emerging trends include embedding sensors and IoT devices to monitor space utilization and environmental conditions, as well as incorporating augmented and virtual reality capabilities to expand experiential learning opportunities. Future developments may emphasize sustainability through energy-efficient materials and designs that reduce operational costs while maintaining adaptability. Overall, Classroom Modernization focuses on creating versatile, technology-rich environments that align physical space with contemporary teaching practices and learner engagement strategies."
-    # )
-
-    terms = batch_generates_taxonomy_search_term_candidates(
-        topic="Education",
-        solutions_list=[
-            ("Classroom Modernization", "Operational systems - Facilities", "The Classroom Modernization category within Operational Facilities encompasses the redesign, renovation, and technological upgrading of physical learning spaces to support evolving instructional models and diverse learner needs in pre-K and K-12 settings. This includes replacing outdated furniture with flexible, ergonomic seating and modular layouts that accommodate collaborative, project-based, and individualized learning formats. Schools integrate interactive whiteboards, advanced audiovisual systems, and wireless connectivity to enable seamless use of digital content and devices. Lighting, acoustics, and air quality improvements are implemented to create healthier, more comfortable environments. Modern classrooms often feature adaptable infrastructure such as movable walls and multi-functional zones to support varied activities and group sizes throughout the day. Technology-enabled spaces incorporate charging stations, device storage, and integrated control systems for environmental settings and digital tools. These upgrades are deployed through district-led initiatives, capital improvement programs, and partnerships with education technology providers. Emerging trends include embedding sensors and IoT devices to monitor space utilization and environmental conditions, as well as incorporating augmented and virtual reality capabilities to expand experiential learning opportunities. Future developments may emphasize sustainability through energy-efficient materials and designs that reduce operational costs while maintaining adaptability. Overall, Classroom Modernization focuses on creating versatile, technology-rich environments that align physical space with contemporary teaching practices and learner engagement strategies."),
-        ],
-    )
-    import ipdb; ipdb.set_trace()
