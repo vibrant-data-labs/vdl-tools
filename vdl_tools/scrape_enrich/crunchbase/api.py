@@ -75,6 +75,19 @@ def print_progress_bar(iteration, total, prefix = '', suffix = '', decimals = 1,
     if iteration == total: 
         print()
 
+def api_count_factory(url, default_fields,) -> Callable:
+    import requests
+    import pandas as pd
+
+    def api_count(fields=default_fields, filters=list()):
+        data = requests.post(
+            url,
+            json={"field_ids": fields, "query": filters, "limit": 1},
+        )
+        return data.json()["count"]
+
+    return api_count
+
 
 def api_query_factory(url, default_fields, limit=None) -> Callable:
     import requests
