@@ -96,6 +96,9 @@ def get_bulk_relevancy(
     ids_texts: list[tuple],
     use_cached_results: bool = True,
     prompt_string: str = BASE_PROMPT,
+    n_per_commit: int = 50,
+    max_workers: int = 10,
+    max_errors: int = 1,
 ):
     with get_session() as session:
         prompt_response = PromptResponseCacheSQL(
@@ -107,5 +110,8 @@ def get_bulk_relevancy(
         ids_to_response = prompt_response.bulk_get_cache_or_run(
             given_ids_texts=ids_texts,
             use_cached_result=use_cached_results,
+            n_per_commit=n_per_commit,
+            max_workers=max_workers,
+            max_errors=max_errors,
         )
     return {k: v["response_text"] for k, v in ids_to_response.items()}

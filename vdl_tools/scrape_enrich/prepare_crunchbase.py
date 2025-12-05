@@ -316,7 +316,7 @@ def process_crunchbase_raw_data(
         'founded_on',
         'website_url',
         'linkedin',
-        'acquirer_identifier',
+        # 'acquirer_identifier',
         'facet_ids',  # investor vs company
         'ipo_status',  # private vs public
         'num_articles',  # news mentions
@@ -398,7 +398,7 @@ def process_crunchbase_raw_data(
     logger.info('Extracting diversity spotlights')
     df_cb['diversity'] = df_cb['diversity_spotlights'].apply(__get_values)
 
-    df_cb['Acquired by'] = df_cb['acquirer_identifier'].apply(__get_values)
+    # df_cb['Acquired by'] = df_cb['acquirer_identifier'].apply(__get_values)
     df_cb['linkedin'] = df_cb['linkedin'].apply(lambda l: __get_values(l))
 
     logger.info('Extracting location identifiers')

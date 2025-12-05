@@ -157,7 +157,9 @@ def reshape_candid_funding(
     candid_funding_long["vdl_stage"] = "Philanthropy"
     candid_funding_long["funding_investment_type"] = "Philanthropy"
 
+    candid_funding_long = candid_funding_long[candid_funding_long['Funding'].apply(lambda x: isinstance(x, float) or isinstance(x, int))]
+    candid_funding_long['Funding'] = candid_funding_long["Funding"].astype(float)
+
     if drop_no_funding:
-        candid_funding_long["Funding"].fillna(0, inplace=True)
         return candid_funding_long[candid_funding_long["Funding"] > 0]
     return candid_funding_long
