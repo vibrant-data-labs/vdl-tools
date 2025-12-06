@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor as ThreadPool
 from concurrent.futures import ProcessPoolExecutor as ProcessPool
 import threading
+import time
 
 from enum import Enum
 from more_itertools import chunked
@@ -22,36 +23,29 @@ driver_init_lock = threading.Lock()
 
 
 def __get_driver():
-    Driver = getattr(thread_local, 'driver', None)
-    if Driver is None:
+    """Get or create a thread-local Chrome driver instance"""
+    if not hasattr(thread_local, 'driver') or thread_local.driver is None:
         # Use a lock to prevent multiple threads from initializing drivers simultaneously
         with driver_init_lock:
             # Double-check after acquiring lock
-            Driver = getattr(thread_local, 'driver', None)
-            if Driver is None:
-                try:
-                    logger.debug("Initializing new driver for thread")
-                    Driver = ps.page_scraper(max_retries=3, retry_delay=2)
-                    Driver.set_page_load_timeout(25)
-                    setattr(thread_local, 'driver', Driver)
-                except Exception as e:
-                    logger.error(f"Failed to initialize driver: {e}")
-                    raise
-
-    return Driver
+            if not hasattr(thread_local, 'driver') or thread_local.driver is None:
+                logger.debug("Initializing new driver for thread")
+                thread_local.driver = ps.page_scraper(max_retries=3, retry_delay=2)
+                thread_local.driver.set_page_load_timeout(25)
+    
+    return thread_local.driver
 
 
 def __cleanup_driver():
     """Clean up the thread-local driver"""
-    Driver = getattr(thread_local, 'driver', None)
-    if Driver is not None:
+    if hasattr(thread_local, 'driver') and thread_local.driver is not None:
         try:
-            Driver.quit()
+            thread_local.driver.quit()
             logger.debug("Driver cleaned up successfully")
         except Exception as e:
             logger.warning(f"Error cleaning up driver: {e}")
         finally:
-            setattr(thread_local, 'driver', None)
+            thread_local.driver = None
 
 class PageType(Enum):
     INDEX = "index",
@@ -309,7 +303,7 @@ def scrape_websites_psql(
     single_page_websites: list = [],
     n_per_commit: int = 10,
     max_errors: int = MAX_ERRORS,
-    max_workers: int = 2,  # Reduced default to prevent overwhelming the system
+    max_workers: int = 5,  # Default workers - can be adjusted based on system resources
     return_raw_html: bool = False,
     filter_no_body: bool = True,
     add_section_links: bool = False,
@@ -321,26 +315,47 @@ def scrape_websites_psql(
         url_website_id,
     ):
         url, website_id = url_website_id
-        try:
-            scraper = __get_driver()
-            response = get_page_data(
-                url,
-                website_id,
-                data_type=PageType.INDEX,
-                subpage_type=subpage_type,
-                single_page_websites=single_page_websites,
-                scraper=scraper,
-                return_raw_html=return_raw_html,
-                filter_no_body=filter_no_body,
-                add_section_links=add_section_links,
-                verify_ssl=verify_ssl,
-            )
-            return response
-        except Exception as ex:
-            logger.warning(f'Error processing website: {url} {ex}')
-            # Clean up driver on error to free resources
-            __cleanup_driver()
-            return []
+        max_retries = 2
+        
+        for attempt in range(max_retries):
+            try:
+                scraper = __get_driver()
+                response = get_page_data(
+                    url,
+                    website_id,
+                    data_type=PageType.INDEX,
+                    subpage_type=subpage_type,
+                    single_page_websites=single_page_websites,
+                    scraper=scraper,
+                    return_raw_html=return_raw_html,
+                    filter_no_body=filter_no_body,
+                    add_section_links=add_section_links,
+                    verify_ssl=verify_ssl,
+                )
+                return response
+            except Exception as ex:
+                error_msg = str(ex).lower()
+                # Check if it's a driver-related error
+                is_driver_error = any(keyword in error_msg for keyword in [
+                    'chrome not reachable',
+                    'session not created',
+                    'invalid session',
+                    'chrome has crashed',
+                    'disconnected',
+                ])
+                
+                if is_driver_error and attempt < max_retries - 1:
+                    logger.warning(f'Driver error for {url} (attempt {attempt + 1}/{max_retries}): {ex}. Recreating driver...')
+                    __cleanup_driver()
+                    time.sleep(1)  # Small delay before retry
+                else:
+                    logger.warning(f'Error processing website: {url} {ex}')
+                    # Clean up driver on final error if it's a driver issue
+                    if is_driver_error:
+                        __cleanup_driver()
+                    return []
+        
+        return []
 
     urls_ids = [(url, extract_website_name(url)) for url in urls]
 
