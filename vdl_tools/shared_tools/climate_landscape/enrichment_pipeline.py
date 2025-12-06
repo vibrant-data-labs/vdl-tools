@@ -37,6 +37,7 @@ GLOBAL_CONFIG = get_configuration()
 
 
 MAX_WORKERS = 10
+MAX_SCRAPE_WEBSITES_WORKERS = 5
 MIN_DESCRIPTION_LENGTH = 100
 TEXT_FIELDS = ["Description", "Description_990", "Website Summary", "About LinkedIn"]
 
@@ -51,6 +52,7 @@ def get_website_summaries(
     use_combined=True,
     max_workers=MAX_WORKERS,
     max_errors=1,
+    max_scrape_websites_workers=MAX_SCRAPE_WEBSITES_WORKERS,
 ):
     df_web, df = get_scraped_df(
         df,
@@ -60,7 +62,7 @@ def get_website_summaries(
         skip_existing=skip_existing,
         summary_prompt=summary_prompt,
         return_combined_res=use_combined,
-        max_workers=max_workers,
+        max_workers=max_scrape_websites_workers,
         max_errors=max_errors,
     )
 

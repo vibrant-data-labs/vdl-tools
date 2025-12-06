@@ -18,16 +18,40 @@ from vdl_tools.shared_tools.tools.text_cleaning import clean_scraped_text
 
 
 thread_local = threading.local()
+driver_init_lock = threading.Lock()
 
 
 def __get_driver():
     Driver = getattr(thread_local, 'driver', None)
     if Driver is None:
-        Driver = ps.page_scraper()
-        Driver.set_page_load_timeout(25)
-        setattr(thread_local, 'driver', Driver)
+        # Use a lock to prevent multiple threads from initializing drivers simultaneously
+        with driver_init_lock:
+            # Double-check after acquiring lock
+            Driver = getattr(thread_local, 'driver', None)
+            if Driver is None:
+                try:
+                    logger.debug("Initializing new driver for thread")
+                    Driver = ps.page_scraper(max_retries=3, retry_delay=2)
+                    Driver.set_page_load_timeout(25)
+                    setattr(thread_local, 'driver', Driver)
+                except Exception as e:
+                    logger.error(f"Failed to initialize driver: {e}")
+                    raise
 
     return Driver
+
+
+def __cleanup_driver():
+    """Clean up the thread-local driver"""
+    Driver = getattr(thread_local, 'driver', None)
+    if Driver is not None:
+        try:
+            Driver.quit()
+            logger.debug("Driver cleaned up successfully")
+        except Exception as e:
+            logger.warning(f"Error cleaning up driver: {e}")
+        finally:
+            setattr(thread_local, 'driver', None)
 
 class PageType(Enum):
     INDEX = "index",
@@ -285,7 +309,7 @@ def scrape_websites_psql(
     single_page_websites: list = [],
     n_per_commit: int = 10,
     max_errors: int = MAX_ERRORS,
-    max_workers: int = 5,
+    max_workers: int = 2,  # Reduced default to prevent overwhelming the system
     return_raw_html: bool = False,
     filter_no_body: bool = True,
     add_section_links: bool = False,
@@ -297,8 +321,8 @@ def scrape_websites_psql(
         url_website_id,
     ):
         url, website_id = url_website_id
-        scraper = __get_driver()
         try:
+            scraper = __get_driver()
             response = get_page_data(
                 url,
                 website_id,
@@ -314,6 +338,8 @@ def scrape_websites_psql(
             return response
         except Exception as ex:
             logger.warning(f'Error processing website: {url} {ex}')
+            # Clean up driver on error to free resources
+            __cleanup_driver()
             return []
 
     urls_ids = [(url, extract_website_name(url)) for url in urls]
