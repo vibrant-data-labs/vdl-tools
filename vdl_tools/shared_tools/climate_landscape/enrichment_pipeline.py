@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import pandas as pd
 
@@ -37,7 +38,7 @@ GLOBAL_CONFIG = get_configuration()
 
 
 MAX_WORKERS = 10
-MAX_SCRAPE_WEBSITES_WORKERS = 5
+MAX_SCRAPE_WEBSITES_WORKERS = os.environ.get("MAX_SCRAPE_WEBSITES_WORKERS", 5)
 MIN_DESCRIPTION_LENGTH = 100
 TEXT_FIELDS = ["Description", "Description_990", "Website Summary", "About LinkedIn"]
 
