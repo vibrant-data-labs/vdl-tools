@@ -2,6 +2,8 @@ import os
 import numpy as np
 import pandas as pd
 
+import socket; socket.setdefaulttimeout(30)
+
 # from common: commonly used functions
 from vdl_tools.linkedin import org_loader as li
 from vdl_tools.linkedin.utils.linkedin_url import extract_linkedin_id

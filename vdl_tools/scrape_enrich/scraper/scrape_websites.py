@@ -31,7 +31,7 @@ def __get_driver():
             if not hasattr(thread_local, 'driver') or thread_local.driver is None:
                 logger.debug("Initializing new driver for thread")
                 thread_local.driver = ps.page_scraper(max_retries=3, retry_delay=2)
-                thread_local.driver.set_page_load_timeout(25)
+                thread_local.driver.set_page_load_timeout(10)
     
     return thread_local.driver
 
