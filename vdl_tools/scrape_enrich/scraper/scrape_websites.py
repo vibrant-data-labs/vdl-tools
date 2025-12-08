@@ -325,12 +325,12 @@ def scrape_websites_psql(
             # Configure Async Scraper Limits
             max_http = min(20, max_workers * 4) 
             max_browser = min(3, max_workers)
-            
+
             async with AsyncScraper(max_http, max_browser, verify_ssl=verify_ssl) as scraper:
                 for i, chunk in enumerate(chunks):
                     logger.info(f"Scraping chunk {i+1} / {len(chunks)}")
                     chunk_urls = [x[0] for x in chunk]
-                    
+
                     # Scrape main pages with error handling
                     tasks = [scraper.scrape_url(url) for url in chunk_urls]
                     scrape_results = await asyncio.gather(*tasks)
@@ -338,7 +338,7 @@ def scrape_websites_psql(
                     # Process main pages
                     internal_links_to_scrape = []
                     for res, (original_url, website_id) in zip(scrape_results, chunk):
-                        
+
                         # Process the main index page
                         processed_pages = process_scraped_content(
                             res,
@@ -358,7 +358,7 @@ def scrape_websites_psql(
                             webpage_obj = WebPagesScraped(**row)
                             session.merge(webpage_obj)
                             newly_scraped_data.append(webpage_obj.to_dict())
-                        
+
                         # Check for internal pages to scrape (if not single page app)
                         is_single_page = check_is_single_page_websites(original_url, single_page_websites)
                         if res.get('success') and not is_single_page and res.get('content'):
