@@ -6,16 +6,37 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 
 logger = logging.getLogger(__name__)
 
+# Default retry configuration
+DEFAULT_HTTP_RETRIES = 3
+DEFAULT_RETRY_DELAY = 1.0  # seconds
+
+
 class AsyncScraper:
-    def __init__(self, max_concurrent_http: int = 20, max_concurrent_browser: int = 3, verify_ssl: bool = False):
+    def __init__(
+        self,
+        max_concurrent_http: int = 20,
+        max_concurrent_browser: int = 3,
+        verify_ssl: bool = False,
+        http_retries: int = DEFAULT_HTTP_RETRIES,
+        retry_delay: float = DEFAULT_RETRY_DELAY,
+    ):
         """
         Initialize the async scraper with separate concurrency limits for lightweight (HTTP)
         and heavyweight (Browser) tasks.
+        
+        Args:
+            max_concurrent_http: Maximum concurrent HTTP requests
+            max_concurrent_browser: Maximum concurrent browser instances
+            verify_ssl: Whether to verify SSL certificates
+            http_retries: Number of retries for failed HTTP requests
+            retry_delay: Base delay between retries (uses exponential backoff)
         """
         self.http_sem = asyncio.Semaphore(max_concurrent_http)
         self.browser_sem = asyncio.Semaphore(max_concurrent_browser)
         self.client: Optional[httpx.AsyncClient] = None
         self.verify_ssl = verify_ssl
+        self.http_retries = http_retries
+        self.retry_delay = retry_delay
         self.playwright = None
         self.browser = None
 
@@ -64,33 +85,59 @@ class AsyncScraper:
 
     async def fetch_http(self, url: str) -> Optional[str]:
         """
-        Attempt to fetch the page using lightweight HTTP request.
+        Attempt to fetch the page using lightweight HTTP request with retry logic.
+        Uses exponential backoff for transient failures.
         """
         async with self.http_sem:
-            try:
-                if not url.startswith('http'):
-                    url = f'https://{url}'
+            if not url.startswith('http'):
+                url = f'https://{url}'
+            
+            last_exception = None
+            for attempt in range(self.http_retries):
+                try:
+                    response = await self.client.get(url)
                     
-                response = await self.client.get(url)
-                
-                if response.status_code >= 400:
-                    logger.warning(f"HTTP {response.status_code} for {url}")
+                    if response.status_code >= 400:
+                        logger.warning(f"HTTP {response.status_code} for {url}")
+                        # Don't retry on 4xx client errors (except 429 rate limit)
+                        if 400 <= response.status_code < 500 and response.status_code != 429:
+                            return None
+                        # Retry on 5xx server errors or 429 rate limit
+                        last_exception = Exception(f"HTTP {response.status_code}")
+                        if attempt < self.http_retries - 1:
+                            delay = self.retry_delay * (2 ** attempt)
+                            logger.debug(f"Retrying {url} in {delay}s (attempt {attempt + 1}/{self.http_retries})")
+                            await asyncio.sleep(delay)
+                            continue
+                        return None
+                        
+                    text = response.text
+                    if not text:
+                        return None
+                        
+                    # Detect common JS-wall patterns (Cloudflare, etc.) that require a browser
+                    lower_text = text.lower()
+                    if any(x in lower_text for x in ['enable javascript', 'please turn javascript on', 'challenges.cloudflare.com']):
+                        logger.info(f"Detected JS requirement for {url}, fallback to browser")
+                        return None
+                        
+                    return text
+                    
+                except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as e:
+                    # Retry on transient network errors
+                    last_exception = e
+                    if attempt < self.http_retries - 1:
+                        delay = self.retry_delay * (2 ** attempt)
+                        logger.debug(f"Retrying {url} in {delay}s after {type(e).__name__} (attempt {attempt + 1}/{self.http_retries})")
+                        await asyncio.sleep(delay)
+                    else:
+                        logger.debug(f"HTTP fetch failed for {url} after {self.http_retries} attempts: {str(e)}")
+                except Exception as e:
+                    # Don't retry on other exceptions
+                    logger.debug(f"HTTP fetch failed for {url}: {str(e)}")
                     return None
-                    
-                text = response.text
-                if not text:
-                    return None
-                    
-                # Detect common JS-wall patterns (Cloudflare, etc.) that require a browser
-                lower_text = text.lower()
-                if any(x in lower_text for x in ['enable javascript', 'please turn javascript on', 'challenges.cloudflare.com']):
-                    logger.info(f"Detected JS requirement for {url}, fallback to browser")
-                    return None
-                    
-                return text
-            except Exception as e:
-                logger.debug(f"HTTP fetch failed for {url}: {str(e)}")
-                return None
+            
+            return None
 
     async def fetch_browser(self, url: str) -> Optional[str]:
         """
@@ -102,44 +149,44 @@ class AsyncScraper:
             return None
 
         async with self.browser_sem:
-            try:
-                if not url.startswith('http'):
-                    url = f'https://{url}'
+            if not url.startswith('http'):
+                url = f'https://{url}'
 
+            context = None
+            try:
+                # Create context with resource blocking to save bandwidth/memory
+                context = await self.browser.new_context(
+                    user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'
+                )
+                
+                # Block images, fonts, media to speed up loading
+                await context.route("**/*.{png,jpg,jpeg,gif,webp,svg,css,woff,woff2,mp4,mp3}", lambda route: route.abort())
+                
+                page = await context.new_page()
+                
                 try:
-                    # Create context with resource blocking to save bandwidth/memory
-                    context = await self.browser.new_context(
-                        user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'
-                    )
+                    # Navigate with timeout
+                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
                     
-                    # Block images, fonts, media to speed up loading
-                    await context.route("**/*.{png,jpg,jpeg,gif,webp,svg,css,woff,woff2,mp4,mp3}", lambda route: route.abort())
+                    # Wait a bit for potential client-side rendering
+                    await page.wait_for_timeout(2000)
                     
-                    page = await context.new_page()
+                    content = await page.content()
+                    return content
                     
-                    try:
-                        # Navigate with timeout
-                        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                        
-                        # Wait a bit for potential client-side rendering
-                        await page.wait_for_timeout(2000)
-                        
-                        content = await page.content()
-                        return content
-                        
-                    except PlaywrightTimeoutError:
-                        logger.warning(f"Browser timeout for {url}, attempting to return partial content")
-                        return await page.content()
-                    finally:
-                        await context.close()
-                        
-                except Exception as e:
-                    logger.warning(f"Browser context error for {url}: {str(e)}")
-                    return None
-                        
+                except PlaywrightTimeoutError:
+                    logger.warning(f"Browser timeout for {url}, attempting to return partial content")
+                    return await page.content()
+                    
             except Exception as e:
                 logger.warning(f"Browser fetch failed for {url}: {str(e)}")
                 return None
+            finally:
+                if context:
+                    try:
+                        await context.close()
+                    except Exception:
+                        pass  # Ignore errors during cleanup
 
     async def scrape_url(self, url: str) -> Dict[str, Any]:
         """
@@ -169,10 +216,35 @@ class AsyncScraper:
             "success": bool(content)
         }
 
-async def scrape_urls_async(urls: List[str], max_concurrent_http: int = 20, max_concurrent_browser: int = 3, verify_ssl: bool = False) -> List[Dict[str, Any]]:
+async def scrape_urls_async(
+    urls: List[str],
+    max_concurrent_http: int = 20,
+    max_concurrent_browser: int = 3,
+    verify_ssl: bool = False,
+) -> List[Dict[str, Any]]:
     """
     Helper function to run the scraper for a list of URLs.
+    
+    Returns a list of results, one per URL. Failed URLs will have success=False.
     """
     async with AsyncScraper(max_concurrent_http, max_concurrent_browser, verify_ssl) as scraper:
         tasks = [scraper.scrape_url(url) for url in urls]
-        return await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Convert exceptions to failed results
+        processed_results = []
+        for url, result in zip(urls, results):
+            if isinstance(result, Exception):
+                logger.warning(f"Scraping failed for {url}: {result}")
+                processed_results.append({
+                    "url": url,
+                    "content": None,
+                    "status_code": 0,
+                    "method": "failed",
+                    "success": False,
+                    "error": str(result),
+                })
+            else:
+                processed_results.append(result)
+        
+        return processed_results

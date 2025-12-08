@@ -56,7 +56,7 @@ def __clean_website_path(value: str) -> str:
     /page?page_title=about-us -> page_page_title_about-us
     '''
     if 'www' in value:
-        logger.warn("Invalid value because path contains 'www': {value}")
+        logger.warning(f"Invalid value because path contains 'www': {value}")
         return None
     try:
         path = value.split(
@@ -68,7 +68,7 @@ def __clean_website_path(value: str) -> str:
 
         return path
     except Exception as ex:
-        logger.warn(f'Error cleaning website path: {value}')
+        logger.warning(f'Error cleaning website path: {value}')
         return None
 
 
@@ -175,7 +175,7 @@ def process_scraped_content(
             logger.debug(f'{url} is marked as single page website, skipping internal pages')
 
     else:
-        logger.warn(f"Failed to receive data for {url}, marking it as error")
+        logger.warning(f"Failed to receive data for {url}, marking it as error")
         res.append({
             "cleaned_key": cache_id,
             "full_path": url,
@@ -321,7 +321,8 @@ def scrape_websites_psql(
         newly_scraped_data = []
 
         async def process_scraping_job(chunks, existing_scraped_keys):
-             # Configure Async Scraper Limits
+            """Process scraping jobs asynchronously with proper error handling."""
+            # Configure Async Scraper Limits
             max_http = min(20, max_workers * 4) 
             max_browser = min(3, max_workers)
             
@@ -330,13 +331,26 @@ def scrape_websites_psql(
                     logger.info(f"Scraping chunk {i+1} / {len(chunks)}")
                     chunk_urls = [x[0] for x in chunk]
                     
-                    # Scrape main pages
+                    # Scrape main pages with error handling
                     tasks = [scraper.scrape_url(url) for url in chunk_urls]
-                    scrape_results = await asyncio.gather(*tasks)
+                    scrape_results = await asyncio.gather(*tasks, return_exceptions=True)
 
                     # Process main pages
                     internal_links_to_scrape = []
-                    for res, (original_url, website_id) in zip(scrape_results, chunk):
+                    for result, (original_url, website_id) in zip(scrape_results, chunk):
+                        # Handle exceptions from gather
+                        if isinstance(result, Exception):
+                            logger.warning(f"Scraping failed for {original_url}: {result}")
+                            res = {
+                                "url": original_url,
+                                "content": None,
+                                "status_code": 0,
+                                "method": "failed",
+                                "success": False,
+                            }
+                        else:
+                            res = result
+                        
                         # Process the main index page
                         processed_pages = process_scraped_content(
                             res,
@@ -377,10 +391,23 @@ def scrape_websites_psql(
                         internal_urls = [x[0] for x in internal_links_to_scrape]
                         
                         internal_tasks = [scraper.scrape_url(url) for url in internal_urls]
-                        internal_results = await asyncio.gather(*internal_tasks)
+                        internal_results = await asyncio.gather(*internal_tasks, return_exceptions=True)
                         
-                        for int_res, (full_url, full_path, root_url, clean_path) in zip(internal_results, internal_links_to_scrape):
-                             processed_internal = process_scraped_content(
+                        for int_result, (full_url, full_path, root_url, clean_path) in zip(internal_results, internal_links_to_scrape):
+                            # Handle exceptions from gather
+                            if isinstance(int_result, Exception):
+                                logger.warning(f"Scraping failed for internal page {full_url}: {int_result}")
+                                int_res = {
+                                    "url": full_url,
+                                    "content": None,
+                                    "status_code": 0,
+                                    "method": "failed",
+                                    "success": False,
+                                }
+                            else:
+                                int_res = int_result
+                            
+                            processed_internal = process_scraped_content(
                                 int_res,
                                 cache_id=full_path,
                                 data_type=PageType.PAGE,
@@ -389,10 +416,10 @@ def scrape_websites_psql(
                                 return_raw_html=return_raw_html,
                                 filter_no_body=filter_no_body,
                                 add_section_links=add_section_links
-                             )
-                             for row in processed_internal:
+                            )
+                            for row in processed_internal:
                                 if row['num_errors']:
-                                     row['num_errors'] += existing_scraped_keys.get(row['cleaned_key'], 0)
+                                    row['num_errors'] += existing_scraped_keys.get(row['cleaned_key'], 0)
                                 webpage_obj = WebPagesScraped(**row)
                                 session.merge(webpage_obj)
                                 newly_scraped_data.append(webpage_obj.to_dict())
@@ -406,10 +433,28 @@ def scrape_websites_psql(
             # We do it in chunks to avoid overwhelming everything at once and allow partial commits
             scrapping_chunks = list(chunked(urls_to_scrape, n_per_commit))
             
+            interrupted = False
             try:
                 asyncio.run(process_scraping_job(scrapping_chunks, existing_scraped_keys))
             except KeyboardInterrupt:
                 logger.warning("Received KeyboardInterrupt, returning the currently scraped data...")
+                interrupted = True
+                # Commit any pending data before returning
+                try:
+                    session.commit()
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.error(f"Error during scraping: {e}")
+                # Try to commit any successful scrapes before re-raising
+                try:
+                    session.commit()
+                except Exception:
+                    pass
+                raise
+            
+            if interrupted:
+                logger.info(f"Returning {len(newly_scraped_data)} scraped pages after interruption")
 
         # Combine existing and newly scraped data
         all_scraped_data = existing_scraped_data + newly_scraped_data
