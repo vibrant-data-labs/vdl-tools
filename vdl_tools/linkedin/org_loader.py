@@ -20,6 +20,7 @@ from vdl_tools.linkedin.handlers.coresignal_query import (
     search_es_dsl,
     EXCLUDED_LINKEDINS
 )
+from vdl_tools.linkedin.handlers import direct_query as dq
 import vdl_tools.linkedin.processors.raw_org_processor as rop
 from vdl_tools.linkedin.utils.shared import is_error_item, save_dataset, total_list_handler
 
@@ -103,7 +104,7 @@ def scrape_organizations(
                 total_list_handler(res, raw_cache)
                 continue
 
-            item_type, data = bh.load_organization(linkedin_id, config, json_cache, raw_cache)
+            item_type, data = load_organization_no_cache(linkedin_id)
             if data:
                 org_data = process_org_data(linkedin_id, item_type, data)
                 org_data['original_id'] = value
@@ -117,6 +118,18 @@ def scrape_organizations(
 
     save_dataset(res, raw_cache)
     return pd.DataFrame(res)
+
+def load_organization_no_cache(id: str):
+    try:
+        log.warning(f"({id}) Loading using direct query")
+        res = dq.get_organization(id)
+        if res:
+            return res
+    except Exception as ex:
+        log.warning('Failed to load using direct query')
+
+
+    return None
 
 
 def _tuple_to_dict(item):
