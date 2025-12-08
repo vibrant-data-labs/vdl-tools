@@ -313,7 +313,7 @@ def scrape_organizations_psql(
         idx = idx + 1
         log.warn(f'({idx} / {len_unfound}) Processing {url}')
         try:
-            data = bh.load_organization_no_cache(linkedin_id)
+            data = load_organization_no_cache(linkedin_id)
             if data:
                 result = process_org_data(linkedin_id, 'html', data)
                 result['original_id'] = url
