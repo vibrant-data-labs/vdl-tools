@@ -333,23 +333,11 @@ def scrape_websites_psql(
                     
                     # Scrape main pages with error handling
                     tasks = [scraper.scrape_url(url) for url in chunk_urls]
-                    scrape_results = await asyncio.gather(*tasks, return_exceptions=True)
+                    scrape_results = await asyncio.gather(*tasks)
 
                     # Process main pages
                     internal_links_to_scrape = []
-                    for result, (original_url, website_id) in zip(scrape_results, chunk):
-                        # Handle exceptions from gather
-                        if isinstance(result, Exception):
-                            logger.warning(f"Scraping failed for {original_url}: {result}")
-                            res = {
-                                "url": original_url,
-                                "content": None,
-                                "status_code": 0,
-                                "method": "failed",
-                                "success": False,
-                            }
-                        else:
-                            res = result
+                    for res, (original_url, website_id) in zip(scrape_results, chunk):
                         
                         # Process the main index page
                         processed_pages = process_scraped_content(
@@ -391,21 +379,9 @@ def scrape_websites_psql(
                         internal_urls = [x[0] for x in internal_links_to_scrape]
                         
                         internal_tasks = [scraper.scrape_url(url) for url in internal_urls]
-                        internal_results = await asyncio.gather(*internal_tasks, return_exceptions=True)
+                        internal_results = await asyncio.gather(*internal_tasks)
                         
-                        for int_result, (full_url, full_path, root_url, clean_path) in zip(internal_results, internal_links_to_scrape):
-                            # Handle exceptions from gather
-                            if isinstance(int_result, Exception):
-                                logger.warning(f"Scraping failed for internal page {full_url}: {int_result}")
-                                int_res = {
-                                    "url": full_url,
-                                    "content": None,
-                                    "status_code": 0,
-                                    "method": "failed",
-                                    "success": False,
-                                }
-                            else:
-                                int_res = int_result
+                        for int_res, (full_url, full_path, root_url, clean_path) in zip(internal_results, internal_links_to_scrape):
                             
                             processed_internal = process_scraped_content(
                                 int_res,
