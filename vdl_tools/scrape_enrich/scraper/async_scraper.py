@@ -7,7 +7,7 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 logger = logging.getLogger(__name__)
 
 class AsyncScraper:
-    def __init__(self, max_concurrent_http: int = 20, max_concurrent_browser: int = 3):
+    def __init__(self, max_concurrent_http: int = 20, max_concurrent_browser: int = 3, verify_ssl: bool = False):
         """
         Initialize the async scraper with separate concurrency limits for lightweight (HTTP)
         and heavyweight (Browser) tasks.
@@ -15,7 +15,9 @@ class AsyncScraper:
         self.http_sem = asyncio.Semaphore(max_concurrent_http)
         self.browser_sem = asyncio.Semaphore(max_concurrent_browser)
         self.client: Optional[httpx.AsyncClient] = None
-        self.verify_ssl = False
+        self.verify_ssl = verify_ssl
+        self.playwright = None
+        self.browser = None
 
     async def __aenter__(self):
         self.client = httpx.AsyncClient(
@@ -36,11 +38,29 @@ class AsyncScraper:
                 'Cache-Control': 'max-age=0',
             }
         )
+        
+        # Initialize Playwright and Browser once
+        self.playwright = await async_playwright().start()
+        self.browser = await self.playwright.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-gpu",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-setuid-sandbox",
+                "--no-zygote"
+            ]
+        )
+        
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self.client:
             await self.client.aclose()
+        if self.browser:
+            await self.browser.close()
+        if self.playwright:
+            await self.playwright.stop()
 
     async def fetch_http(self, url: str) -> Optional[str]:
         """
@@ -76,52 +96,46 @@ class AsyncScraper:
         """
         Fetch page using full browser (Playwright) when HTTP fails or is insufficient.
         """
+        # Ensure browser is initialized
+        if not self.browser:
+            logger.error("Browser not initialized. Use 'async with AsyncScraper()'.")
+            return None
+
         async with self.browser_sem:
             try:
                 if not url.startswith('http'):
                     url = f'https://{url}'
 
-                async with async_playwright() as p:
-                    # Launch browser - consider adding proxy args here if needed
-                    browser = await p.chromium.launch(
-                        headless=True,
-                        args=[
-                            "--disable-gpu",
-                            "--no-sandbox",
-                            "--disable-dev-shm-usage",
-                            "--disable-setuid-sandbox",
-                            "--no-zygote"
-                        ]
+                try:
+                    # Create context with resource blocking to save bandwidth/memory
+                    context = await self.browser.new_context(
+                        user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'
                     )
                     
+                    # Block images, fonts, media to speed up loading
+                    await context.route("**/*.{png,jpg,jpeg,gif,webp,svg,css,woff,woff2,mp4,mp3}", lambda route: route.abort())
+                    
+                    page = await context.new_page()
+                    
                     try:
-                        # Create context with resource blocking to save bandwidth/memory
-                        context = await browser.new_context(
-                            user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'
-                        )
-                        
-                        # Block images, fonts, media to speed up loading
-                        await context.route("**/*.{png,jpg,jpeg,gif,webp,svg,css,woff,woff2,mp4,mp3}", lambda route: route.abort())
-                        
-                        page = await context.new_page()
-                        
                         # Navigate with timeout
-                        try:
-                            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                            
-                            # Wait a bit for potential client-side rendering
-                            # You could make this smarter by waiting for specific selectors
-                            await page.wait_for_timeout(2000)
-                            
-                            content = await page.content()
-                            return content
-                            
-                        except PlaywrightTimeoutError:
-                            logger.warning(f"Browser timeout for {url}, attempting to return partial content")
-                            return await page.content()
-                            
+                        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                        
+                        # Wait a bit for potential client-side rendering
+                        await page.wait_for_timeout(2000)
+                        
+                        content = await page.content()
+                        return content
+                        
+                    except PlaywrightTimeoutError:
+                        logger.warning(f"Browser timeout for {url}, attempting to return partial content")
+                        return await page.content()
                     finally:
-                        await browser.close()
+                        await context.close()
+                        
+                except Exception as e:
+                    logger.warning(f"Browser context error for {url}: {str(e)}")
+                    return None
                         
             except Exception as e:
                 logger.warning(f"Browser fetch failed for {url}: {str(e)}")
@@ -155,10 +169,10 @@ class AsyncScraper:
             "success": bool(content)
         }
 
-async def scrape_urls_async(urls: List[str], max_concurrent_http: int = 20, max_concurrent_browser: int = 3) -> List[Dict[str, Any]]:
+async def scrape_urls_async(urls: List[str], max_concurrent_http: int = 20, max_concurrent_browser: int = 3, verify_ssl: bool = False) -> List[Dict[str, Any]]:
     """
     Helper function to run the scraper for a list of URLs.
     """
-    async with AsyncScraper(max_concurrent_http, max_concurrent_browser) as scraper:
+    async with AsyncScraper(max_concurrent_http, max_concurrent_browser, verify_ssl) as scraper:
         tasks = [scraper.scrape_url(url) for url in urls]
         return await asyncio.gather(*tasks)
