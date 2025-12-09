@@ -417,7 +417,7 @@ class PromptResponseCacheSQL():
                     logger.warning("Received KeyboardInterrupt, returning the currently scraped data...")
                     break
 
-                if n_run % 500 == 0:
+                if n_run % (10 * n_per_commit) == 0:
                     logger.info("Completed %s of %s (%s total completed)", n_run, len_unfound, len(res))
 
         # filter res to only the requested given_ids
