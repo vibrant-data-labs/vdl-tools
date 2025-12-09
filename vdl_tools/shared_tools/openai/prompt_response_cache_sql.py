@@ -369,7 +369,6 @@ class PromptResponseCacheSQL():
 
         res = {x.given_id: x.to_dict() for x in found_rows}
 
-        original_len_res = len(res)
         len_unfound = len(unfound_rows)
         logger.info("Found %s cached responses", len(res))
         logger.info("Need to run %s responses", len_unfound)
@@ -418,7 +417,13 @@ class PromptResponseCacheSQL():
                     break
 
                 if n_run % (10 * n_per_commit) == 0:
-                    logger.info("Completed %s of %s (%s total completed)", n_run, len_unfound, len(res))
+                    logger.info(
+                        "Completed %s of %s (%s / %s total completed)",
+                        n_run,
+                        len_unfound,
+                        len(res),
+                        len(requested_given_ids),
+                    )
 
         # filter res to only the requested given_ids
         res = {x: res[x] for x in requested_given_ids if x in res}
