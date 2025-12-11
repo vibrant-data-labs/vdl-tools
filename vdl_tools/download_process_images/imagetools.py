@@ -164,21 +164,21 @@ def download_images_df(df, image_dir=IMAGE_DIR,as_png=True):
                     e[row.name] = "FileExtensionError"
             else:
                 d[row.name] = ""
-                e[row.name] = "ImageUrlError"            
+                e[row.name] = "ImageUrlError"
         except:
-            d[row.name]=""
-            e[row.name] = "ImageDownloadError"      
-    df['filename'] = df['name'].map(d) # map filename value to name as new column in dataframe
-    df['filename'].fillna("", inplace=True)
+            d[row.name] = ""
+            e[row.name] = "ImageDownloadError"
+    df['filename'] = df['name'].map(d).fillna("")  # map filename value to name as new column in dataframe
     df['error'] = df['name'].map(e) # map error value to name as new column in dataframe
-    df['error'].fillna("", inplace=True)
+    df['error'] = df['error'].fillna("")
     
     # remove rows that have no filepath or error name
-    error_rows = df.apply(lambda x: (x['filename'] == "") or (x['error'] in ["FileExtensionError", "ImageUrlError", "ImageDownloadError"]), axis=1)
+    error_rows = df.apply(lambda x: (x['filename'] == "")
+                          or (x['error'] in ["FileExtensionError", "ImageUrlError", "ImageDownloadError"]), axis=1)
     df_success = df[~error_rows].reset_index(drop=True)
     # create a dataframe of the error
     df_failures = df[error_rows].reset_index(drop=True)
-    
+
     return df_success, df_failures
 
 ##############################
@@ -216,13 +216,13 @@ def process_images(
             resize_image(filename, width=width, height=height)
 
         if padding:
-            add_padding(filename, width=padding_width,height=padding_height)
+            add_padding(filename, width=padding_width, height=padding_height)
 
         if grayscale:
             convert_to_grayscale(filename)
 
         if background_color is not None:
-            add_background_color(filename, background_color)        
+            add_background_color(filename, background_color)
 
 def change_image_type(name, ext, remove_old=True, width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT):
     # Change image type of <name> to ext
@@ -379,10 +379,9 @@ def upload_images_df(
                 s3_urls_dict[row.name]=(f'ERROR - {e}')
         else:
             s3_urls_dict[row.name]=('ERROR - not uploaded')
-    df["s3_url"] = df['name'].map(s3_urls_dict) # map filename value to name as new column in dataframe
-    df['s3_url'].fillna("", inplace=True)
+    df["s3_url"] = df['name'].map(s3_urls_dict).fillna("")  # map filename value to name as new column in dataframe
     return df
-    
+
 
 ##################################
 ### Example test script

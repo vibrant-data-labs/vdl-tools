@@ -1,9 +1,13 @@
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import pandas as pd
 from pydantic import BaseModel, Field
+
 
 from vdl_tools.shared_tools.openai.prompt_response_cache_instructor import InstructorPRC
 from vdl_tools.shared_tools.tools.logger import logger
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
-
+from vdl_tools.shared_tools.openai.prompt_response_cache_sql import Prompt
 
 class SearchTerm(BaseModel):
     term: str = Field(description="The search term")
@@ -267,7 +271,119 @@ def expand_search_term(
 
     return total_terms
 
+
+def expand_single_search_term(
+        topic,
+        search_term,
+        max_rounds,
+        use_cached_result,
+        prompt_str=None,
+        prompt_id=None,
+        model="gpt-4.1-mini",
+    ):
+    """Expand a single search term into multiple related terms.
+
+    Parameters
+    ----------
+    topic : str
+        The topic domain to expand within (e.g. 'health issues')
+    search_term : str
+        The initial search term to expand
+    max_rounds : int
+        Maximum number of expansion rounds to perform
+    use_cached_result : bool
+        Whether to use cached expansion results if available
+
+    Returns
+    -------
+    list of dict
+        List of dictionaries containing the original search term and its expansions
+    """
+    expanded_terms = []
+    sub_category_expanded = expand_search_term(
+        topic=topic,
+        search_term=search_term,
+        prompt_str=prompt_str,
+        max_rounds=max_rounds,
+        use_cached_result=use_cached_result,
+        prompt_id=prompt_id,
+        model=model,
+    )
+    for expanded_term in sub_category_expanded:
+        expanded_terms.append(
+            {"original_term": search_term, **expanded_term}
+        )
+    return expanded_terms
+
+
+def batch_expand_search_terms(
+    terms_list,
+    topic,
+    max_rounds=20,
+    use_cached_result=True,
+    prompt_str=None,
+    model="gpt-4.1-mini",
+):
+    """Expand search terms from a Google Sheet and write results back to a new sheet.
+
+    Parameters
+    ----------
+    terms_list : list[dict]
+        Name of the input Google Sheet containing search terms to expand
+    column_to_expand : str
+        Name of the column containing search terms to expand
+    output_sheet_name : str
+        Name of the output Google Sheet to write expanded terms to
+    overwrite_sheet : bool, optional
+        Whether to overwrite existing output sheet, by default False
+    max_rounds : int, optional
+        Maximum number of expansion rounds to perform, by default 20
+    topic : str, optional
+        Topic domain to expand within, by default 'health and climate change'
+    use_cached_result : bool, optional
+        Whether to use cached expansion results if available, by default True
+
+    Returns
+    -------
+    None
+        Results are written directly to the specified Google Sheet
+    """
+
+
+    with get_session() as session:
+        prompt = Prompt(
+            name=f"Expanded {topic} Terms",
+            description=f"Expanded {topic} Terms",
+            prompt_str=prompt_str,
+        )
+        session.merge(prompt)
+        session.commit()
+        prompt_id = prompt.id
+
+    all_expanded_terms = []
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [
+            executor.submit(
+                expand_single_search_term,
+                topic=topic,
+                search_term=term,
+                prompt_str=prompt_str,
+                max_rounds=max_rounds,
+                use_cached_result=use_cached_result,
+                prompt_id=prompt_id,
+                model=model,
+            )
+            for term in terms_list
+        ]
+        for future in as_completed(futures):
+            all_expanded_terms.extend(future.result())
+
+    all_expanded_terms_df = pd.DataFrame(all_expanded_terms)
+    # remove duplicate terms
+    all_expanded_terms_df = all_expanded_terms_df.drop_duplicates(subset=["original_term", 'term'])
+    return all_expanded_terms_df
   
+
 if __name__ == "__main__":
     from vdl_tools.shared_tools.database_cache.database_utils import get_session
 
