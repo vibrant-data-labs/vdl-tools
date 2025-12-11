@@ -246,5 +246,4 @@ async def scrape_urls_async(
                 })
             else:
                 processed_results.append(result)
-        
         return processed_results
