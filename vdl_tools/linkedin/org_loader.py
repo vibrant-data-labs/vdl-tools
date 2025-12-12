@@ -11,7 +11,7 @@ from vdl_tools.shared_tools.tools.text_similarity import similar, jaccard_simila
 
 from vdl_tools.linkedin.cache import LinkedInCache, LinkedInRawDataCache
 from vdl_tools.linkedin.utils.linkedin_url import extract_linkedin_id
-import vdl_tools.linkedin.handlers.base_handler as bh
+#import vdl_tools.linkedin.handlers.base_handler as bh
 from vdl_tools.linkedin.handlers.coresignal_bulk import get_bulk_organization_results
 import vdl_tools.linkedin.processors.coresignal_processor as csp
 from vdl_tools.linkedin.handlers.coresignal_query import (
