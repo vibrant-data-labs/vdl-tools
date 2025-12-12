@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.16.5"
+__generated_with = "0.17.7"
 app = marimo.App(width="medium")
 
 
@@ -405,7 +405,6 @@ def _(alt, energy_total_solution_results, mo):
     )
 
     mo.ui.altair_chart(_chart)
-    _chart
     return
 
 

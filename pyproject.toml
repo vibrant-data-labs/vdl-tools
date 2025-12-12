@@ -50,9 +50,9 @@ dependencies = [
     "sqlalchemy-utils",
     "tiktoken",
     "treelib",
-    "torch>=2.0.0,<3.0.0",            # torch major versions incompatible
+    "torch>=2.0.0,<3.0.0",          # torch major versions incompatible
     "transformers>=4.35.0,<5.0.0",    # frequent API changes
-    "umap",
+    "umap-learn==0.5.9.post2",
     "unstructured[all-docs]>=0.16.12,<1.0.0",
     "url-normalize",
     "webdriver_manager",

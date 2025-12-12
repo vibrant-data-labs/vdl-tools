@@ -105,6 +105,8 @@ all_fields = [
 
 
 query = api.api_query_factory(cb_config.get_url(url), default_fields)
+count = api.api_count_factory(cb_config.get_url(url), default_fields)
+
 
 if __name__ == "__main__":
     import pandas as pd
@@ -130,3 +132,16 @@ if __name__ == "__main__":
 
     res.to_excel('test.xlsx')
     print(res['founder_identifiers'].head())
+
+    print(count(
+        filters=[
+            api.contains(
+                "description",
+                [
+                    "agriculture",
+                    "abandoned farmland",
+                    "bamboo production",
+                ],
+            ),
+        ]
+    ))

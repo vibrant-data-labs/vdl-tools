@@ -292,7 +292,7 @@ def __process_crunchbase_raw_data(filter_yr=2016):
     df_cb['funding_total'] = df_cb['funding_total'].apply(lambda x: __get_values(x, 'value_usd', 0))
     df_cb['diversity'] = df_cb['diversity_spotlights'].apply(__get_values)
 
-    df_cb['Acquired by'] = df_cb['acquirer_identifier'].apply(__get_values)
+    # df_cb['Acquired by'] = df_cb['acquirer_identifier'].apply(__get_values)
     df_cb['linkedin'] = df_cb['linkedin'].apply(lambda l: __get_values(l))
 
     df_cb['location_identifiers'] = df_cb['location_identifiers'].apply(lambda li: __get_values(li))

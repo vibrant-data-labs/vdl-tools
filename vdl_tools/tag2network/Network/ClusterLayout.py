@@ -134,12 +134,15 @@ def compress_groups(nodes_df, layout_dict, cluster_attr, overlap_frac,
                 center = np.median(clus_pos, axis=0)
                 scale = np.sqrt(len(subg)) * scale_factor
                 dists = np.sqrt(((clus_pos - center) ** 2).sum(axis=1))
-                # use a truncated, normalized Mechelis-Menten function
-                # to rescale distance from center
-                om = max(dists)  # current max distance
-                nm = scale  # desired max distance
-                k = om * nm / (om - nm / 2)
-                rescale = np.clip(k / (k / 2 + dists), None, max_expansion)
+                if max(dists) > 0:
+                    # use a truncated, normalized Mechelis-Menten function
+                    # to rescale distance from center
+                    om = max(dists)  # current max distance
+                    nm = scale  # desired max distance
+                    k = om * nm / (om - nm / 2)
+                    rescale = np.clip(k / (k / 2 + dists), None, max_expansion)
+                else:
+                    rescale = np.ones(len(dists))
                 center = centers[clus]
                 new_center = new_centers[clus]
                 # change plot aspect ratio - aspect > 1 -> stretch x-axis]
@@ -201,7 +204,7 @@ def layout_single_cluster(g, pos, scale, center, jitter_frac=0.03):
 #                                       center=center)
     if jitter_frac > 0:
         pts = np.array(list(new_pos.values()))
-        rng = pts.ptp(axis=0)
+        rng = np.ptp(pts, axis=0)
         jitter = np.random.uniform(low=-1, high=1, size=pts.shape) * rng * jitter_frac
         new_pts = pts + jitter
         new_pos = {node: new_pts[idx] for idx, node in enumerate(new_pos.keys())}

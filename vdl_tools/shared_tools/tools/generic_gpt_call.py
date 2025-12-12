@@ -11,7 +11,7 @@ def get_gpt_response(
     model="gpt-4.1-mini",
     use_cached_result=True,
     filter_by_model=True,
-    **kwargs
+    **get_completion_kwargs
 ):
     with get_session(session) as passed_in_session:
         prc = PromptResponseCacheSQL(
@@ -21,7 +21,6 @@ def get_gpt_response(
             prompt_id=prompt_id,
             filter_by_model=filter_by_model,
             model=model,
-            **kwargs
         )
         if isinstance(items, list):
             if isinstance(items[0], str):
@@ -36,9 +35,9 @@ def get_gpt_response(
         response = prc.bulk_get_cache_or_run(
             given_ids_texts=keys_items,
             use_cached_result=use_cached_result,
-            **kwargs
+            **get_completion_kwargs
         )
-        return {k: v['response_text'] for k,v in response.items()}
+        return {k: response[k]['response_text'] for k, _ in keys_items}
 
 
 if __name__ == "__main__":
