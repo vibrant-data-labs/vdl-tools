@@ -28,10 +28,13 @@ def get_netzero_api(
 def create_search_filter(
     include_keywords: list[str] = None,
     exclude_keywords: list[str] = None,
+    include_headquarters: list[str] = None,
+    exclude_headquarters: list[str] = None,
     include_investors: list[int] = None,
     exclude_investors: list[int] = None,
     include_taxonomy_items: list[int] = None,
     exclude_taxonomy_items: list[int] = None,
+    minimum_commercial_deals: int = None,
 ) -> MainFilter:
 
     include_keywords = include_keywords or []
@@ -48,10 +51,22 @@ def create_search_filter(
         startup_include_filter.wildcards = [" ".join(include_keywords_phrases)]
         startup_include_filter.wildcardsFields = ["pitchLine", "description"]
 
+    if minimum_commercial_deals:
+        startup_include_filter = startup_include_filter or StartupFilter()
+        startup_include_filter.commercialAgreementCountFrom = minimum_commercial_deals
+
     if include_taxonomy_items:
         startup_include_filter = startup_include_filter or StartupFilter()
         startup_include_filter.taxonomyItems = include_taxonomy_items
         startup_include_filter.taxonomyItemsMode = "OR"
+
+    if include_headquarters:
+        startup_include_filter = startup_include_filter or StartupFilter()
+        startup_include_filter.searchableLocations = include_headquarters
+
+    if exclude_headquarters:
+        startup_exclude_filter = startup_exclude_filter or StartupFilter()
+        startup_exclude_filter.searchableLocations = exclude_headquarters
 
     if startup_include_filter:
         main_filter.include = startup_include_filter
@@ -78,6 +93,7 @@ def create_search_filter(
         investor_exclude_filter = InvestorFilter()
         investor_exclude_filter.investorIDs = exclude_investors
         main_filter.investorExclude = investor_exclude_filter
+
 
     return main_filter
 
@@ -159,7 +175,8 @@ def get_startup_count(
 ):
     netzero_api = netzero_api or get_netzero_api(use_sandbox=use_sandbox)
     main_filter = create_search_filter(**filter_kwargs)
-    return netzero_api.get_startup_count(main_filter)
+    count = netzero_api.get_startup_count(main_filter)
+    return count
 
 
 if __name__ == "__main__":

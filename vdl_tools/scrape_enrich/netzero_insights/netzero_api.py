@@ -49,7 +49,9 @@ class NetZeroAPI:
         self.read_from_cache = read_from_cache
         self.write_to_cache = write_to_cache
         self.use_sandbox = use_sandbox
-        self.verify = not use_sandbox
+        # The production ssl certifcate seems to expired too
+        # self.verify_ssl = not use_sandbox
+        self.verify_ssl = False
 
         self._authenticate()
 
@@ -64,7 +66,7 @@ class NetZeroAPI:
                     "password": self.password
                 },
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
-                verify=self.verify,
+                verify=self.verify_ssl,
             )
             response.raise_for_status()
             logger.info("Successfully authenticated with NetZero API")
@@ -276,10 +278,11 @@ class NetZeroAPI:
 
     def get_startup_count(self, main_filter: MainFilter = None) -> int:
         """Get the total number of startups matching the specified criteria."""
-        return self._post(
+        response = self._post(
             endpoint="getStartupCount",
             payload=main_filter.model_dump() if main_filter else {},
-        )["count"]
+        )
+        return response["count"]
 
     def search_startups(
         self,
@@ -486,7 +489,17 @@ class NetZeroAPI:
                 ) as response:
                     response.raise_for_status()
                     data = await response.json()
-                    return id, data
+                    # Needs to mimic as if read from database like when we write to database
+                    # We filter for columns that exist in the model but are not defined in the base mixin
+                    args = {}
+                    valid_columns = model_class.__table__.columns.keys()
+                    base_cls = model_class.__bases__[0]
+
+                    for k, v in data.items():
+                        if k in valid_columns and not hasattr(base_cls, k):
+                            args[k] = v
+                    args["fullData"] = data
+                    return id, args
             except Exception as e:
                 logger.error(f"Failed to fetch {endpoint} {id}: {str(e)}")
                 return id, None
@@ -498,7 +511,19 @@ class NetZeroAPI:
                 for id, data in batch:
                     if data is None:
                         continue
-                    entity = model_class(**data)
+                    # Get the args for the model class but remove the base mixin args
+                    # We filter for columns that exist in the model but are not defined in the base mixin
+                    args = {}
+                    valid_columns = model_class.__table__.columns.keys()
+                    base_cls = model_class.__bases__[0]
+                    
+                    for k, v in data.items():
+                        if k in valid_columns and not hasattr(base_cls, k):
+                            args[k] = v
+
+                    args["fullData"] = data
+
+                    entity = model_class(**args)
                     session.add(entity)
                 session.commit()
 
