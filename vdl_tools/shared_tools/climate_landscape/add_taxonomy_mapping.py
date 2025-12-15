@@ -358,6 +358,28 @@ def load_arpah_hazard_sols(
     ]
     return taxonomy
 
+def load_ed_taxonomy(
+        taxonomy_path
+        ):
+
+    pillar_df = pd.read_excel(taxonomy_path, sheet_name="pillars")
+    sub_df = pd.read_excel(taxonomy_path, sheet_name="subpillars")
+    sols_df = pd.read_excel(taxonomy_path, sheet_name="solutions")
+
+    # for pillars, sub, and soln exclude any rows that have Exclude == 1 if Exclude column exists
+    if 'Exclude' in pillar_df.columns:
+        pillar_df = pillar_df[pillar_df['Exclude'] != 1].copy()
+    if 'Exclude' in sub_df.columns:
+        sub_df = sub_df[sub_df['Exclude'] != 1].copy()
+    if 'Exclude' in sols_df.columns:
+        sols_df = sols_df[sols_df['Exclude'] != 1].copy()
+    taxonomy = [
+        {'level': 0, 'name': 'pillar', 'data': pillar_df, 'textattr': 'Expanded Description'},
+        {'level': 1, 'name': 'sub-pillar', 'data': sub_df, 'textattr': 'Expanded Description'},
+        {'level': 2, 'name': 'Solution', 'data': sols_df, 'textattr': 'Expanded Description'}
+    ]
+    return taxonomy
+
 def load_one_earth_taxonomy(
     taxonomy_path,
     add_geo_engineering=False,
@@ -1044,6 +1066,87 @@ def add_arpah_hazard_solutions(
         # make directory if it doesn't exist
         envrisk_solutions_distributed_funding_results_path.parent.mkdir(parents=True, exist_ok=True)
         distr_df.to_json(envrisk_solutions_distributed_funding_results_path, orient='records')
+
+    if mapping_name:
+        pct = 'pct_' + mapping_name
+        sim = 'sim_' + mapping_name
+        cols = [mapping_name, f'cat_level_{mapping_name}'] + [f'level{tx["level"]}_{mapping_name}' for tx in taxonomy]
+    else:
+        pct = 'pct'
+        sim = 'sim'
+        cols = ['mapped_category', 'cat_level'] + [f'level{tx["level"]}' for tx in taxonomy]
+    new_df = tm.add_mapping_to_orgs(df, all_df, id_col, pct=pct, sim=sim, cats=cols)
+    return new_df
+
+def add_lstudio_taxonomy(
+    df,
+    id_col,
+    text_col,
+    name_col='profile_name',
+    nmapped=5,
+    pct_threshold=90,
+    pct_delta_min=2,
+    run_fewshot_classification=True,
+    filter_fewshot_classification=False,
+    use_cached_results=True,
+    paths=None,
+    max_workers=3,
+    force_parents=True,
+    mapping_name="ed_category",
+    taxonomy_path=None,
+    results_path=None,
+    distributed_funding_results_path=None,
+    max_depth=1,
+):
+    paths = paths or pc.get_paths()
+    taxonomy_path = taxonomy_path or paths["ed_taxonomy"]
+    results_path = results_path or paths["ls_education_mapping_results"]
+    distributed_funding_results_path = distributed_funding_results_path or paths["distributed_funding_results_path"]
+
+    if filter_fewshot_classification and not run_fewshot_classification:
+        raise ValueError("Cannot filter few shot classification if it is not run")
+
+    entity_embeddings = tm.get_or_compute_embeddings(
+        org_df=df,
+        id_col=id_col,
+        text_col=text_col,
+        max_workers=max_workers
+    )
+
+    taxonomy = load_ed_taxonomy(
+        taxonomy_path,
+    )
+    # add main taxonomy mapping
+    logger.info('Mapping to LS Education Solutions')
+    all_df, distr_df = add_taxonomy_mapping(
+        df,
+        entity_embeddings,
+        taxonomy,
+        id_col,
+        text_col,
+        name_col=name_col,
+        nmax=nmapped,
+        threshold=pct_threshold,
+        pct_delta=pct_delta_min,
+        run_fewshot_classification=run_fewshot_classification,
+        filter_fewshot_classification=filter_fewshot_classification,
+        fewshot_examples=None,
+        use_cached_results=use_cached_results,
+        force_parents=force_parents,
+        mapping_name=mapping_name,
+        max_distr_funding_level=max_depth,
+    )
+
+    # reduce the number of columns in the output
+    original_columns = set(df.columns)
+    # Keep all the new columns
+    new_columns = list(all_df.columns.difference(original_columns))
+    keep_columns = [id_col, name_col, text_col] + new_columns
+    all_df[keep_columns].to_json(results_path, orient='records')
+    if distr_df is not None:
+        # make directory if it doesn't exist
+        distributed_funding_results_path.parent.mkdir(parents=True, exist_ok=True)
+        distr_df.to_json(distributed_funding_results_path, orient='records')
 
     if mapping_name:
         pct = 'pct_' + mapping_name
