@@ -13,11 +13,6 @@ from vdl_tools.shared_tools.database_cache.database_models import Startup
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 
 
-class Deal:
-    pass
-
-class Investor:
-    pass
 
 PROD_BASE_URL = "https://api.netzeroinsights.com"
 SANDBOX_BASE_URL = "https://20.108.20.67"
@@ -95,7 +90,7 @@ class NetZeroAPI:
         response = self.session.get(
             os.path.join(self.base_url, endpoint),
             params=params,
-            verify=self.verify,
+            verify=self.verify_ssl,
             headers=headers,
         )
         response.raise_for_status()
@@ -111,7 +106,7 @@ class NetZeroAPI:
         response = self.session.post(
             os.path.join(self.base_url, endpoint),
             json=payload,
-            verify=self.verify,
+            verify=self.verify_ssl,
             headers=headers,
         )
         response.raise_for_status()
@@ -485,7 +480,7 @@ class NetZeroAPI:
                 async with session.get(
                     f"{self.base_url}/{endpoint}/{id}",
                     cookies=cookies,
-                    ssl=self.verify,
+                    ssl=self.verify_ssl,
                 ) as response:
                     response.raise_for_status()
                     data = await response.json()
@@ -585,6 +580,20 @@ class NetZeroAPI:
             ids=investor_ids,
             endpoint="investors",
             model_class=Investor,
+            read_from_cache=read_from_cache,
+            write_to_cache=write_to_cache
+        )
+
+    async def get_company_commercial_deals(
+        self, company_id: int,
+        read_from_cache: bool = None,
+        write_to_cache: bool = None,
+    ) -> List[Dict]:
+        """Get commercial deals for a specific company."""
+        return await self._get_details_batch(
+            ids=[company_id],
+            endpoint="/connected-entities/company",
+            model_class=Deal,
             read_from_cache=read_from_cache,
             write_to_cache=write_to_cache
         )
