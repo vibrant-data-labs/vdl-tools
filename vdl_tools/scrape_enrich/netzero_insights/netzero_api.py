@@ -9,9 +9,18 @@ from vdl_tools.scrape_enrich.netzero_insights.filters import (
     Sorting, MainFilter,
 )
 
-from vdl_tools.shared_tools.database_cache.database_models import Startup
+from vdl_tools.shared_tools.database_cache.database_models import Startup, CommercialDeal
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
+class Investor:
+    pass
+
+class Deal:
+    pass
 
 
 PROD_BASE_URL = "https://api.netzeroinsights.com"
@@ -490,9 +499,13 @@ class NetZeroAPI:
                     valid_columns = model_class.__table__.columns.keys()
                     base_cls = model_class.__bases__[0]
 
-                    for k, v in data.items():
-                        if k in valid_columns and not hasattr(base_cls, k):
-                            args[k] = v
+                    # We could just ignore this and do {clientID: id, fullData: data}
+                    # But for specific tables we might want to add more fields to the table like name, etc.
+                    if isinstance(data, dict):
+                        for k, v in data.items():
+                            if k in valid_columns and not hasattr(base_cls, k):
+                                args[k] = v
+                    args["clientID"] = id
                     args["fullData"] = data
                     return id, args
             except Exception as e:
@@ -511,7 +524,7 @@ class NetZeroAPI:
                     args = {}
                     valid_columns = model_class.__table__.columns.keys()
                     base_cls = model_class.__bases__[0]
-                    
+
                     for k, v in data.items():
                         if k in valid_columns and not hasattr(base_cls, k):
                             args[k] = v
@@ -585,15 +598,15 @@ class NetZeroAPI:
         )
 
     async def get_company_commercial_deals(
-        self, company_id: int,
+        self, company_ids: List[int],
         read_from_cache: bool = None,
         write_to_cache: bool = None,
     ) -> List[Dict]:
         """Get commercial deals for a specific company."""
         return await self._get_details_batch(
-            ids=[company_id],
-            endpoint="/connected-entities/company",
-            model_class=Deal,
+            ids=company_ids,
+            endpoint="commercial-deals/connected-entities/company",
+            model_class=CommercialDeal,
             read_from_cache=read_from_cache,
             write_to_cache=write_to_cache
         )
