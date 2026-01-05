@@ -54,8 +54,8 @@ class NetZeroAPI:
         self.write_to_cache = write_to_cache
         self.use_sandbox = use_sandbox
         # The production ssl certifcate seems to expired too
-        # self.verify_ssl = not use_sandbox
-        self.verify_ssl = False
+        self.verify_ssl = not use_sandbox
+        # self.verify_ssl = False
 
         self._authenticate()
 
@@ -82,7 +82,7 @@ class NetZeroAPI:
         """Logout from the API session."""
         logger.info("Logging out from NetZero API")
         try:
-            response = self.session.get(f"{self.base_url}/security/logout", verify=self.verify)
+            response = self.session.get(f"{self.base_url}/security/logout", verify=self.verify_ssl)
             response.raise_for_status()
             logger.info("Successfully logged out from NetZero API")
         except requests.exceptions.RequestException as e:
