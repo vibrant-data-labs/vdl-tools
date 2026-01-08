@@ -20,7 +20,7 @@ def load_website_psql(
         res = requests.get(
             url,
             headers=HEADERS,
-            timeout=60,
+            timeout=20,
             verify=verify_ssl,
         )
     except requests.RequestException as re:

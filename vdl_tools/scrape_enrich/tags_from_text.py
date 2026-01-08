@@ -265,21 +265,21 @@ def _search_tags(
     df["text"] = df["text"].fillna("").astype(str)  # make sure it's a string
     df_text = df[[idCol, "text"]]  # trim dataset to id and text block
     df_text = df_text.reset_index(drop=True)  # reset index
-    # get list of ngrams from text for each row
-    logger.info("getting ngrams from text (nltk method)")
-    df_text["ngrams"] = ngrams_from_text(df_text["text"])
 
-    # get keyword matches for manually curated dictionary
-    logger.info("find keyword  matches")
-    df_text[kwds] = df_text["ngrams"].apply(
-        lambda x: find_tags(x, tagcorp_df, addRelated=True)
-    )
-    # remove any blacklisted tags
-    df_text[kwds] = df_text[kwds].apply(lambda x: [s for s in x if s[0] not in blacklist])
+    # helper to process one row at a time to save memory
+    def get_tags(text):
+        # Generate ngrams only for this row
+        ngrams = _get_ngrams_nltk(text)
+        # Find tags immediately
+        tags = find_tags(ngrams, tagcorp_df, addRelated=True)
+        # Filter blacklist
+        return [s for s in tags if s[0] not in blacklist]
+
+    logger.info("getting ngrams from text and finding tags (row-by-row memory optimized)")
+    df_text[kwds] = df_text["text"].apply(get_tags)
 
     # clean columns
-    df_text.drop(["ngrams"], axis=1, inplace=True)
-
+    df_text.drop(["text"], axis=1, inplace=True)
     return df_text  # dataframe with merging id, text, and tags
 
 
@@ -324,14 +324,13 @@ def add_kwd_tags(
     df_tags = _search_tags(
         df,
         tagcorp_df,
-        idCol,    
+        idCol,
         kwds,
         textcols,
         blacklist,
     )
 
     # merge tags to main data file
-    df_tags.drop(["text"], axis=1, inplace=True)
     return df.merge(df_tags, on=idCol, how="left")
 
 
