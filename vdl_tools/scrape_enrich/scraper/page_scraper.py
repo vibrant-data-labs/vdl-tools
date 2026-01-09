@@ -18,7 +18,7 @@ logging.getLogger('selenium').setLevel(logging.INFO)
 logging.getLogger('webdriver_manager').setLevel(logging.INFO)
 
 
-def page_scraper():
+def page_scraper(max_retries=3, retry_delay=2):
     '''
     sets up the scraper chromium
     
@@ -28,18 +28,48 @@ def page_scraper():
     chrome_options.add_argument("--headless")  # Enables headless mode
     chrome_options.add_argument("--no-sandbox")  # Bypass OS security model, OPTIONAL
     chrome_options.add_argument("--disable-dev-shm-usage")  # Overcome limited resource problems, OPTIONAL
+    chrome_options.add_argument("--disable-gpu")  # Disable GPU acceleration
+    chrome_options.add_argument("--disable-extensions")  # Disable extensions
+    chrome_options.add_argument("--disable-software-rasterizer")  # Disable software rasterizer
+    chrome_options.add_argument("--remote-debugging-port=0")  # Let Chrome choose random debugging port
+    
+    # Add memory and performance optimizations
+    chrome_options.add_argument("--disable-background-networking")
+    chrome_options.add_argument("--disable-background-timer-throttling")
+    chrome_options.add_argument("--disable-backgrounding-occluded-windows")
+    chrome_options.add_argument("--disable-breakpad")
+    chrome_options.add_argument("--disable-component-extensions-with-background-pages")
+    chrome_options.add_argument("--disable-features=TranslateUI")
+    chrome_options.add_argument("--disable-ipc-flooding-protection")
+    chrome_options.add_argument("--disable-renderer-backgrounding")
+    chrome_options.add_argument("--metrics-recording-only")
+    chrome_options.add_argument("--mute-audio")
 
     capabilities = DesiredCapabilities.CHROME
     capabilities['goog:loggingPrefs'] = {'performance': 'ALL'}
     chrome_options.set_capability('goog:loggingPrefs', {'performance': 'ALL'})
 
-    driver = webdriver.Chrome(
-        service=ChromiumService(
-            desired_capabilities=capabilities,
-        ),
-        options=chrome_options,
-    )
-    return driver
+    # Retry logic for driver initialization
+    last_exception = None
+    for attempt in range(max_retries):
+        try:
+            log.info(f"Initializing Chrome driver (attempt {attempt + 1}/{max_retries})...")
+            driver = webdriver.Chrome(
+                service=ChromiumService(
+                    desired_capabilities=capabilities,
+                ),
+                options=chrome_options,
+            )
+            log.info("Chrome driver initialized successfully")
+            return driver
+        except Exception as e:
+            last_exception = e
+            log.warning(f"Failed to initialize Chrome driver (attempt {attempt + 1}/{max_retries}): {str(e)}")
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay * (attempt + 1))  # Exponential backoff
+            else:
+                log.error(f"Failed to initialize Chrome driver after {max_retries} attempts")
+                raise last_exception
 
 
 def check_400s(performance_logs, target_url):
