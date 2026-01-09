@@ -9,15 +9,19 @@ from vdl_tools.scrape_enrich.netzero_insights.filters import (
     Sorting, MainFilter,
 )
 
-from vdl_tools.shared_tools.database_cache.database_models import Startup
+from vdl_tools.shared_tools.database_cache.database_models import Startup, CommercialDeal
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
+class Investor:
+    pass
 
 class Deal:
     pass
 
-class Investor:
-    pass
 
 PROD_BASE_URL = "https://api.netzeroinsights.com"
 SANDBOX_BASE_URL = "https://20.108.20.67"
@@ -50,8 +54,8 @@ class NetZeroAPI:
         self.write_to_cache = write_to_cache
         self.use_sandbox = use_sandbox
         # The production ssl certifcate seems to expired too
-        # self.verify_ssl = not use_sandbox
-        self.verify_ssl = False
+        self.verify_ssl = not use_sandbox
+        # self.verify_ssl = False
 
         self._authenticate()
 
@@ -78,7 +82,7 @@ class NetZeroAPI:
         """Logout from the API session."""
         logger.info("Logging out from NetZero API")
         try:
-            response = self.session.get(f"{self.base_url}/security/logout", verify=self.verify)
+            response = self.session.get(f"{self.base_url}/security/logout", verify=self.verify_ssl)
             response.raise_for_status()
             logger.info("Successfully logged out from NetZero API")
         except requests.exceptions.RequestException as e:
@@ -95,7 +99,7 @@ class NetZeroAPI:
         response = self.session.get(
             os.path.join(self.base_url, endpoint),
             params=params,
-            verify=self.verify,
+            verify=self.verify_ssl,
             headers=headers,
         )
         response.raise_for_status()
@@ -111,7 +115,7 @@ class NetZeroAPI:
         response = self.session.post(
             os.path.join(self.base_url, endpoint),
             json=payload,
-            verify=self.verify,
+            verify=self.verify_ssl,
             headers=headers,
         )
         response.raise_for_status()
@@ -485,7 +489,7 @@ class NetZeroAPI:
                 async with session.get(
                     f"{self.base_url}/{endpoint}/{id}",
                     cookies=cookies,
-                    ssl=self.verify,
+                    ssl=self.verify_ssl,
                 ) as response:
                     response.raise_for_status()
                     data = await response.json()
@@ -495,9 +499,13 @@ class NetZeroAPI:
                     valid_columns = model_class.__table__.columns.keys()
                     base_cls = model_class.__bases__[0]
 
-                    for k, v in data.items():
-                        if k in valid_columns and not hasattr(base_cls, k):
-                            args[k] = v
+                    # We could just ignore this and do {clientID: id, fullData: data}
+                    # But for specific tables we might want to add more fields to the table like name, etc.
+                    if isinstance(data, dict):
+                        for k, v in data.items():
+                            if k in valid_columns and not hasattr(base_cls, k):
+                                args[k] = v
+                    args["clientID"] = id
                     args["fullData"] = data
                     return id, args
             except Exception as e:
@@ -516,7 +524,7 @@ class NetZeroAPI:
                     args = {}
                     valid_columns = model_class.__table__.columns.keys()
                     base_cls = model_class.__bases__[0]
-                    
+
                     for k, v in data.items():
                         if k in valid_columns and not hasattr(base_cls, k):
                             args[k] = v
@@ -585,6 +593,20 @@ class NetZeroAPI:
             ids=investor_ids,
             endpoint="investors",
             model_class=Investor,
+            read_from_cache=read_from_cache,
+            write_to_cache=write_to_cache
+        )
+
+    async def get_company_commercial_deals(
+        self, company_ids: List[int],
+        read_from_cache: bool = None,
+        write_to_cache: bool = None,
+    ) -> List[Dict]:
+        """Get commercial deals for a specific company."""
+        return await self._get_details_batch(
+            ids=company_ids,
+            endpoint="commercial-deals/connected-entities/company",
+            model_class=CommercialDeal,
             read_from_cache=read_from_cache,
             write_to_cache=write_to_cache
         )
