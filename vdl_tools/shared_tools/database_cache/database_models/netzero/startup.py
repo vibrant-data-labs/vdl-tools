@@ -9,7 +9,6 @@ class Startup(BaseMixin):
     __tablename__ = 'startups_nzi'
 
     # Primary and unique identifiers
-    id = Column(Integer, primary_key=True)
-    clientID = Column(Integer, unique=True)
+    clientID = Column(Integer, primary_key=True)
     name = Column(String)
     fullData = Column(JSONB)
