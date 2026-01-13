@@ -133,6 +133,16 @@ def get_companies_details(
     return companies
 
 
+def get_funding_rounds_by_company_id(
+    company_id: int,
+    use_sandbox: bool = False,
+    read_from_cache: bool = True,
+    write_to_cache: bool = True,
+    netzero_api: NetZeroAPI = None,
+):
+    netzero_api = netzero_api or get_netzero_api(use_sandbox=use_sandbox)
+
+
 def search_get_companies_details(
     use_sandbox: bool = False,
     read_from_cache: bool = True,
@@ -178,6 +188,7 @@ def get_startup_count(
     count = netzero_api.get_startup_count(main_filter)
     return count
 
+
 def get_company_commercial_deals(
     company_ids: list[int],
     use_sandbox: bool = False,
@@ -193,6 +204,21 @@ def get_company_commercial_deals(
     ))
     return deals
 
+
+def get_company_funding_rounds(
+    company_ids: list[int],
+    use_sandbox: bool = False,
+    read_from_cache: bool = True,
+    write_to_cache: bool = True,
+    netzero_api: NetZeroAPI = None,
+):
+    netzero_api = netzero_api or get_netzero_api(use_sandbox=use_sandbox)
+    funding_rounds = asyncio.run(netzero_api.get_company_funding_rounds(
+        company_ids,
+        read_from_cache=read_from_cache,
+        write_to_cache=write_to_cache,
+    ))
+    return funding_rounds
 
 if __name__ == "__main__":
     USE_SANDBOX = True

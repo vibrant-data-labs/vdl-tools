@@ -9,7 +9,7 @@ from vdl_tools.scrape_enrich.netzero_insights.filters import (
     Sorting, MainFilter,
 )
 
-from vdl_tools.shared_tools.database_cache.database_models import Startup, CommercialDeal
+from vdl_tools.shared_tools.database_cache.database_models import Startup, CompanyCommercialDeal, CompanyFundingRounds
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 
 import urllib3
@@ -92,7 +92,7 @@ class NetZeroAPI:
     def _get(
         self,
         endpoint: str,
-        params: Dict,
+        params: Dict = None,
         headers: Dict = None
     ) -> Dict:
         """Get a resource from the API."""
@@ -243,14 +243,14 @@ class NetZeroAPI:
                     payload=payload,
                     headers={"Content-Type": "application/json"},
                 )
-                logger.info(f"Successfully fetched {len(data.get('results', []))} {endpoint}")
+                logger.info(f"Successfully fetched {len(data.get('results', []))} `{endpoint}`")
                 return {
                     "total_count": data.get("count", 0),
                     "count": len(data.get("results", [])),
                     "results": data.get("results", [])
                 }
             except requests.exceptions.RequestException as e:
-                logger.error(f"Failed to fetch {endpoint}: {str(e)}")
+                logger.error(f"Failed to fetch `{endpoint}`: {str(e)}")
                 raise
         else:
             if limit is not None:
@@ -348,103 +348,133 @@ class NetZeroAPI:
             max_pages=max_pages
         )
 
-    def _get_detail(
-        self,
-        id: int,
-        endpoint: str,
-        model_class: type,
-        read_from_cache: bool = None,
-        write_to_cache: bool = None,
-    ) -> Dict:
-        """Base method for getting detailed information about an entity.
+    # def _get_detail(
+    #     self,
+    #     id: int,
+    #     endpoint: str,
+    #     model_class: type,
+    #     read_from_cache: bool = None,
+    #     write_to_cache: bool = None,
+    # ) -> Dict:
+    #     """Base method for getting detailed information about an entity.
 
-        Args:
-            id: The ID of the entity to fetch
-            endpoint: The API endpoint to call
-            model_class: The class to instantiate with the response data
-            read_from_cache: Whether to read from cache
-            write_to_cache: Whether to write to cache
+    #     Args:
+    #         id: The ID of the entity to fetch
+    #         endpoint: The API endpoint to call
+    #         model_class: The class to instantiate with the response data
+    #         read_from_cache: Whether to read from cache
+    #         write_to_cache: Whether to write to cache
 
-        Returns:
-            Dict containing the entity details
-        """
-        logger.info(f"Fetching details for {endpoint} with ID {id}")
+    #     Returns:
+    #         Dict containing the entity details
+    #     """
+    #     logger.info(f"Fetching details for {endpoint} with ID {id}")
 
-        read_from_cache, write_to_cache = self._resolve_cache_params(read_from_cache, write_to_cache)
+    #     read_from_cache, write_to_cache = self._resolve_cache_params(read_from_cache, write_to_cache)
 
-        if read_from_cache:
-            with get_session() as session:
-                logger.info(f"Checking database for {endpoint} with ID {id}")
-                entity = session.query(model_class).filter(model_class.clientID == id).first()
-                if entity:
-                    logger.info(f"Found {endpoint} in database")
-                    return entity.to_dict()
+    #     if read_from_cache:
+    #         with get_session() as session:
+    #             logger.info(f"Checking database for {endpoint} with ID {id}")
+    #             entity = session.query(model_class).filter(model_class.clientID == id).first()
+    #             if entity:
+    #                 logger.info(f"Found {endpoint} in database")
+    #                 # Return in same format as batch method - extract relevant fields
+    #                 args = {}
+    #                 valid_columns = model_class.__table__.columns.keys()
+    #                 base_cls = model_class.__bases__[0]
 
-        try:
-            data = self._get(
-                endpoint=f"{endpoint}/{id}",
-            )
-            logger.info(f"Successfully fetched details for {endpoint} {id}")
-            entity = model_class(**data)
-            if write_to_cache:
-                with get_session() as session:
-                    session.add(entity)
-                    session.commit()
-            return entity.to_dict()
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to fetch {endpoint} details for ID {id}: {str(e)}")
-            raise
+    #                 for k in valid_columns:
+    #                     if not hasattr(base_cls, k):
+    #                         args[k] = getattr(entity, k)
+
+    #                 # Ensure fullData is included
+    #                 if hasattr(entity, 'fullData'):
+    #                     args['fullData'] = entity.fullData
+
+    #                 return args
+
+    #     try:
+    #         data = self._get(
+    #             endpoint=f"{endpoint}/{id}",
+    #         )
+    #         logger.info(f"Successfully fetched details for {endpoint} {id}")
+
+    #         # Process data similar to batch method - filter columns and set fullData
+    #         args = {}
+    #         valid_columns = model_class.__table__.columns.keys()
+    #         base_cls = model_class.__bases__[0]
+
+    #         if isinstance(data, dict):
+    #             for k, v in data.items():
+    #                 if k in valid_columns and not hasattr(base_cls, k):
+    #                     args[k] = v
+
+    #         args["clientID"] = id
+    #         args["fullData"] = data
+
+    #         if write_to_cache:
+    #             with get_session() as session:
+    #                 entity = model_class(**args)
+    #                 session.merge(entity)
+    #                 session.commit()
+            
+    #         # Return data in same format as batch method
+    #         return args
+    #     except requests.exceptions.RequestException as e:
+    #         logger.error(f"Failed to fetch {endpoint} details for ID {id}: {str(e)}")
+    #         raise
     
-    def get_startup_detail(
-        self,
-        startup_id: int,
-        read_from_cache: bool = None,
-        write_to_cache: bool = None,
-    ) -> Dict:
-        """Get detailed information about a specific startup."""
-        return self._get_detail(
-            id=startup_id,
-            endpoint="getStartup",
-            model_class=Startup,
-            read_from_cache=read_from_cache,
-            write_to_cache=write_to_cache
-        )
+    # def get_startup_detail(
+    #     self,
+    #     startup_id: int,
+    #     read_from_cache: bool = None,
+    #     write_to_cache: bool = None,
+    # ) -> Dict:
+    #     """Get detailed information about a specific startup."""
+    #     return self._get_detail(
+    #         id=startup_id,
+    #         endpoint="getStartup",
+    #         model_class=Startup,
+    #         read_from_cache=read_from_cache,
+    #         write_to_cache=write_to_cache
+    #     )
 
-    def get_investor_detail(
-        self,
-        investor_id: int,
-        read_from_cache: bool = None,
-        write_to_cache: bool = None,
-    ) -> Dict:
-        """Get detailed information about a specific investor."""
-        return self._get_detail(
-            id=investor_id,
-            endpoint="investors",
-            model_class=Investor,
-            read_from_cache=read_from_cache,
-            write_to_cache=write_to_cache
-        )
+    # def get_investor_detail(
+    #     self,
+    #     investor_id: int,
+    #     read_from_cache: bool = None,
+    #     write_to_cache: bool = None,
+    # ) -> Dict:
+    #     """Get detailed information about a specific investor."""
+    #     return self._get_detail(
+    #         id=investor_id,
+    #         endpoint="getInvestor",
+    #         model_class=Investor,
+    #         read_from_cache=read_from_cache,
+    #         write_to_cache=write_to_cache
+    #     )
 
-    def get_deal_detail(
-        self,
-        deal_id: int,
-        read_from_cache: bool = None,
-        write_to_cache: bool = None,
-    ) -> Dict:
-        """Get detailed information about a specific deal."""
-        return self._get_detail(
-            id=deal_id,
-            endpoint="fundingRounds",
-            model_class=Deal,
-            read_from_cache=read_from_cache,
-            write_to_cache=write_to_cache
-        )
+    # def get_deal_detail(
+    #     self,
+    #     deal_id: int,
+    #     read_from_cache: bool = None,
+    #     write_to_cache: bool = None,
+    # ) -> Dict:
+    #     """Get detailed information about a specific deal."""
+    #     return self._get_detail(
+    #         id=deal_id,
+    #         endpoint="fundingRound",
+    #         model_class=CompanyFundingRounds,
+    #         read_from_cache=read_from_cache,
+    #         write_to_cache=write_to_cache
+    #     )
 
     async def _get_details_batch(
         self,
         ids: List[int],
         endpoint: str,
         model_class: Type,
+        primary_key_field: str = "clientID",
         read_from_cache: bool = None,
         write_to_cache: bool = None,
         batch_size: int = 20
@@ -462,7 +492,7 @@ class NetZeroAPI:
         Returns:
             List of Dicts containing the entity details
         """
-        logger.info(f"Fetching details for {len(ids)} {endpoint}s")
+        logger.info(f"Fetching details for {len(ids)} `{endpoint}`s")
         results = {}
         missing_ids = set(ids)
 
@@ -470,12 +500,13 @@ class NetZeroAPI:
 
         if read_from_cache:
             with get_session() as session:
-                logger.info(f"Checking database for {len(ids)} {endpoint}s")
-                entities = session.query(model_class).filter(model_class.clientID.in_(ids)).all()
+                logger.info(f"Checking database for {len(ids)} `{endpoint}`s")
+                entities = session.query(model_class).filter(getattr(model_class, primary_key_field).in_(ids)).all()
                 for entity in entities:
-                    results[entity.clientID] = entity.to_dict()
-                    missing_ids.remove(entity.clientID)
-                logger.info(f"Found {len(results)} {endpoint}s in database")
+                    entity_id = getattr(entity, primary_key_field)
+                    results[entity_id] = entity.to_dict()
+                    missing_ids.remove(entity_id)
+                logger.info(f"Found {len(results)} `{endpoint}`s in database")
 
         if not missing_ids:
             return [results[id] for id in ids]
@@ -487,7 +518,7 @@ class NetZeroAPI:
         async def fetch_entity(session: aiohttp.ClientSession, id: int) -> Dict:
             try:
                 async with session.get(
-                    f"{self.base_url}/{endpoint}/{id}",
+                    f"{self.base_url}/{endpoint.rstrip('/')}/{id}",
                     cookies=cookies,
                     ssl=self.verify_ssl,
                 ) as response:
@@ -505,7 +536,7 @@ class NetZeroAPI:
                         for k, v in data.items():
                             if k in valid_columns and not hasattr(base_cls, k):
                                 args[k] = v
-                    args["clientID"] = id
+                    args[primary_key_field] = id
                     args["fullData"] = data
                     return id, args
             except Exception as e:
@@ -528,11 +559,11 @@ class NetZeroAPI:
                     for k, v in data.items():
                         if k in valid_columns and not hasattr(base_cls, k):
                             args[k] = v
-
-                    args["fullData"] = data
+                    args[primary_key_field] = id
+                    args["fullData"] = data["fullData"]
 
                     entity = model_class(**args)
-                    session.add(entity)
+                    session.merge(entity)
                 session.commit()
 
         async with aiohttp.ClientSession() as session:
@@ -549,7 +580,7 @@ class NetZeroAPI:
             if batch:
                 await process_batch(batch)
 
-        logger.info(f"Successfully fetched {len(results)} {endpoint}s")
+        logger.info(f"Successfully fetched {len(results)} `{endpoint}`s")
         return [results.get(id) for id in ids]
 
     async def get_startup_details(
@@ -561,26 +592,27 @@ class NetZeroAPI:
         """Get detailed information about multiple startups."""
         return await self._get_details_batch(
             ids=startup_ids,
+            primary_key_field="clientID",
             endpoint="getStartup",
             model_class=Startup,
             read_from_cache=read_from_cache,
             write_to_cache=write_to_cache
         )
 
-    async def get_deal_details(
-        self,
-        deal_ids: List[int],
-        read_from_cache: bool = None,
-        write_to_cache: bool = None,
-    ) -> List[Dict]:
-        """Get detailed information about multiple deals."""
-        return await self._get_details_batch(
-            ids=deal_ids,
-            endpoint="fundingRounds",
-            model_class=Deal,
-            read_from_cache=read_from_cache,
-            write_to_cache=write_to_cache
-        )
+    # async def get_deal_details(
+    #     self,
+    #     deal_ids: List[int],
+    #     read_from_cache: bool = None,
+    #     write_to_cache: bool = None,
+    # ) -> List[Dict]:
+    #     """Get detailed information about multiple deals."""
+    #     return await self._get_details_batch(
+    #         ids=deal_ids,
+    #         endpoint="fundingRound",
+    #         model_class=FundingRounds,
+    #         read_from_cache=read_from_cache,
+    #         write_to_cache=write_to_cache
+    #     )
 
     async def get_investor_details(
         self,
@@ -591,7 +623,7 @@ class NetZeroAPI:
         """Get detailed information about multiple investors."""
         return await self._get_details_batch(
             ids=investor_ids,
-            endpoint="investors",
+            endpoint="getInvestor",
             model_class=Investor,
             read_from_cache=read_from_cache,
             write_to_cache=write_to_cache
@@ -605,12 +637,27 @@ class NetZeroAPI:
         """Get commercial deals for a specific company."""
         return await self._get_details_batch(
             ids=company_ids,
+            primary_key_field="clientID",
             endpoint="commercial-deals/connected-entities/company",
-            model_class=CommercialDeal,
+            model_class=CompanyCommercialDeal,
             read_from_cache=read_from_cache,
             write_to_cache=write_to_cache
         )
 
+    async def get_company_funding_rounds(
+        self, company_ids: List[int],
+        read_from_cache: bool = None,
+        write_to_cache: bool = None,
+    ) -> List[Dict]:
+        """Get funding rounds for a specific company."""
+        return await self._get_details_batch(
+            ids=company_ids,
+            primary_key_field="clientID",
+            endpoint="fundingRound/prints",
+            model_class=CompanyFundingRounds,
+            read_from_cache=read_from_cache,
+            write_to_cache=write_to_cache
+        )
 
     def get_taxonomy_children(self, parent_id: int) -> List[Dict]:
         """Get taxonomy for a specific parent ID."""
