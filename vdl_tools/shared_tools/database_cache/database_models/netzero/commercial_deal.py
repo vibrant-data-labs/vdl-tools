@@ -5,10 +5,9 @@ from sqlalchemy_utils import generic_repr
 
 
 @generic_repr
-class Startup(BaseMixin):
-    __tablename__ = 'startups_nzi'
+class CompanyCommercialDeal(BaseMixin):
+    __tablename__ = 'company_commercial_deals_nzi'
 
     # Primary and unique identifiers
     clientID = Column(Integer, primary_key=True)
-    name = Column(String)
     fullData = Column(JSONB)
