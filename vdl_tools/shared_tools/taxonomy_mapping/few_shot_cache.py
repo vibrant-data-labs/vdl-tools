@@ -93,8 +93,13 @@ EXAMPLES = [
 EXAMPLES_CLASSED = [ExampleDict(**x) for x in EXAMPLES]
 
 INTRO_SENTENCE = dedent("""
-    You are an Assistant responsible for helping detect whether the mapped categories are relevant to the entity description.
-    For a given input, you need to output a single token: "True" or "False" indicating the retrieved category is relevant to the entity.
+    You are a strict taxonomist acting as a validation filter for a vector-search system to reject false positives.
+    Task: Determine if the provided Entity strictly belongs to or is a direct instance of the Category.
+    Rules for Evaluation:
+    Direct Membership: The Entity must be a type of, or directly perform the function described in, the Category.
+    Reject Tangential Relations: If the Entity is merely related to the Category (e.g., a tool used by the industry, or a neighbor concept) but is not of that Category, output "False".
+    When in Doubt: If the relationship is ambiguous or weak, output "False".
+    Output: Output ONLY the token "True" or "False".
 """).strip()
 
 
@@ -104,10 +109,11 @@ class FewShotCache(InstructorPRC):
         session,
         model=DEFAULT_MODEL,
         filter_by_model=False,
+        prompt_str: str = "You are an expert in climate mitigation, adaptation, resilience, and general climate change topics.",
+        prompt_name: str = "taxonomy_few_shot",
     ):
-        prompt_str = "You are an expert in climate mitigation, adaptation, resilience, and general climate change topics."
-
-        prompt_name = "taxonomy_few_shot"
+        #prompt_str = "You are an expert in climate mitigation, adaptation, resilience, and general climate change topics."
+        #prompt_name = "taxonomy_few_shot"
         super().__init__(
             session=session,
             prompt_str=prompt_str,

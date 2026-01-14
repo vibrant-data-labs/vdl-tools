@@ -26,6 +26,7 @@ def add_taxonomy_mapping(
     distribute_funding=True,
     mapping_name=None,
     max_distr_funding_level=2,
+    prompt_str=None
 ):
     """
     Add taxonomy mapping to a dataframe.
@@ -114,7 +115,8 @@ def add_taxonomy_mapping(
             reranked_relevancy_col='reranked_relevancy',
             use_cached_results=use_cached_results,
             max_workers=max_workers,
-            examples_dict=fewshot_examples
+            examples_dict=fewshot_examples,
+            prompt_str=prompt_str
         )
 
         if force_parents:
@@ -136,6 +138,7 @@ def add_taxonomy_mapping(
                 use_cached_results=use_cached_results,
                 max_workers=max_workers,
                 examples_dict=fewshot_examples,
+                prompt_str=prompt_str
             )
             all_df = pd.concat([all_df, forced_in_df])
 
@@ -354,6 +357,28 @@ def load_arpah_hazard_sols(
         #{'level': 0, 'name': 'Hazard', 'data': hazard_df, 'textattr': 'Expanded Definition'},
         {'level': 0, 'name': 'Category', 'data': pillar_df, 'textattr': 'Expanded Definition'},
         {'level': 1, 'name': 'Sub-Category', 'data': sub_df, 'textattr': 'Expanded Definition'},
+
+    ]
+    return taxonomy
+
+def load_arpah_treat_sols(
+        taxonomy_path,
+        cat_sheet_name = "Treatment_Categories",
+        subcat_sheet_name = "Treatment_Solutions",
+        ):
+
+    pillar_df = pd.read_excel(taxonomy_path, sheet_name=cat_sheet_name)
+    sub_df = pd.read_excel(taxonomy_path, sheet_name=subcat_sheet_name)
+
+    # for pillars, sub, and soln exclude any rows that have Exclude == 1 if Exclude column exists
+    if 'Exclude' in pillar_df.columns:
+        pillar_df = pillar_df[pillar_df['Exclude'] != 1].copy()
+    if 'Exclude' in sub_df.columns:
+        sub_df = sub_df[sub_df['Exclude'] != 1].copy()
+
+    taxonomy = [
+        {'level': 0, 'name': 'Treatment Category', 'data': pillar_df, 'textattr': 'Definition'},
+        {'level': 1, 'name': 'Treatment Solution New', 'data': sub_df, 'textattr': 'Definition'},
 
     ]
     return taxonomy
@@ -797,203 +822,6 @@ def add_netzero_taxonomy(
 
     return new_df
 
-def add_arpah_taxonomy(
-    df,
-    id_col,
-    text_col,
-    name_col='Organization',
-    nmapped=10,
-    pct_threshold=90,
-    pct_delta_min=2,
-    run_fewshot_classification=True,
-    filter_fewshot_classification=False,
-    use_cached_results=True,
-    paths=None,
-    max_workers=3,
-    force_parents=True,
-    add_outcomes=True,
-    add_solns=True,
-    add_technologies=True,
-    mapping_name="Env_Risk",
-    taxonomy_path=None,
-    results_path=None,
-    outcomes_path=None,
-    env_distributed_funding_results_path=None,
-    outcomes_distributed_funding_results_path=None,
-    max_depth=1,
-):
-    paths = paths or pc.get_paths()
-    taxonomy_path = taxonomy_path or paths["arpah_taxonomy"]
-    results_path = results_path or paths["arpah_taxonomy_mapping_results"]
-    outcomes_path = outcomes_path or paths["arpah_outcomes_mapping_results"]
-    env_distributed_funding_results_path = env_distributed_funding_results_path or paths["arpah_tax_mapping_distributed_funding_results_env_risks"]
-    outcomes_distributed_funding_results_path = outcomes_distributed_funding_results_path or paths["arpah_outcomes_tax_mapping_distributed_funding_results"]
-
-    if filter_fewshot_classification and not run_fewshot_classification:
-        raise ValueError("Cannot filter few shot classification if it is not run")
-
-    entity_embeddings = tm.get_or_compute_embeddings(
-        org_df=df,
-        id_col=id_col,
-        text_col=text_col,
-        max_workers=max_workers
-    )
-
-    load_arpah_taxonomy(
-        taxonomy_path,
-        cat_sheet_name="solution_categories",
-        subcat_sheet_name="solution_subcategories",
-    )
-
-    # add main taxonomy mapping
-    logger.info('Mapping to Env Risks')
-    all_df, distr_df = add_taxonomy_mapping(
-        df,
-        entity_embeddings,
-        taxonomy,
-        id_col,
-        text_col,
-        name_col=name_col,
-        nmax=nmapped,
-        threshold=pct_threshold,
-        pct_delta=pct_delta_min,
-        run_fewshot_classification=run_fewshot_classification,
-        filter_fewshot_classification=filter_fewshot_classification,
-        fewshot_examples=None,
-        use_cached_results=use_cached_results,
-        force_parents=force_parents,
-        mapping_name=mapping_name,
-        max_distr_funding_level=max_depth,
-    )
-
-    # reduce the number of columns in the output
-    original_columns = set(df.columns)
-    # Keep all the new columns
-    new_columns = list(all_df.columns.difference(original_columns))
-    keep_columns = [id_col, name_col, text_col] + new_columns
-    all_df[keep_columns].to_json(results_path, orient='records')
-    if distr_df is not None:
-        # make directory if it doesn't exist
-        env_distributed_funding_results_path.parent.mkdir(parents=True, exist_ok=True)
-        distr_df.to_json(env_distributed_funding_results_path, orient='records')
-
-    if mapping_name:
-        pct = 'pct_' + mapping_name
-        sim = 'sim_' + mapping_name
-        cols = [mapping_name, f'cat_level_{mapping_name}'] + [f'level{tx["level"]}_{mapping_name}' for tx in taxonomy]
-    else:
-        pct = 'pct'
-        sim = 'sim'
-        cols = ['mapped_category', 'cat_level'] + [f'level{tx["level"]}' for tx in taxonomy]
-    new_df = tm.add_mapping_to_orgs(df, all_df, id_col, pct=pct, sim=sim, cats=cols)
-
-    if add_outcomes:
-        # add outcomes mapping
-        mapping_name = "Outcomes"
-        pct = 'pct_' + mapping_name
-        sim = 'sim_' + mapping_name
-        out_taxonomy = load_arpah_taxonomy(
-            taxonomy_path,
-            cat_sheet_name="outcome_categories",
-            subcat_sheet_name="outcome_subcategories"
-        )
-        out_all_df, distr_out_df = add_taxonomy_mapping(
-            df,
-            entity_embeddings,
-            out_taxonomy,
-            id_col,
-            text_col,
-            name_col=name_col,
-            nmax=nmapped,
-            threshold=pct_threshold,
-            pct_delta=pct_delta_min,
-            run_fewshot_classification=run_fewshot_classification,
-            filter_fewshot_classification=filter_fewshot_classification,
-            fewshot_examples=None,
-            use_cached_results=use_cached_results,
-            max_workers=3,
-            force_parents=True,
-            distribute_funding=True,
-            mapping_name=mapping_name,
-            max_distr_funding_level=max_depth
-        )
-        cols = [mapping_name, f'cat_level_{mapping_name}'] + [f'level{tx["level"]}_{mapping_name}'
-                                                              for tx in out_taxonomy]
-        # save mapping results to json
-        new_columns = list(out_all_df.columns.difference(original_columns))
-        keep_columns = [id_col, name_col, text_col] + new_columns
-        out_all_df[keep_columns].to_json(outcomes_path, orient='records')
-        if distr_out_df is not None:
-            # make directory if it doesn't exist
-            outcomes_distributed_funding_results_path.parent.mkdir(parents=True, exist_ok=True)
-            distr_out_df.to_json(outcomes_distributed_funding_results_path, orient='records')
-        new_df = tm.add_mapping_to_orgs(new_df, out_all_df, id_col, pct=pct, sim=sim, cats=cols)
-
-    if add_solns:
-        # add false solutions mapping
-        mapping_name = "SolnsTypes"
-        pct = 'pct_' + mapping_name
-        sim = 'sim_' + mapping_name
-        solns_taxonomy = load_arpah_taxonomy(
-            taxonomy_path,
-            cat_sheet_name="solution_categories",
-            subcat_sheet_name="solution_subcategories"
-        )
-        solns_all_df, _ = add_taxonomy_mapping(
-            df,
-            entity_embeddings,
-            solns_taxonomy,
-            id_col,
-            text_col,
-            name_col=name_col,
-            nmax=5,
-            threshold=90,
-            pct_delta=2,
-            run_fewshot_classification=run_fewshot_classification,
-            filter_fewshot_classification=filter_fewshot_classification,
-            fewshot_examples=None,
-            use_cached_results=use_cached_results,
-            max_workers=3,
-            force_parents=False,
-            distribute_funding=False,
-            mapping_name=mapping_name
-        )
-        new_df = tm.add_mapping_to_orgs(new_df, solns_all_df, id_col, pct=pct, sim=sim,
-                                        cats=[mapping_name, f'level0_{mapping_name}', f'level1_{mapping_name}'])
-    if add_technologies:
-        # add false solutions mapping
-        mapping_name = "TechApproaches"
-        pct = 'pct_' + mapping_name
-        sim = 'sim_' + mapping_name
-        ta_taxonomy = load_arpah_taxonomy(
-            taxonomy_path,
-            cat_sheet_name="technology_categories",
-            subcat_sheet_name="technology_subcategories"
-        )
-        ta_all_df, _ = add_taxonomy_mapping(
-            df,
-            entity_embeddings,
-            ta_taxonomy,
-            id_col,
-            text_col,
-            name_col=name_col,
-            nmax=5,
-            threshold=90,
-            pct_delta=2,
-            run_fewshot_classification=run_fewshot_classification,
-            filter_fewshot_classification=filter_fewshot_classification,
-            fewshot_examples=None,
-            use_cached_results=use_cached_results,
-            max_workers=3,
-            force_parents=False,
-            distribute_funding=False,
-            mapping_name=mapping_name
-        )
-        new_df = tm.add_mapping_to_orgs(new_df, ta_all_df, id_col, pct=pct, sim=sim,
-                                        cats=[mapping_name, f'level0_{mapping_name}', f'level1_{mapping_name}'])
-
-    return new_df
-
 def add_arpah_hazard_solutions(
     df,
     id_col,
@@ -1008,11 +836,12 @@ def add_arpah_hazard_solutions(
     paths=None,
     max_workers=3,
     force_parents=True,
-    mapping_name="Env_Risk_Solutions",
+    mapping_name="Prevention_Solutions",
     taxonomy_path=None,
     results_path=None,
     envrisk_solutions_distributed_funding_results_path=None,
     max_depth=1,
+    prompt_str="You are an expert in Climate-Resilient Health Solutions, specializing in the intersection of climate change adaptation, resilience, and public health intervention.",
 ):
     paths = paths or pc.get_paths()
     taxonomy_path = taxonomy_path or paths["arpah_taxonomy"]
@@ -1036,7 +865,7 @@ def add_arpah_hazard_solutions(
         subcat_sheet_name="Sub-Category",
     )
     # add main taxonomy mapping
-    logger.info('Mapping to Env Risks')
+    logger.info('Mapping to Prevention Solutions')
     all_df, distr_df = add_taxonomy_mapping(
         df,
         entity_embeddings,
@@ -1054,6 +883,7 @@ def add_arpah_hazard_solutions(
         force_parents=force_parents,
         mapping_name=mapping_name,
         max_distr_funding_level=max_depth,
+        prompt_str=prompt_str,
     )
 
     # reduce the number of columns in the output
@@ -1066,6 +896,89 @@ def add_arpah_hazard_solutions(
         # make directory if it doesn't exist
         envrisk_solutions_distributed_funding_results_path.parent.mkdir(parents=True, exist_ok=True)
         distr_df.to_json(envrisk_solutions_distributed_funding_results_path, orient='records')
+
+    if mapping_name:
+        pct = 'pct_' + mapping_name
+        sim = 'sim_' + mapping_name
+        cols = [mapping_name, f'cat_level_{mapping_name}'] + [f'level{tx["level"]}_{mapping_name}' for tx in taxonomy]
+    else:
+        pct = 'pct'
+        sim = 'sim'
+        cols = ['mapped_category', 'cat_level'] + [f'level{tx["level"]}' for tx in taxonomy]
+    new_df = tm.add_mapping_to_orgs(df, all_df, id_col, pct=pct, sim=sim, cats=cols)
+    return new_df
+
+def add_arpah_treatment_solutions(
+    df,
+    id_col,
+    text_col,
+    name_col='Organization',
+    nmapped=10,
+    pct_threshold=90,
+    pct_delta_min=2,
+    run_fewshot_classification=True,
+    filter_fewshot_classification=False,
+    use_cached_results=True,
+    paths=None,
+    max_workers=3,
+    force_parents=True,
+    mapping_name="Treatment_Solutions",
+    taxonomy_path=None,
+    results_path=None,
+    healthout_solutions_distributed_funding_results_path=None,
+    max_depth=1,
+    prompt_str="You are an expert in Climate-Resilient Health Solutions, specializing in the intersection of climate change adaptation, resilience, and public health intervention. ",
+):
+    paths = paths or pc.get_paths()
+    taxonomy_path = taxonomy_path or paths["arpah_taxonomy"]
+    results_path = results_path or paths["arpah_hazord_solutions_mapping_results"]
+    healthout_solutions_distributed_funding_results_path = healthout_solutions_distributed_funding_results_path or paths["healthout_solutions_distributed_funding_results_path"]
+
+    if filter_fewshot_classification and not run_fewshot_classification:
+        raise ValueError("Cannot filter few shot classification if it is not run")
+
+    entity_embeddings = tm.get_or_compute_embeddings(
+        org_df=df,
+        id_col=id_col,
+        text_col=text_col,
+        max_workers=max_workers
+    )
+
+    taxonomy = load_arpah_treat_sols(
+        taxonomy_path,
+    )
+    # add main taxonomy mapping
+    logger.info('Mapping to Health Outcomes Solutions')
+    all_df, distr_df = add_taxonomy_mapping(
+        df,
+        entity_embeddings,
+        taxonomy,
+        id_col,
+        text_col,
+        name_col=name_col,
+        nmax=nmapped,
+        threshold=pct_threshold,
+        pct_delta=pct_delta_min,
+        run_fewshot_classification=run_fewshot_classification,
+        filter_fewshot_classification=filter_fewshot_classification,
+        fewshot_examples=None,
+        use_cached_results=use_cached_results,
+        force_parents=force_parents,
+        mapping_name=mapping_name,
+        max_distr_funding_level=max_depth,
+        prompt_str=prompt_str
+    )
+
+    # reduce the number of columns in the output
+    original_columns = set(df.columns)
+    # Keep all the new columns
+    new_columns = list(all_df.columns.difference(original_columns))
+    keep_columns = [id_col, name_col, text_col] + new_columns
+    all_df[keep_columns].to_json(results_path, orient='records')
+    if distr_df is not None:
+        # make directory if it doesn't exist
+        healthout_solutions_distributed_funding_results_path.parent.mkdir(parents=True, exist_ok=True)
+        distr_df.to_json(healthout_solutions_distributed_funding_results_path, orient='records')
 
     if mapping_name:
         pct = 'pct_' + mapping_name
