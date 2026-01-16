@@ -279,6 +279,7 @@ def run_relevance_model(
     use_cached_results=True,
     system_prompt=None,
     prompt_format=None,
+    prompt_name="climate_relevance_classification",
 ):
     model_name_safe = model_name.replace("-", "_").replace(":", "_")
 
@@ -294,6 +295,7 @@ def run_relevance_model(
         system_prompt=system_prompt,
         prompt_format=prompt_format,
         label_override_filepath=label_override_filepath,
+        prompt_name=prompt_name,
     )
 
     df_with_predictions.rename(columns={"prediction": "prediction_relevant", "probability": "probability_relevant"}, inplace=True)
