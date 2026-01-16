@@ -50,10 +50,12 @@ def _():
         "../shared-data/data/candid/2025_08_19/candid_orgs_cleaned.xlsx"
     )
     FUNDING_ROUND_FILE = "../shared-data/data/crunchbase/2025_09_01/organizations_funding_rounds.json"
+    ORG_INVESTORS_FILE = "../shared-data/data/crunchbase/2025_09_01/organizations_investor_orgs.json"
     return (
         CANDID_FUNDING_FILE,
         FUNDING_ROUND_FILE,
         META_FILENAME,
+        ORG_INVESTORS_FILE,
         TAXONOMY_FILE,
         TAXONOMY_MAPPING_RESULTS_FILE,
     )
@@ -77,9 +79,19 @@ def _(
         taxonomy_mapping_results_path,
         meta_df_path,
         funding_round_path,
+        investor_orgs_path,
         candid_funding_path,
-        add_geo_engineering=False,
+        add_geo_engineering=False,  # Only works for the re-worked taxonomy for grantham
     ):
+        round_df = fmcu.load_cb_round_data(funding_round_path, investor_orgs_path)
+        candid_funding_raw = pd.read_excel(candid_funding_path)
+        candid_funding_long = fmcu.reshape_candid_funding(
+            candid_funding_raw, id_col="id"
+        )
+        combined_funding_df = fmcu.combine_funding_data(
+            round_df, candid_funding_long
+        )
+
         taxonomy = load_one_earth_taxonomy(
             taxonomy_path, add_geo_engineering=add_geo_engineering
         )
@@ -94,14 +106,6 @@ def _(
             )
         )
         meta_df = pd.read_json(meta_df_path)
-        round_df = fmcu.load_cb_round_data(funding_round_path)
-        candid_funding_raw = pd.read_excel(candid_funding_path)
-        candid_funding_long = fmcu.reshape_candid_funding(
-            candid_funding_raw, id_col="id"
-        )
-        combined_funding_df = fmcu.combine_funding_data(
-            round_df, candid_funding_long
-        )
 
         return (
             taxonomy,
@@ -127,6 +131,7 @@ def _(
     CANDID_FUNDING_FILE,
     FUNDING_ROUND_FILE,
     META_FILENAME,
+    ORG_INVESTORS_FILE,
     TAXONOMY_FILE,
     TAXONOMY_MAPPING_RESULTS_FILE,
     load_files,
@@ -142,27 +147,19 @@ def _(
         taxonomy_path=TAXONOMY_FILE,
         taxonomy_mapping_results_path=TAXONOMY_MAPPING_RESULTS_FILE,
         meta_df_path=META_FILENAME,
+        investor_orgs_path=ORG_INVESTORS_FILE,
         funding_round_path=FUNDING_ROUND_FILE,
         candid_funding_path=CANDID_FUNDING_FILE,
         add_geo_engineering=True,
     )
-    return (
-        candid_funding_long,
-        combined_funding_df,
-        meta_df,
-        round_df,
-        taxonomy,
-        taxonomy_mapping_results,
-    )
+    return combined_funding_df, meta_df, taxonomy, taxonomy_mapping_results
 
 
 @app.cell
 def _(
     AttentionIndexer,
-    candid_funding_long,
     combined_funding_df,
     meta_df,
-    round_df,
     taxonomy,
     taxonomy_mapping_results,
 ):
@@ -171,14 +168,24 @@ def _(
         taxonomy_mapping_results=taxonomy_mapping_results,
         taxonomy_mapping_id_col="uid",
         meta_df=meta_df.copy(),
-        round_df=round_df.copy(),
-        candid_funding_long=candid_funding_long.copy(),
         combined_funding_df=combined_funding_df.copy(),
         additional_rooting_factor=3,
         min_year=2018,
         max_year=2025,
     )
     return (aier,)
+
+
+@app.cell
+def _(combined_funding_df):
+    combined_funding_df
+    return
+
+
+@app.cell
+def _(aier):
+    aier.filtered_funding_mapped_to_taxonomy_df
+    return
 
 
 @app.cell
@@ -236,49 +243,39 @@ def _():
 
 
 @app.cell
-def _(
-    AttentionIndexer,
-    candid_funding_long,
-    combined_funding_df,
-    meta_df,
-    round_df,
-    taxonomy,
-    taxonomy_mapping_results,
-):
-    start_year = 2010
+def _():
+    # start_year = 2010
 
-    approach_results = {}
-    solution_results = {}
+    # approach_results = {}
+    # solution_results = {}
 
-    for start_year in range(2010, 2021):
-        end_year = start_year + 3
-        print(start_year)
-        _aier = AttentionIndexer(
-            taxonomy=taxonomy,
-            taxonomy_mapping_results=taxonomy_mapping_results,
-            taxonomy_mapping_id_col="uid",
-            meta_df=meta_df.copy(),
-            round_df=round_df.copy(),
-            candid_funding_long=candid_funding_long.copy(),
-            combined_funding_df=combined_funding_df.copy(),
-            additional_rooting_factor=3,
-            min_year=start_year,
-            max_year=end_year,
-            rounds_to_include=["pre_seed", "seed", "angel", "series_a"],
-            distributed_funding_level=3,
-        )
+    # for start_year in range(2010, 2021):
+    #     end_year = start_year + 3
+    #     print(start_year)
+    #     _aier = AttentionIndexer(
+    #         taxonomy=taxonomy,
+    #         taxonomy_mapping_results=taxonomy_mapping_results,
+    #         taxonomy_mapping_id_col="uid",
+    #         meta_df=meta_df.copy(),
+    #         combined_funding_df=combined_funding_df.copy(),
+    #         additional_rooting_factor=3,
+    #         min_year=start_year,
+    #         max_year=end_year,
+    #         rounds_to_include=["pre_seed", "seed", "angel", "series_a"],
+    #         distributed_funding_level=3,
+    #     )
 
-        _approach_attention_index = _aier.calculate_attention_index(max_level=3)
-        _approach_attention_index["start_year"] = start_year
-        _approach_attention_index["end_year"] = end_year
+    #     _approach_attention_index = _aier.calculate_attention_index(max_level=3)
+    #     _approach_attention_index["start_year"] = start_year
+    #     _approach_attention_index["end_year"] = end_year
 
-        approach_results[start_year] = _approach_attention_index
+    #     approach_results[start_year] = _approach_attention_index
 
-        _solution_attention_index = _approach_attention_index.drop_duplicates(
-            subset=["tax_map_level0", "tax_map_level1", "tax_map_level2"]
-        ).copy()
-        solution_results[start_year] = _solution_attention_index
-    return approach_results, solution_results
+    #     _solution_attention_index = _approach_attention_index.drop_duplicates(
+    #         subset=["tax_map_level0", "tax_map_level1", "tax_map_level2"]
+    #     ).copy()
+    #     solution_results[start_year] = _solution_attention_index
+    return
 
 
 @app.cell

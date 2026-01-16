@@ -1,13 +1,12 @@
 from datetime import datetime
 from pathlib import Path
 import pandas as pd
+from pandas.io.xml import Any
 from vdl_tools.shared_tools.tools.logger import logger
 import vdl_tools.scrape_enrich.crunchbase.organizations_api_extended as orgs_api
 import vdl_tools.shared_tools.cb_funding_calculations as fcalc
 import vdl_tools.shared_tools.common_functions as cf  # from common directory: commonly used functions
 import vdl_tools.shared_tools.project_config as pc
-
-paths = pc.get_paths()
 
 
 def __validate_crunchbase_args(
@@ -39,14 +38,37 @@ def __validate_crunchbase_args(
 def query_crunchbase_raw_data(
     company_ids=None,
     search_terms_list=None,
-    organizations_file_path=paths.get('expanded_orgs_data'),
-    funding_rounds_file_path=paths.get('expanded_orgs_funding_rounds'),
-    founders_file_path=paths.get('expanded_orgs_founders'),
-    investor_orgs_file_path=paths.get('expanded_orgs_investor_orgs'),
-    investor_person_file_path=paths.get('expanded_orgs_investor_person'),
-    search_terms_path=paths.get('expanded_search_terms_crunchbase'),
+    organizations_file_path=None,
+    funding_rounds_file_path=None,
+    founders_file_path=None,
+    investor_orgs_file_path=None,
+    investor_person_file_path=None,
+    search_terms_path=None,
 ):
     logger.info('querying for crunchbase for raw data')
+
+    if not any([
+        organizations_file_path,
+        funding_rounds_file_path,
+        founders_file_path,
+        investor_orgs_file_path,
+        investor_person_file_path,
+        search_terms_path,
+    ]):
+        paths = pc.get_paths()
+
+    if not organizations_file_path:
+        organizations_file_path=paths.get('expanded_orgs_data')
+    if not funding_rounds_file_path:
+        funding_rounds_file_path=paths.get('expanded_orgs_funding_rounds')
+    if not founders_file_path:
+        founders_file_path=paths.get('expanded_orgs_founders')
+    if not investor_orgs_file_path:
+        investor_orgs_file_path=paths.get('expanded_orgs_investor_orgs')
+    if not investor_person_file_path:
+        investor_person_file_path=paths.get('expanded_orgs_investor_person')
+    if not search_terms_path:
+        search_terms_path=paths.get('expanded_search_terms_crunchbase')
 
     __validate_crunchbase_args(
         search_terms_list=search_terms_list,
@@ -269,14 +291,37 @@ def __add_funding_by_year(funding_rounds_df: pd.DataFrame, orgs_df: pd.DataFrame
 
 def process_crunchbase_raw_data(
     filter_yr=2016,
-    organizations_file_path=paths.get('expanded_orgs_data'),
-    funding_rounds_file_path=paths.get('expanded_orgs_funding_rounds'),
-    founders_file_path=paths.get('expanded_orgs_founders'),
-    investor_orgs_file_path=paths.get('expanded_orgs_investor_orgs'),
-    investor_person_file_path=paths.get('expanded_orgs_investor_person'),
-    clean_file_path=paths.get('cb_companies_cleaned'),
+    organizations_file_path=None,
+    funding_rounds_file_path=None,
+    founders_file_path=None,
+    investor_orgs_file_path=None,
+    investor_person_file_path=None,
+    clean_file_path=None,
     filter_to_companies=True,
 ):
+
+    if not any([
+        organizations_file_path,
+        funding_rounds_file_path,
+        founders_file_path,
+        investor_orgs_file_path,
+        investor_person_file_path,
+        clean_file_path,
+    ]):
+        paths = pc.get_paths()
+    if not organizations_file_path:
+        organizations_file_path=paths.get('expanded_orgs_data')
+    if not funding_rounds_file_path:
+        funding_rounds_file_path=paths.get('expanded_orgs_funding_rounds')
+    if not founders_file_path:
+        founders_file_path=paths.get('expanded_orgs_founders')
+    if not investor_orgs_file_path:
+        investor_orgs_file_path=paths.get('expanded_orgs_investor_orgs')
+    if not investor_person_file_path:
+        investor_person_file_path=paths.get('expanded_orgs_investor_person')
+    if not clean_file_path:
+        clean_file_path=paths.get('cb_companies_cleaned')
+
     logger.info('loading raw crunchbase data')
     df_orgs = pd.read_json(organizations_file_path)
     logger.info('loading orgs')
@@ -475,12 +520,25 @@ def __get_org_country_from_fr(entries):
     return None  # Return None if no country entry is found
 
 
-def process_funding_rounds(fr_path=paths['expanded_orgs_funding_rounds'],
-                           investor_orgs_path=paths['expanded_orgs_investor_orgs'],
-                           filter_yr=2010):
-    logger.info('processing funding rounds')
+def load_process_funding_rounds(
+    fr_path,
+    investor_orgs_path,
+    filter_yr=2010,
+):
+    logger.info('loading funding rounds')
     df_fr = pd.read_json(fr_path)
-    logger.info('loaded funding rounds')
+    logger.info('loading investor orgs')
+    orgs_investors_df = pd.read_json(investor_orgs_path)
+    logger.info('processing funding rounds')
+    return process_funding_rounds(df_fr, orgs_investors_df, filter_yr)
+
+
+def process_funding_rounds(
+    df_fr: pd.DataFrame,
+    orgs_investors_df: pd.DataFrame,
+    filter_yr=2010,
+):
+    logger.info('processing funding rounds')
     # get year announced
     df_fr['year_announced'] = df_fr['announced_on'].apply(lambda x: int(x.split("-")[0]))
     # get total raised
@@ -498,28 +556,28 @@ def process_funding_rounds(fr_path=paths['expanded_orgs_funding_rounds'],
     df_fr['diversity'] = df_fr['funded_organization_diversity_spotlights'].apply(lambda x: __get_values(x, 'value', None))
     # add gov funder flag to funding rounds
     logger.info('adding government funder flag for each funding round')
-    orgs_investors_df = pd.read_json(investor_orgs_path)
-
     df_fr['gov_funder'] = flag_gov_funder_to_rounds(
         df_fr,
         orgs_investors_df
     )
 
-    keep_columns = ['org_uuid',
-                    'org_permalink',
-                    'announced_on',
-                    'year_announced',
-                    'raised_usd',
-                    'investment_stage',
-                    'investment_type',
-                    'investor_identifiers',
-                    'gov_funder',
-                    'country',
-                    'diversity',
-                    'funded_organization_description',
-                    'permalink',
-                    'uuid'
-                    ]
+    keep_columns = [
+        'org_uuid',
+        'org_permalink',
+        'announced_on',
+        'year_announced',
+        'raised_usd',
+        'investment_stage',
+        'investment_type',
+        'investor_identifiers',
+        'gov_funder',
+        'country',
+        'diversity',
+        "funded_organization_identifier",
+        'funded_organization_description',
+        'permalink',
+        'uuid'
+    ]
     df_fr = df_fr[keep_columns].copy()
     df_fr.rename(columns={'permalink': 'fr_permalink',
                           'uuid': 'fr_uuid'
@@ -534,15 +592,40 @@ def prepare_raw_crunchbase(
     company_ids=None,
     search_terms_list=None,
     search_terms_path=None,  # paths.get('expanded_search_terms_crunchbase'),
-    organizations_file_path=paths.get('expanded_orgs_data'),
-    funding_rounds_file_path=paths.get('expanded_orgs_funding_rounds'),
-    founders_file_path=paths.get('expanded_orgs_founders'),
-    investor_orgs_file_path=paths.get('expanded_orgs_investor_orgs'),
-    investor_person_file_path=paths.get('expanded_orgs_investor_person'),
-    clean_file_path=paths.get('cb_companies_cleaned'),
+    organizations_file_path=None,
+    funding_rounds_file_path=None,
+    founders_file_path=None,
+    investor_orgs_file_path=None,
+    investor_person_file_path=None,
+    clean_file_path=None,
     filter_yr=2016,
     filter_to_companies=True,
 ):
+    if not any([
+        organizations_file_path,
+        funding_rounds_file_path,
+        founders_file_path,
+        investor_orgs_file_path,
+        investor_person_file_path,
+        search_terms_path,
+        clean_file_path
+    ]):
+        paths = pc.get_paths()
+
+    if not organizations_file_path:
+        organizations_file_path=paths.get('expanded_orgs_data')
+    if not funding_rounds_file_path:
+        funding_rounds_file_path=paths.get('expanded_orgs_funding_rounds')
+    if not founders_file_path:
+        founders_file_path=paths.get('expanded_orgs_founders')
+    if not investor_orgs_file_path:
+        investor_orgs_file_path=paths.get('expanded_orgs_investor_orgs')
+    if not investor_person_file_path:
+        investor_person_file_path=paths.get('expanded_orgs_investor_person')
+    if not search_terms_path:
+        search_terms_path=paths.get('expanded_search_terms_crunchbase')
+    if not clean_file_path:
+        clean_file_path=paths.get('cb_companies_cleaned')
 
     if query_crunchbase and not process_crunchbase:
         raise ValueError("Cannot query Crunchbase without processing the data")
