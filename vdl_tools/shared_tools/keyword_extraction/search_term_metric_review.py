@@ -135,25 +135,33 @@ with app.setup:
         tradeoff_chart,
         efficiency_df,
         df,
+        text_field,
+        label_field,
     ):
         cutoff_index = None
         if tradeoff_chart.value.shape[0] > 0:
             cutoff_index = tradeoff_chart.value.iloc[-1]["Terms_Removed"].astype(int)
 
+        search_terms = efficiency_df[cutoff_index:]["term"].to_list()
         _updated_search_metrics = run_keyword_search_metrics(
-            efficiency_df[cutoff_index:]["term"].to_list(),
+            search_terms,
             df,
-            text_field="concat_text",
-            label_field="RELEVANCE_LABEL",
+            text_field=text_field,
+            label_field=label_field,
         )
 
         updated_metrics = explain_metrics(
             _updated_search_metrics, "10000 Random Candid with Pruned Terms"
         )
+        keyword_df = mo.ui.table(
+            pd.DataFrame(search_terms, columns=["term"]), page_size=10
+        )
         writeup = mo.md(f"""
     # Updated Metrics after Pruning
     *Click a point On the Chart to See Cutoff*
     {updated_metrics}
+    # Keywords Used After Pruning
+    {keyword_df}
     """)
         return writeup
 

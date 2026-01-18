@@ -44,7 +44,7 @@ def rename_df_cols(
 
 def combine_funding_data(
     round_df,
-    candid_long_df,
+    candid_long_df=None,
     cb_col_map=CB_COL_MAP,
     cd_col_map=CD_COL_MAP,
     min_year=2010,
@@ -56,19 +56,22 @@ def combine_funding_data(
     cb_rounds = cb_rounds[cb_col_map.values()]
     cb_rounds["data_source"] = "crunchbase"
 
-    cd_funding = candid_long_df.copy()
-    cd_funding = cd_funding.rename(columns=cd_col_map)
-    cd_funding = cd_funding[cd_col_map.values()]
-    cd_funding["data_source"] = "candid"
-    cd_funding["round_uuid"] = cd_funding.apply(
-        lambda x: f"{x['uid']}_{x['year']}", axis=1
-    )
+    if candid_long_df is not None:
+        cd_funding = candid_long_df.copy()
+        cd_funding = cd_funding.rename(columns=cd_col_map)
+        cd_funding = cd_funding[cd_col_map.values()]
+        cd_funding["data_source"] = "candid"
+        cd_funding["round_uuid"] = cd_funding.apply(
+            lambda x: f"{x['uid']}_{x['year']}", axis=1
+        )
 
-    cd_funding['country'] = None
-    cd_funding['diversity'] = None
-    cd_funding['gov_funder'] = None
+        cd_funding['country'] = None
+        cd_funding['diversity'] = None
+        cd_funding['gov_funder'] = None
 
-    funding_df = pd.concat([cb_rounds, cd_funding], axis=0)
+        funding_df = pd.concat([cb_rounds, cd_funding], axis=0)
+    else:
+        funding_df = cb_rounds
     funding_df = funding_df.sort_values("year", ascending=True)
     if min_year:
         funding_df = funding_df[funding_df["year"] >= min_year]
