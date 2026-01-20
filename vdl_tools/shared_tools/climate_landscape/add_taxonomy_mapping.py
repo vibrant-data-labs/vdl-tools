@@ -378,7 +378,7 @@ def load_arpah_treat_sols(
 
     taxonomy = [
         {'level': 0, 'name': 'Treatment Category', 'data': pillar_df, 'textattr': 'Definition'},
-        {'level': 1, 'name': 'Treatment Solution New', 'data': sub_df, 'textattr': 'Definition'},
+        {'level': 1, 'name': 'Treatment Solution', 'data': sub_df, 'textattr': 'Definition'},
 
     ]
     return taxonomy
@@ -878,7 +878,7 @@ def add_arpah_hazard_solutions(
         pct_delta=pct_delta_min,
         run_fewshot_classification=run_fewshot_classification,
         filter_fewshot_classification=filter_fewshot_classification,
-        fewshot_examples=None,
+        fewshot_examples=None, #fse.harpah_examples,
         use_cached_results=use_cached_results,
         force_parents=force_parents,
         mapping_name=mapping_name,
@@ -961,7 +961,7 @@ def add_arpah_treatment_solutions(
         pct_delta=pct_delta_min,
         run_fewshot_classification=run_fewshot_classification,
         filter_fewshot_classification=filter_fewshot_classification,
-        fewshot_examples=None,
+        fewshot_examples=fse.harpah_examples,
         use_cached_results=use_cached_results,
         force_parents=force_parents,
         mapping_name=mapping_name,
