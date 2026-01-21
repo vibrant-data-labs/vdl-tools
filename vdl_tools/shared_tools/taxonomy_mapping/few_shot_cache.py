@@ -102,6 +102,7 @@ INTRO_SENTENCE = dedent("""
     Output: Output ONLY the token "True" or "False".
 """).strip()
 
+DEFAULT_PROMPT = dedent("""You are an expert in climate mitigation, adaptation, resilience, and general climate change topics.""").strip()
 
 class FewShotCache(InstructorPRC):
     def __init__(
@@ -109,7 +110,7 @@ class FewShotCache(InstructorPRC):
         session,
         model=DEFAULT_MODEL,
         filter_by_model=False,
-        prompt_str: str = "You are an expert in climate mitigation, adaptation, resilience, and general climate change topics.",
+        prompt_str = DEFAULT_PROMPT,
         prompt_name: str = "taxonomy_few_shot",
     ):
         #prompt_str = "You are an expert in climate mitigation, adaptation, resilience, and general climate change topics."
