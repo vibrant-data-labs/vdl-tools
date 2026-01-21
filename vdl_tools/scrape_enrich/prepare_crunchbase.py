@@ -248,11 +248,15 @@ def flag_gov_funder_to_rounds(
 
     # More efficient way to get government investor UUIDs
     # Use explode() to flatten the lists, then filter, then get unique UUIDs
-    gov_investor_uuids = set(
-        orgs_investors_df.explode('investor_type')
-        .query("investor_type == 'government_office'")
-        ['uuid']
-    )
+    gov_investor_uuids = {
+        uuid
+        for uuid, types, facets in zip(orgs_investors_df['uuid'],
+                                       orgs_investors_df['investor_type'],
+                                       orgs_investors_df['facet_ids'])
+        if (isinstance(types, list) and 'government_office' in types)
+           or (isinstance(facets, list) and 'government_entity' in facets)
+    }
+
 
     # More efficient way to check if any investor is a government investor
     # Single apply with optimized logic
