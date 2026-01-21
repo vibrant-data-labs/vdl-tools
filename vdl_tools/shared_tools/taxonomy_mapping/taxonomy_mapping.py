@@ -625,7 +625,8 @@ def run_fewshot_classification(
     max_workers=3,
     max_errors=1,
     mapped_category_col='mapped_category',
-    examples_dict=None
+    examples_dict=None,
+    prompt_str=None
 ):
     definitions_dict = dict([
         category_definition_tuple
@@ -656,7 +657,11 @@ def run_fewshot_classification(
         }
 
     with get_session() as session:
-        few_shot_cache = FewShotCache(session=session)
+        prc_kwargs = {"session": session}
+        if prompt_str is not None:
+            prc_kwargs["prompt_str"] = prompt_str
+
+        few_shot_cache = FewShotCache(**prc_kwargs)
         ids_to_responses = few_shot_cache.bulk_get_cache_or_run(
             given_ids_texts=ids_to_payloads.items(),
             use_cached_result=use_cached_results,

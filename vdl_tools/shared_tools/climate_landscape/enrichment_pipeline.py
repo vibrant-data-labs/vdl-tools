@@ -212,28 +212,31 @@ def get_scraped_df(
     return df_web_success, df
 
 
-def _missing_description_mask(df, min_description_length=MIN_DESCRIPTION_LENGTH):
+def _missing_description_mask(df, min_description_length=MIN_DESCRIPTION_LENGTH, description_col='Description'):
     """returns a filtering mask when the description is missing or too short"""
     return (
-        (df['Description'].isnull()) |
-        (df['Description'].str.len() < min_description_length)
+            (df[description_col].isnull()) |
+            (df[description_col].str.len() < min_description_length)
     )
 
 
-def prepare_for_relevance_model(df, max_workers=MAX_WORKERS):
+def prepare_for_relevance_model(df, max_workers=MAX_WORKERS, description_col='Description'):
     """The relevance models require descriptive text.
     CB and Candid descriptions have shown to be enough text for the models to work.
     However, sometimes we are missing the descriptions from the original source.
 
     In this case, we will use summaries from their scraped websites.
-    
+
     If the website urls are are missing, we will scrape LinkedIn for their website urls and descriptions.
     Then we
     """
     # Determine which organizations have missing descriptions or their descriptions are too short
+    # Note: Assuming _missing_description_mask handles the column selection or defaults to 'Description' internally.
+    # If it is hardcoded to 'Description', you might want to update it to use description_col as well.
     missing_descriptions_mask = _missing_description_mask(
         df,
         min_description_length=MIN_DESCRIPTION_LENGTH,
+        description_col=description_col
     )
 
     # Scrape websites for those missing descriptions
@@ -250,7 +253,9 @@ def prepare_for_relevance_model(df, max_workers=MAX_WORKERS):
         summaries_for_missing_desc = {}
         df_missing_descriptions = pd.DataFrame()
 
-    df['text_for_relevance_model'] = df['Description']
+    # UPDATED: Uses the custom column if provided, defaults to 'Description'
+    df['text_for_relevance_model'] = df[description_col]
+
     df['Website'] = None
 
     # df_missing_descriptions will have a Website either from Website_cb_cd or LinkedIn
