@@ -96,6 +96,19 @@ def extract_website_name(value: str) -> str:
         return None
 
 
+def ensure_url_scheme(url: str) -> str:
+    """Ensure URL has a scheme (https:// by default).
+
+    This is necessary for urljoin to work correctly when constructing
+    internal page URLs from relative paths.
+    """
+    if not url:
+        return url
+    if not url.startswith(('http://', 'https://')):
+        return f'https://{url}'
+    return url
+
+
 def process_website_text(url, data, add_section_links=False):
     return wp.get_page_text(url, data, add_section_links=add_section_links)
 
@@ -128,12 +141,12 @@ def process_scraped_content(
     url = scraped_result['url']
     web_content = scraped_result['content']
     status_code = scraped_result.get('status_code', 0)
-    
+
     root_url = url if not root_path else root_path
     subpath = '/' if data_type == PageType.INDEX else clean_path
 
     logger.info("Processing page data for %s", url)
-    
+
     if web_content:
         # Check for empty body if required
         if filter_no_body and len(web_content.strip()) < 50:  # Simple check, refine if needed
@@ -170,7 +183,7 @@ def process_scraped_content(
         })
 
         is_single_page = check_is_single_page_websites(url, single_page_websites)
-        
+
         if is_single_page:
             logger.debug(f'{url} is marked as single page website, skipping internal pages')
 
@@ -232,8 +245,8 @@ def scrape_websites_psql(
     verify_ssl: bool = True,
     max_per_subpath: int = 6,
 ) -> pd.DataFrame:
-    
-    urls_ids = [(url, extract_website_name(url)) for url in urls]
+
+    urls_ids = [(ensure_url_scheme(url), extract_website_name(url)) for url in urls]
 
     with get_session(session=session) as session:
 
@@ -277,7 +290,7 @@ def scrape_websites_psql(
             ).all()
             existing_scraped_keys = {x.cleaned_key: x.num_errors for x in existing_scraped}
             existing_home_urls = {x.home_url for x in existing_scraped if x.num_errors < max_errors}
-            
+
             # Fetch all scraped data for URLs that need processing
             if urls_to_process:
                 columns = [
@@ -312,8 +325,8 @@ def scrape_websites_psql(
 
         # URLs that need scraping (not in WebPagesScraped or have errors)
         urls_to_scrape = [
-            x for x in urls_to_process 
-            if x[1] not in existing_scraped_keys or 
+            x for x in urls_to_process
+            if x[1] not in existing_scraped_keys or
             1 <= existing_scraped_keys[x[1]] < max_errors
         ]
 
@@ -323,7 +336,7 @@ def scrape_websites_psql(
         async def process_scraping_job(chunks, existing_scraped_keys):
             """Process scraping jobs asynchronously with proper error handling."""
             # Configure Async Scraper Limits
-            max_http = min(20, max_workers * 4) 
+            max_http = min(20, max_workers * 4)
             max_browser = min(3, max_workers)
 
             async with AsyncScraper(max_http, max_browser, verify_ssl=verify_ssl) as scraper:
@@ -377,12 +390,12 @@ def scrape_websites_psql(
                     if internal_links_to_scrape:
                         logger.info(f"Scraping {len(internal_links_to_scrape)} internal pages for chunk {i+1}")
                         internal_urls = [x[0] for x in internal_links_to_scrape]
-                        
+
                         internal_tasks = [scraper.scrape_url(url) for url in internal_urls]
                         internal_results = await asyncio.gather(*internal_tasks)
-                        
+
                         for int_res, (full_url, full_path, root_url, clean_path) in zip(internal_results, internal_links_to_scrape):
-                            
+
                             processed_internal = process_scraped_content(
                                 int_res,
                                 cache_id=full_path,
@@ -399,16 +412,16 @@ def scrape_websites_psql(
                                 webpage_obj = WebPagesScraped(**row)
                                 session.merge(webpage_obj)
                                 newly_scraped_data.append(webpage_obj.to_dict())
-                    
+
                     session.commit()
 
         if urls_to_scrape:
             logger.info(f"Scraping {len(urls_to_scrape)} websites...")
-            
+
             # Batch URLs for async scraping
             # We do it in chunks to avoid overwhelming everything at once and allow partial commits
             scrapping_chunks = list(chunked(urls_to_scrape, n_per_commit))
-            
+
             interrupted = False
             try:
                 asyncio.run(process_scraping_job(scrapping_chunks, existing_scraped_keys))
@@ -428,7 +441,7 @@ def scrape_websites_psql(
                 except Exception:
                     pass
                 raise
-            
+
             if interrupted:
                 logger.info(f"Returning {len(newly_scraped_data)} scraped pages after interruption")
 
@@ -465,7 +478,7 @@ def scrape_websites_psql(
                 )
 
         prompt_str_for_counting = summary_prompt or "test prompt " * 100
-        
+
         # Use ProcessPool for CPU-intensive text combination
         with ProcessPool(max_workers=max_workers) as executor:
             for i, chunk in enumerate(unfound_chunks):
@@ -523,7 +536,7 @@ def scrape_websites_psql(
 
         # Combine existing and newly combined data
         all_combined_data = existing_parsed_data + combined_data
-        
+
         # Step 5: Format the results
         combined_res = pd.DataFrame(all_combined_data)
 
