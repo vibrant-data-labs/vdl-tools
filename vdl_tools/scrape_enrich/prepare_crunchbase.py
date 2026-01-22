@@ -47,7 +47,7 @@ def query_crunchbase_raw_data(
 ):
     logger.info('querying for crunchbase for raw data')
 
-    if not any([
+    if not all([
         organizations_file_path,
         funding_rounds_file_path,
         founders_file_path,
@@ -304,7 +304,7 @@ def process_crunchbase_raw_data(
     filter_to_companies=True,
 ):
 
-    if not any([
+    if not all([
         organizations_file_path,
         funding_rounds_file_path,
         founders_file_path,
@@ -605,7 +605,7 @@ def prepare_raw_crunchbase(
     filter_yr=2016,
     filter_to_companies=True,
 ):
-    if not any([
+    if not all([
         organizations_file_path,
         funding_rounds_file_path,
         founders_file_path,
