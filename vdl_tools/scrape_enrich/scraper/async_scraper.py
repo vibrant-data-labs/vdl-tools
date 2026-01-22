@@ -223,64 +223,95 @@ class AsyncScraper:
     async def fetch_browser(self, url: str) -> Optional[str]:
         """
         Fetch page using full browser (Playwright) when HTTP fails or is insufficient.
+        Uses semaphore for concurrency control with hard timeout to prevent hangs.
         """
         # Ensure browser is initialized
         if not self.browser:
             logger.error("Browser not initialized. Use 'async with AsyncScraper()'.")
             return None
 
-        async with self.browser_sem:
-            if not url.startswith('http'):
-                url = f'https://{url}'
+        if not url.startswith('http'):
+            url = f'https://{url}'
 
+        # Acquire semaphore OUTSIDE the timeout - we don't want to timeout while waiting for a slot
+        # The timeout only applies to the actual browser work
+        async with self.browser_sem:
             context = None
             try:
-                # Create context with resource blocking to save bandwidth/memory
-                context = await self.browser.new_context(
-                    user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'
+                # Hard timeout for the browser operation itself
+                return await asyncio.wait_for(
+                    self._fetch_browser_impl(url),
+                    timeout=45.0  # 45 seconds hard limit
                 )
-
-                # Block images, fonts, media to speed up loading
-                await context.route("**/*.{png,jpg,jpeg,gif,webp,svg,css,woff,woff2,mp4,mp3}", lambda route: route.abort())
-
-                page = await context.new_page()
-
-                try:
-                    # Navigate with timeout
-                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-
-                    # Wait a bit for potential client-side rendering
-                    await page.wait_for_timeout(2000)
-
-                    content = await page.content()
-                    return content
-
-                except PlaywrightTimeoutError:
-                    logger.warning(f"Browser timeout for {url}, attempting to return partial content")
-                    return await page.content()
-
-            except Exception as e:
-                error_str = str(e)
-                # Detect DNS/connection errors and log at debug level (not warning)
-                # These are expected for dead links and don't need noisy warnings
-                if any(err in error_str for err in [
-                    'ERR_NAME_NOT_RESOLVED',      # DNS failure
-                    'ERR_CONNECTION_REFUSED',     # Server not listening
-                    'ERR_CONNECTION_RESET',       # Connection dropped
-                    'ERR_CONNECTION_TIMED_OUT',   # Connection timeout
-                    'ERR_ADDRESS_UNREACHABLE',    # Can't reach host
-                    'ERR_NETWORK_CHANGED',        # Network changed during request
-                ]):
-                    logger.debug(f"Browser: dead link for {url}: {error_str.split(chr(10))[0]}")
-                else:
-                    logger.warning(f"Browser fetch failed for {url}: {error_str}")
+            except asyncio.TimeoutError:
+                logger.warning(f"Browser operation timed out (hard limit) for {url}")
                 return None
+            except asyncio.CancelledError:
+                logger.warning(f"Browser operation cancelled for {url}")
+                raise  # Re-raise to propagate cancellation
             finally:
-                if context:
-                    try:
-                        await context.close()
-                    except Exception:
-                        pass  # Ignore errors during cleanup
+                # Context cleanup is handled inside _fetch_browser_impl
+                pass
+
+    async def _fetch_browser_impl(self, url: str) -> Optional[str]:
+        """Internal browser fetch implementation. Must be called with semaphore held."""
+        context = None
+        try:
+            # Create context with resource blocking to save bandwidth/memory
+            context = await self.browser.new_context(
+                user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'
+            )
+
+            # Block images, fonts, media to speed up loading
+            await context.route("**/*.{png,jpg,jpeg,gif,webp,svg,css,woff,woff2,mp4,mp3}", lambda route: route.abort())
+
+            page = await context.new_page()
+
+            try:
+                # Navigate with timeout
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+
+                # Wait a bit for potential client-side rendering
+                await page.wait_for_timeout(2000)
+
+                content = await page.content()
+                return content
+
+            except PlaywrightTimeoutError:
+                logger.warning(f"Browser timeout for {url}, attempting to return partial content")
+                try:
+                    return await page.content()
+                except Exception:
+                    return None
+
+        except asyncio.CancelledError:
+            # Task was cancelled (e.g., by timeout) - ensure cleanup happens
+            logger.debug(f"Browser task cancelled for {url}")
+            raise
+        except Exception as e:
+            error_str = str(e)
+            # Detect DNS/connection errors and log at debug level (not warning)
+            if any(err in error_str for err in [
+                'ERR_NAME_NOT_RESOLVED',      # DNS failure
+                'ERR_CONNECTION_REFUSED',     # Server not listening
+                'ERR_CONNECTION_RESET',       # Connection dropped
+                'ERR_CONNECTION_TIMED_OUT',   # Connection timeout
+                'ERR_ADDRESS_UNREACHABLE',    # Can't reach host
+                'ERR_NETWORK_CHANGED',        # Network changed during request
+                'Target closed',              # Browser/context closed
+                'Browser closed',             # Browser closed
+            ]):
+                logger.debug(f"Browser: dead link for {url}: {error_str.split(chr(10))[0]}")
+            else:
+                logger.warning(f"Browser fetch failed for {url}: {error_str}")
+            return None
+        finally:
+            # Always try to close context, even on cancellation
+            if context:
+                try:
+                    await asyncio.wait_for(context.close(), timeout=5.0)
+                except Exception:
+                    pass  # Ignore errors during cleanup - don't block
 
     async def scrape_url(self, url: str) -> Dict[str, Any]:
         """
