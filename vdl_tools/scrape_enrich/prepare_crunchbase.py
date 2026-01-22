@@ -229,16 +229,37 @@ def add_investors(
     df['Investors Data'] = df['permalink'].apply(lambda p: org_to_investors.get(p, None))
     return df
 
-def has_government_investor(investors_data):
-    if not investors_data:
+
+def get_gov_investor_uuids(investors_df: pd.DataFrame):
+    """
+    Returns a set of UUIDs for investors that are either:
+    1. investor_type = 'government_office' (Agencies, State Banks)
+    2. facet_ids contains 'government_entity' (The Government Itself)
+
+    It will be applied at funding round level and at the company level.
+    """
+    return {
+        uuid
+        for uuid, types, facets in zip(investors_df['uuid'],
+                                       investors_df['investor_type'],
+                                       investors_df['facet_ids'])
+        if (isinstance(types, list) and 'government_office' in types)
+           or (isinstance(facets, list) and 'government_entity' in facets)
+    }
+
+
+def check_investor_overlap(investor_list, gov_uuids):
+    """
+    Checks if any investor in the list has a UUID present in the gov_uuids set.
+    """
+    if not investor_list or not isinstance(investor_list, list):
         return False
-    for investor in investors_data:
-        investor_types = investor['investor_type']
-        if not investor_types:
-            continue
-        if 'government_office' in investor_types:
-            return True
-    return False
+
+    # Extract UUIDs from this row's list
+    current_uuids = {inv.get('uuid') for inv in investor_list if inv.get('uuid')}
+
+    # Check for intersection
+    return bool(current_uuids & gov_uuids)
 
 def flag_gov_funder_to_rounds(
     funding_rounds_df: pd.DataFrame,
@@ -246,29 +267,14 @@ def flag_gov_funder_to_rounds(
 ):
     """ Add a boolean column to funding rounds dataframe indicating if any investor is a government investor """
 
-    # More efficient way to get government investor UUIDs
-    # Use explode() to flatten the lists, then filter, then get unique UUIDs
-    gov_investor_uuids = {
-        uuid
-        for uuid, types, facets in zip(orgs_investors_df['uuid'],
-                                       orgs_investors_df['investor_type'],
-                                       orgs_investors_df['facet_ids'])
-        if (isinstance(types, list) and 'government_office' in types)
-           or (isinstance(facets, list) and 'government_entity' in facets)
-    }
+    # get government investor UUIDs
+    gov_investor_uuids = get_gov_investor_uuids(orgs_investors_df)
 
-
-    # More efficient way to check if any investor is a government investor
-    # Single apply with optimized logic
-    def has_gov_investor(investor_list):
-        if not investor_list or not isinstance(investor_list, list):
-            return False
-        # Use set intersection for O(1) lookup instead of nested loops
-        investor_uuids = {inv.get('uuid') for inv in investor_list if inv.get('uuid')}
-        return bool(investor_uuids & gov_investor_uuids)
-
-    gov_funder = funding_rounds_df['investor_identifiers'].apply(has_gov_investor)
-    return gov_funder
+    # Apply the global helper using lambda
+    # pass the row value (x) and our pre-calculated set
+    return funding_rounds_df['investor_identifiers'].apply(
+        lambda x: check_investor_overlap(x, gov_investor_uuids)
+    )
 
 
 def __get_values(data, field_name="value", default_value=None):
@@ -426,11 +432,22 @@ def process_crunchbase_raw_data(
     logger.info('Adding investors to organizations')
     df_cb = add_investors(df_cb, df_investor_orgs, df_investor_person)
     logger.info('Added investors to organizations')
+
+    # 1. Combine ALL investor types (Orgs + People) for the "DNA" check
+    all_investors = pd.concat([df_investor_orgs, df_investor_person], ignore_index=True)
+
+    # 2. Use the Master Function (Single Source of Truth)
+    gov_investor_uuids = get_gov_investor_uuids(all_investors)
+
+    logger.info('Extracted investors')
     df_cb['Investors'] = df_cb['Investors Data'].apply(lambda i: __extract_field(i, 'name'))
-    df_cb['Gov_Funder'] = df_cb['Investors Data'].apply(has_government_investor)
+    # Use the shared helper
+    df_cb['Gov_Funder'] = df_cb['Investors Data'].apply(
+        lambda x: check_investor_overlap(x, gov_investor_uuids)
+    )
+
     df_cb['n_Funders'] = df_cb['Investors Data'].apply(lambda i: len(i) if i is not None else 0)
     df_cb['n_Employees'] = df_cb['num_employees_enum'].apply(convert_employees_enum)
-    logger.info('Extracted investors')
 
     logger.info('Extracting founded on and Year Founded')
     df_cb['founded_on'] = df_cb['founded_on'].apply(__get_values)
