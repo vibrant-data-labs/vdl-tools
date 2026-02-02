@@ -53,7 +53,7 @@ dependencies = [
     "tiktoken",
     "treelib",
     "torch>=2.0.0,<3.0.0",          # torch major versions incompatible
-    "transformers>=4.35.0,<5.0.0",    # frequent API changes
+    "transformers>=4.35.0,<6.0.0",    # frequent API changes
     "umap-learn==0.5.11",
     "unstructured[all-docs]>=0.16.12,<1.0.0",
     "url-normalize",
