@@ -187,6 +187,7 @@ def predict(
 
     df_cb = df[(df['Data Source'] == 'Crunchbase')]
     df_cd = df[(df['Data Source'] == 'Candid')]
+    df_gt = df[(df['Data Source'] == 'Giving Tuesday')]
 
     # Only predict for Crunchbase for now
     prediction_df = df_cb.copy()
@@ -233,7 +234,8 @@ def predict(
     df_cb[org_type_prediction_field] = df_cb[id_field].map(id_to_prediction)
 
     df_cd[org_type_prediction_field] = df_cd[org_type_field]
-    df = pd.concat([df_cb, df_cd])
+    df_gt[org_type_prediction_field] = df_gt[org_type_field]
+    df = pd.concat([df_cb, df_cd, df_gt])
     return df
 
 
