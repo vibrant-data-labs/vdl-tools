@@ -31,21 +31,49 @@ with app.setup:
         recall = search_metrics[1]
         metrics = search_metrics[2]
 
-        all_false_kw_hit = metrics.loc[False].sum().sum()
-        all_true_kw_hit = metrics.loc[True].sum().sum()
+        # metrics comes in as a Series with a MultiIndex of (KW_HIT_Pos, RELEVANCE_LABEL).
+        # Example structure:
+        #   KW_HIT_Pos  RELEVANCE_LABEL
+        #   True        False              82483
+        #   True        True               60170
+        #
+        # Problem: If all keyword hits are True (or all False), one of the index values
+        # won't exist, causing a KeyError when we try to access metrics.loc[False] or
+        # metrics.loc[True]. Same issue applies to the RELEVANCE_LABEL level.
+        #
+        # Solution: Convert the MultiIndex Series to a DataFrame using unstack(), then
+        # reindex to ensure both True and False exist in both the index (KW_HIT_Pos)
+        # and columns (RELEVANCE_LABEL). Missing combinations get filled with 0.
+        #
+        # After unstack(), the DataFrame looks like:
+        #   RELEVANCE_LABEL  False   True
+        #   KW_HIT_Pos
+        #   False              0       0    <- added by reindex if missing
+        #   True           82483   60170
+        metrics = metrics.unstack(fill_value=0)
+        metrics = metrics.reindex(index=[False, True], columns=[False, True], fill_value=0)
+
+        # Now we can safely access any combination of True/False without KeyError
+        all_false_kw_hit = metrics.loc[False].sum()  # Sum across all RELEVANCE_LABEL for False KW_HIT_Pos
+        all_true_kw_hit = metrics.loc[True].sum()    # Sum across all RELEVANCE_LABEL for True KW_HIT_Pos
         hit_true_rate = all_true_kw_hit / (all_false_kw_hit + all_true_kw_hit)
 
-        all_relevant_hits = metrics.loc[:, True].sum().sum()
+        all_relevant_hits = metrics.loc[:, True].sum()  # Sum across all KW_HIT_Pos for True RELEVANCE_LABEL
         relevant_hit_rate = all_relevant_hits / metrics.values.sum()
 
-        true_and_relevant_hits = metrics.loc[True, True]
+        true_and_relevant_hits = metrics.loc[True, True]  # Keyword hit was True AND document was relevant
+
+        # Convert back to MultiIndex Series format for display consistency.
+        # stack() is the inverse of unstack() - it pivots the columns back into a MultiIndex level.
+        metrics = metrics.stack()
+
         pr_text = f"""
-    ###{name}:  
-    {tab}**All True Keyword Hits**: {all_true_kw_hit} ({hit_true_rate:.2%} of total)  
-    {tab}**All Relevant Hits**: {all_relevant_hits} ({relevant_hit_rate:.2%} of total)  
-    {tab}**True & Relevant Hits**: {true_and_relevant_hits}  
-    {tab}**Recall**: {recall:.2f}  ({true_and_relevant_hits} out of {all_relevant_hits})  
-    {tab}**Precision**: {precision:.2f}  ({true_and_relevant_hits} out of {all_true_kw_hit})  
+    ###{name}:
+    {tab}**All True Keyword Hits**: {all_true_kw_hit} ({hit_true_rate:.2%} of total)
+    {tab}**All Relevant Hits**: {all_relevant_hits} ({relevant_hit_rate:.2%} of total)
+    {tab}**True & Relevant Hits**: {true_and_relevant_hits}
+    {tab}**Recall**: {recall:.2f}  ({true_and_relevant_hits} out of {all_relevant_hits})
+    {tab}**Precision**: {precision:.2f}  ({true_and_relevant_hits} out of {all_true_kw_hit})
     {mo.ui.table(metrics.reset_index())}
     """
         if extra:
@@ -193,7 +221,7 @@ def _():
 
     # writeup = mo.md(f"""
     #     # Baseline
-    #     {baseline_explain}  
+    #     {baseline_explain}
     #     {keywords_md}
     #     # Efficiency Chart
     #     {mo.ui.table(efficiency_df)}

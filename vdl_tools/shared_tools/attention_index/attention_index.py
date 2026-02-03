@@ -210,7 +210,7 @@ class AttentionIndexer:
         self.org_level_aggregation_df = (
             self.filtered_funding_mapped_to_taxonomy_df.groupby(['tax_map_uid'] + taxonomy_level_columns)
             .agg({
-                 # Sum up all the distributed_funding for all the lower levels 
+                 # Sum up all the distributed_funding for all the lower levels
                 "distributed_funding": "sum",
                 # Because we are at the round level this will have been multiplied for each round, so take the mean of it
                 "tax_map_fundingfrac": "mean",
@@ -417,7 +417,7 @@ def load_one_earth_files(
         investor_orgs_path,
         candid_funding_path,
     )
-    
+
     taxonomy = load_one_earth_taxonomy(
         taxonomy_path, add_geo_engineering=add_geo_engineering
     )

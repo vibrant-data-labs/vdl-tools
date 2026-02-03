@@ -36,8 +36,12 @@ def rename_df_cols(
     prefix,
     exclude_cols=[],
 ):
+    if prefix:
+        pattern = "{prefix}_{col}"
+    else:
+        pattern = "{col}"
     rename_dict = {
-        col: f"{prefix}_{col}".lower().replace(" ", "_") for col in df.columns if col not in exclude_cols
+        col: pattern.format(prefix=prefix, col=col).lower().replace(" ", "_").replace("-", "_") for col in df.columns if col not in exclude_cols
     }
     return df.rename(columns=rename_dict)
 
@@ -88,7 +92,7 @@ def load_cb_round_data(funding_rounds_path, investor_orgs_path):
     full_round_df = load_process_funding_rounds(
         funding_rounds_path,
         investor_orgs_path
-        )
+    )
 
     full_round_df["organization_uuid"] = full_round_df[
         "funded_organization_identifier"
