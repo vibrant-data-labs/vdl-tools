@@ -991,6 +991,9 @@ def add_arpah_treatment_solutions(
     new_df = tm.add_mapping_to_orgs(df, all_df, id_col, pct=pct, sim=sim, cats=cols)
     return new_df
 
+
+EDUCATION_PROMPT = "You are a strategic analyst in the Global Education Ecosystem specializing in the 'Next Horizon' of holistic learning infrastructure across operational, digital, social, and systemic governance pillars."
+
 def add_lstudio_taxonomy(
     df,
     id_col,
@@ -1010,6 +1013,7 @@ def add_lstudio_taxonomy(
     results_path=None,
     distributed_funding_results_path=None,
     max_depth=1,
+    prompt_str=EDUCATION_PROMPT,
 ):
     paths = paths or pc.get_paths()
     taxonomy_path = taxonomy_path or paths["ed_taxonomy"]

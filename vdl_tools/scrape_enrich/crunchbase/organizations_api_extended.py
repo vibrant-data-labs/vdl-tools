@@ -351,4 +351,7 @@ if __name__ == '__main__':
      ],
      extra_filters=[
          api.eq("status", "operating")
-     ])
+     ],
+     search_condition='search_terms',
+     force_query=True,
+     )

@@ -45,4 +45,4 @@ def embed_texts_with_cache(
     for id_, _ in ids_texts:
         if id_ in entity_embeddings:
             flat_embeddings.append(entity_embeddings[id_])
-    return np.stack(flat_embeddings)
+    return np.stack(flat_embeddings).astype(np.float32)
