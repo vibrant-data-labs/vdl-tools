@@ -1,26 +1,60 @@
-import json
-import logging
+"""Prompt/response cache with structured (Pydantic) output.
 
-import instructor
-from openai import OpenAI
+This module provides `InstructorPRC`, a subclass of `PromptResponseCacheSQL`
+that always uses a Pydantic response model for completions. It uses the
+OpenAI Responses API (via `openai_api_utils.get_completion`) with
+``text_format`` set to the response model—**not** the Instructor library.
+The prompt stored in the cache includes the JSON schema of the response
+model so cache lookups are consistent with the expected output shape. All
+OpenAI API options are passed through via ``**kwargs``; see the class
+docstring Notes for model-specific parameters (e.g. reasoning for gpt-5).
+"""
+
+
+import logging
 
 from vdl_tools.shared_tools.database_cache.database_models.prompt import PromptResponse
 from vdl_tools.shared_tools.openai.prompt_response_cache_sql import PromptResponseCacheSQL, DEFAULT_MODEL
 from vdl_tools.shared_tools.openai.openai_constants import MODEL_DATA
 from vdl_tools.shared_tools.tools.logger import logger
-from vdl_tools.shared_tools.openai.openai_api_utils import CLIENT
+from vdl_tools.shared_tools.openai.openai_api_utils import get_completion
 
 logger.setLevel(logging.DEBUG)
 logging.getLogger("openai").setLevel(logging.DEBUG)
-logging.getLogger("instructor").setLevel(logging.DEBUG)
 
-CLIENT = instructor.patch(CLIENT, mode=instructor.Mode.JSON)
 
 class InstructorPRC(PromptResponseCacheSQL):
-    """Similar to the PromprtResponseCacheSQL but
-    for queries that will use the Instructor API. This allows for
-    using response model (Pydantic model) to validate the response
+    """SQL-backed cache for completions that use a Pydantic response model.
+
+    Extends `PromptResponseCacheSQL` so that every call uses the OpenAI
+    Responses API (formerly used through the Instructor library) with a fixed ``text_format``
+    set to the given response model. The prompt registered in the cache is
+    the user prompt plus the response model's JSON schema, so cache keys
+    reflect the expected output structure.
+
+    Notes
+    -----
+    **OpenAI API kwargs and model-specific parameters**
+
+    Methods that call the API (`get_cache_or_run`, `bulk_get_cache_or_run`)
+    accept ``**kwargs`` and forward them to `get_completion`. **Which kwargs
+    are valid depends on the model** set in the constructor:
+
+    - **All models**: ``response_format`` / ``text_format`` is set internally
+      from the constructor's response_model; you can pass other options
+      supported by the Responses API.
+    - **Reasoning models** (e.g. ``gpt-5-nano``): support ``reasoning``, e.g.
+      ``reasoning={"effort": "high", "summary": "auto"}``. Pass these via
+      kwargs in `get_cache_or_run` or `bulk_get_cache_or_run`.
+    - **Chat / non-reasoning models** (e.g. ``gpt-4.1-mini``): support
+      parameters like ``temperature``, ``max_tokens``, etc. as allowed by the
+      API for that model.
+
+    Use only kwargs that match the configured model. See
+    `prompt_response_cache_sql.PromptResponseCacheSQL` for more detail on
+    cache keying and model filtering.
     """
+
     def __init__(
         self,
         session,
@@ -31,6 +65,31 @@ class InstructorPRC(PromptResponseCacheSQL):
         model=DEFAULT_MODEL,
         filter_by_model=False,
     ):
+        """Initialize the cache with a prompt and Pydantic response model.
+
+        The stored prompt is ``prompt_str`` plus the response model's JSON
+        schema, so the schema is part of the cache identity.
+
+        Parameters
+        ----------
+        session
+            SQLAlchemy session for database access.
+        prompt_str : str
+            User-facing prompt text (instructions for the model).
+        response_model : type
+            Pydantic model class for structured output (e.g. BaseModel
+            subclass). Used as ``text_format`` for all completions.
+        prompt_name : str, optional
+            Name for the prompt when registering. Default is None.
+        prompt_id : str, optional
+            Id of an existing prompt to load; if given, prompt_str and
+            response_model should match the existing prompt. Default is None.
+        model : str, optional
+            OpenAI model name (e.g. gpt-4.1-mini, gpt-5-nano). Default is
+            DEFAULT_MODEL.
+        filter_by_model : bool, optional
+            If True, cache is scoped by model name. Default is False.
+        """
         # If None or "" is passed in
         prompt_str_w_schema = f"{prompt_str}\n{response_model.schema_json()}"
         super().__init__(
@@ -49,53 +108,73 @@ class InstructorPRC(PromptResponseCacheSQL):
         self,
         prompt_str,
         text,
-        max_tokens=4096,
         **kwargs
     ):
-        function_kwargs = dict(
-            response_model=self.response_model,
-            model=self.model,
-            max_tokens=max_tokens,
-            max_retries=1,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": self.prompt_text,
-                        },
-                        {
-                            "type": "text",
-                            "text": text,
-                        }
-                    ],
-                }
-            ],
-        )
-        if self.model == "o3-mini" or self.model.startswith("gpt-5"):
-            max_tokens = function_kwargs.pop("max_tokens")
-            function_kwargs["max_completion_tokens"] = max_tokens
+        """Call the OpenAI Responses API with this cache's response model.
 
-        response = CLIENT.chat.completions.create(**function_kwargs)
+        Always passes ``text_format=self.response_model`` so output is
+        validated and parsed into the Pydantic model. Other kwargs are
+        forwarded to the API; use model-appropriate options (e.g. reasoning
+        for gpt-5). See class docstring Notes.
+
+        Parameters
+        ----------
+        prompt_str : str
+            System prompt / instructions (typically the prompt without
+            schema; the full prompt with schema is stored on the cache).
+        text : str
+            User message content.
+        **kwargs
+            Passed to the OpenAI Responses API (e.g. reasoning for
+            reasoning models). Valid options depend on the model.
+
+        Returns
+        -------
+        response_model instance
+            Parsed completion as an instance of the Pydantic response model.
+        """
+        response = get_completion(
+            prompt=prompt_str,
+            text=text,
+            model=self.model,
+            text_format=self.response_model,
+            **kwargs,
+        )
 
         return response
 
-    def store_item(
-        self,
-        given_id: str,
-        text,
-        response,
-    ):
-        prompt_response_obj = PromptResponse(
-            prompt_id=self.prompt.id,
-            given_id=given_id,
-            model_name=self.model,
-            input_text=text,
-            response_full=response._raw_response.model_dump(),
-            response_text=json.dumps(response.dict()),
-            num_errors=0,
-        )
 
-        self.session.merge(prompt_response_obj)
-        return prompt_response_obj
+if __name__ == "__main__":
+    from vdl_tools.shared_tools.database_cache.database_utils import get_session
+    from pydantic import BaseModel
+    class Response(BaseModel):
+        capital: str
+
+    with get_session() as session:
+        prc = InstructorPRC(
+            session=session,
+            model="gpt-5-nano",
+            prompt_str="Give the world capital of the country.",
+            response_model=Response,
+        )
+        response_gpt_5_nano = prc.get_cache_or_run(
+            given_id="test",
+            text="France",
+            use_cached_result=False,
+        )
+        print("GPT-5-Nano response:", response_gpt_5_nano['response_text'])
+
+
+    with get_session() as session:
+        prc = InstructorPRC(
+            session=session,
+            model="gpt-4.1-mini",
+            prompt_str="Give the world capital of the country.",
+            response_model=Response,
+        )
+        response_gpt_4_1_mini = prc.get_cache_or_run(
+            given_id="test",
+            text="France",
+            use_cached_result=False,
+        )
+        print("GPT-4.1-Mini response:", response_gpt_4_1_mini['response_text'])
