@@ -64,6 +64,7 @@ class InstructorPRC(PromptResponseCacheSQL):
         prompt_id=None,
         model=DEFAULT_MODEL,
         filter_by_model=False,
+        store_results=True,
     ):
         """Initialize the cache with a prompt and Pydantic response model.
 
@@ -89,6 +90,8 @@ class InstructorPRC(PromptResponseCacheSQL):
             DEFAULT_MODEL.
         filter_by_model : bool, optional
             If True, cache is scoped by model name. Default is False.
+        store_results : bool, optional
+            If True, persist responses to the database. Default is True.
         """
         # If None or "" is passed in
         prompt_str_w_schema = f"{prompt_str}\n{response_model.schema_json()}"
@@ -99,6 +102,7 @@ class InstructorPRC(PromptResponseCacheSQL):
             prompt_id=prompt_id,
             filter_by_model=filter_by_model,
             model=model,
+            store_results=store_results,
         )
         self.prompt_text = prompt_str
         self.response_model = response_model

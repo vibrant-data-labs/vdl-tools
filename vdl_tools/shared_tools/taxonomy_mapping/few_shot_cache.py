@@ -22,7 +22,7 @@ from typing import  Optional
 from vdl_tools.shared_tools.database_cache.database_models.prompt import PromptResponse
 from vdl_tools.shared_tools.openai.openai_api_utils import CLIENT
 from vdl_tools.shared_tools.openai.prompt_response_cache_sql import DEFAULT_MODEL
-from vdl_tools.shared_tools.openai.openai_constants import is_reasoning_model
+from vdl_tools.shared_tools.openai.openai_api_utils import is_reasoning_model
 from vdl_tools.shared_tools.openai.prompt_response_cache_instructor import InstructorPRC
 from vdl_tools.shared_tools.tools.logger import logger
 
