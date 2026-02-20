@@ -9,18 +9,16 @@ from vdl_tools.scrape_enrich.netzero_insights.filters import (
     Sorting, MainFilter,
 )
 
-from vdl_tools.shared_tools.database_cache.database_models import Startup, CompanyCommercialDeal, CompanyFundingRounds
+from vdl_tools.shared_tools.database_cache.database_models import (
+    CompanyCommercialDeal,
+    CompanyFundingRounds,
+    Investor,
+    Startup,
+)
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-
-class Investor:
-    pass
-
-class Deal:
-    pass
 
 
 PROD_BASE_URL = "https://api.netzeroinsights.com"
@@ -348,127 +346,6 @@ class NetZeroAPI:
             max_pages=max_pages
         )
 
-    # def _get_detail(
-    #     self,
-    #     id: int,
-    #     endpoint: str,
-    #     model_class: type,
-    #     read_from_cache: bool = None,
-    #     write_to_cache: bool = None,
-    # ) -> Dict:
-    #     """Base method for getting detailed information about an entity.
-
-    #     Args:
-    #         id: The ID of the entity to fetch
-    #         endpoint: The API endpoint to call
-    #         model_class: The class to instantiate with the response data
-    #         read_from_cache: Whether to read from cache
-    #         write_to_cache: Whether to write to cache
-
-    #     Returns:
-    #         Dict containing the entity details
-    #     """
-    #     logger.info(f"Fetching details for {endpoint} with ID {id}")
-
-    #     read_from_cache, write_to_cache = self._resolve_cache_params(read_from_cache, write_to_cache)
-
-    #     if read_from_cache:
-    #         with get_session() as session:
-    #             logger.info(f"Checking database for {endpoint} with ID {id}")
-    #             entity = session.query(model_class).filter(model_class.clientID == id).first()
-    #             if entity:
-    #                 logger.info(f"Found {endpoint} in database")
-    #                 # Return in same format as batch method - extract relevant fields
-    #                 args = {}
-    #                 valid_columns = model_class.__table__.columns.keys()
-    #                 base_cls = model_class.__bases__[0]
-
-    #                 for k in valid_columns:
-    #                     if not hasattr(base_cls, k):
-    #                         args[k] = getattr(entity, k)
-
-    #                 # Ensure fullData is included
-    #                 if hasattr(entity, 'fullData'):
-    #                     args['fullData'] = entity.fullData
-
-    #                 return args
-
-    #     try:
-    #         data = self._get(
-    #             endpoint=f"{endpoint}/{id}",
-    #         )
-    #         logger.info(f"Successfully fetched details for {endpoint} {id}")
-
-    #         # Process data similar to batch method - filter columns and set fullData
-    #         args = {}
-    #         valid_columns = model_class.__table__.columns.keys()
-    #         base_cls = model_class.__bases__[0]
-
-    #         if isinstance(data, dict):
-    #             for k, v in data.items():
-    #                 if k in valid_columns and not hasattr(base_cls, k):
-    #                     args[k] = v
-
-    #         args["clientID"] = id
-    #         args["fullData"] = data
-
-    #         if write_to_cache:
-    #             with get_session() as session:
-    #                 entity = model_class(**args)
-    #                 session.merge(entity)
-    #                 session.commit()
-            
-    #         # Return data in same format as batch method
-    #         return args
-    #     except requests.exceptions.RequestException as e:
-    #         logger.error(f"Failed to fetch {endpoint} details for ID {id}: {str(e)}")
-    #         raise
-    
-    # def get_startup_detail(
-    #     self,
-    #     startup_id: int,
-    #     read_from_cache: bool = None,
-    #     write_to_cache: bool = None,
-    # ) -> Dict:
-    #     """Get detailed information about a specific startup."""
-    #     return self._get_detail(
-    #         id=startup_id,
-    #         endpoint="getStartup",
-    #         model_class=Startup,
-    #         read_from_cache=read_from_cache,
-    #         write_to_cache=write_to_cache
-    #     )
-
-    # def get_investor_detail(
-    #     self,
-    #     investor_id: int,
-    #     read_from_cache: bool = None,
-    #     write_to_cache: bool = None,
-    # ) -> Dict:
-    #     """Get detailed information about a specific investor."""
-    #     return self._get_detail(
-    #         id=investor_id,
-    #         endpoint="getInvestor",
-    #         model_class=Investor,
-    #         read_from_cache=read_from_cache,
-    #         write_to_cache=write_to_cache
-    #     )
-
-    # def get_deal_detail(
-    #     self,
-    #     deal_id: int,
-    #     read_from_cache: bool = None,
-    #     write_to_cache: bool = None,
-    # ) -> Dict:
-    #     """Get detailed information about a specific deal."""
-    #     return self._get_detail(
-    #         id=deal_id,
-    #         endpoint="fundingRound",
-    #         model_class=CompanyFundingRounds,
-    #         read_from_cache=read_from_cache,
-    #         write_to_cache=write_to_cache
-    #     )
-
     async def _get_details_batch(
         self,
         ids: List[int],
@@ -581,16 +458,19 @@ class NetZeroAPI:
                 await process_batch(batch)
 
         logger.info(f"Successfully fetched {len(results)} `{endpoint}`s")
-        return [results.get(id) for id in ids]
+        unfound_ids = set(ids) - set(results.keys())
+        logger.warning(f"Unfound IDs for endpoint {endpoint}: {unfound_ids}")
+        return [results.get(id) for id in ids if id in results]
 
     async def get_startup_details(
         self,
         startup_ids: List[int],
         read_from_cache: bool = None,
         write_to_cache: bool = None,
+        flatten: bool = True,
     ) -> List[Dict]:
         """Get detailed information about multiple startups."""
-        return await self._get_details_batch(
+        startup_objects = await self._get_details_batch(
             ids=startup_ids,
             primary_key_field="clientID",
             endpoint="getStartup",
@@ -598,44 +478,44 @@ class NetZeroAPI:
             read_from_cache=read_from_cache,
             write_to_cache=write_to_cache
         )
-
-    # async def get_deal_details(
-    #     self,
-    #     deal_ids: List[int],
-    #     read_from_cache: bool = None,
-    #     write_to_cache: bool = None,
-    # ) -> List[Dict]:
-    #     """Get detailed information about multiple deals."""
-    #     return await self._get_details_batch(
-    #         ids=deal_ids,
-    #         endpoint="fundingRound",
-    #         model_class=FundingRounds,
-    #         read_from_cache=read_from_cache,
-    #         write_to_cache=write_to_cache
-    #     )
+        if flatten:
+            flat_data = []
+            for startup in startup_objects:
+                flat_data.append(startup['fullData'])
+            return flat_data
+        return startup_objects
 
     async def get_investor_details(
         self,
         investor_ids: List[int],
         read_from_cache: bool = None,
         write_to_cache: bool = None,
+        flatten: bool = True,
     ) -> List[Dict]:
         """Get detailed information about multiple investors."""
-        return await self._get_details_batch(
+        investor_objects = await self._get_details_batch(
             ids=investor_ids,
             endpoint="getInvestor",
             model_class=Investor,
+            primary_key_field="investorID",
             read_from_cache=read_from_cache,
             write_to_cache=write_to_cache
         )
+        if flatten:
+            flat_data = []
+            for investor in investor_objects:
+                flat_data.append(investor['fullData'])
+            return flat_data
+        return investor_objects
 
     async def get_company_commercial_deals(
         self, company_ids: List[int],
         read_from_cache: bool = None,
         write_to_cache: bool = None,
+        flatten: bool = True,
     ) -> List[Dict]:
         """Get commercial deals for a specific company."""
-        return await self._get_details_batch(
+        deals = await self._get_details_batch(
             ids=company_ids,
             primary_key_field="clientID",
             endpoint="commercial-deals/connected-entities/company",
@@ -643,14 +523,24 @@ class NetZeroAPI:
             read_from_cache=read_from_cache,
             write_to_cache=write_to_cache
         )
+        if flatten:
+            flat_data = []
+            for company_deal_list in deals:
+                for deal in company_deal_list['fullData']:
+                    deal['clientID'] = company_deal_list['clientID']
+                    flat_data.append(deal)
+            return flat_data
+        return deals
 
     async def get_company_funding_rounds(
-        self, company_ids: List[int],
+        self,
+        company_ids: List[int],
         read_from_cache: bool = None,
         write_to_cache: bool = None,
+        flatten: bool = True,
     ) -> List[Dict]:
         """Get funding rounds for a specific company."""
-        return await self._get_details_batch(
+        company_rounds_objects = await self._get_details_batch(
             ids=company_ids,
             primary_key_field="clientID",
             endpoint="fundingRound/prints",
@@ -658,6 +548,14 @@ class NetZeroAPI:
             read_from_cache=read_from_cache,
             write_to_cache=write_to_cache
         )
+        if flatten:
+            flat_data = []
+            for company_rounds in company_rounds_objects:
+                if not company_rounds:
+                    import ipdb; ipdb.set_trace()
+                flat_data.extend(company_rounds['fullData'])
+            return flat_data
+        return company_rounds_objects
 
     def get_taxonomy_children(self, parent_id: int) -> List[Dict]:
         """Get taxonomy for a specific parent ID."""
