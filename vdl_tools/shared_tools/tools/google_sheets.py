@@ -23,7 +23,7 @@ def get_sheets_service(credentials_json=None):
         credentials_json = json.loads(config.get('google_sheets', 'credentials'))
 
     creds = None
-    # token.pickle stores the user's access and refresh tokens. 
+    # token.pickle stores the user's access and refresh tokens.
     # It's automatically created when the authorization flow completes for the first time.
     if os.path.exists('google_sheets_token.pickle'):
         with open('google_sheets_token.pickle', 'rb') as token:
@@ -82,9 +82,9 @@ def get_sheet_values(
         raise ValueError('Cannot provide both range_value and sheet_name')
 
     if sheet_name:
-        range_value = f"'{sheet_name}'!A1:Z"
+        range_value = f"'{sheet_name}'!A1:ZZ1000"
     else:
-        range_value = range_value or 'A1:Z'
+        range_value = range_value or 'A1:ZZ1000'
 
     sheet = service.spreadsheets()
     result = sheet.values().get(spreadsheetId=spreadsheet_id, range=range_value).execute()

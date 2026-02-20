@@ -9,12 +9,16 @@ from .web_scraping import ( #pylint: disable=no-name-in-module
     WebPagesScraped,
     WebPagesParsed
 )
+from .netzero.company_commercial_deal import CompanyCommercialDeal #pylint: disable=no-name-in-module
+from .netzero.company_funding_rounds import CompanyFundingRounds #pylint: disable=no-name-in-module
+from .netzero.investor import Investor #pylint: disable=no-name-in-module
 from .netzero.startup import Startup #pylint: disable=no-name-in-module
-from .netzero.commercial_deal import CompanyCommercialDeal #pylint: disable=no-name-in-module
-from .netzero.funding_rounds import CompanyFundingRounds #pylint: disable=no-name-in-module
 
 __all__ = (
+    "CompanyCommercialDeal",
+    "CompanyFundingRounds",
     "Embedding",
+    "Investor",
     "LinkedInOrganization",
     "LinkedInPerson",
     "LinkedInBaseEmployee",
@@ -22,8 +26,6 @@ __all__ = (
     "Prompt",
     "PromptResponse",
     "Startup",
-    "CompanyCommercialDeal",
-    "CompanyFundingRounds",
     "WebPagesScraped",
     "WebPagesParsed",
 )

@@ -60,7 +60,7 @@ class PromptResponse(BaseMixin):
 
     prompt_id = Column(String, ForeignKey('prompt.id', onupdate="CASCADE", ondelete="CASCADE"), primary_key=True, index=True)
     given_id = Column(String, primary_key=True, index=True)
-    model_name = Column(String, primary_key=True, index=True, nullable=True)
+    model_name = Column(String, primary_key=True, index=True)
     text_id = Column(String, index=True)
     input_text = Column(String, nullable=False)
     response_full = Column(JSONB, nullable=False)
