@@ -2,6 +2,14 @@ from collections import Counter
 import re
 
 
+def camel_to_snake(name):
+    # This pattern matches a lowercase letter or digit followed by an uppercase letter,
+    # and inserts an underscore between them.
+    s1 = re.sub('([a-z0-9])([A-Z])', r'\1_\2', name)
+    # Convert the entire resulting string to lowercase
+    return s1.lower()
+
+
 def clean_scraped_text(
     text: str,
     clean_non_ascii: bool = True,
