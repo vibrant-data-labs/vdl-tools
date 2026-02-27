@@ -83,6 +83,13 @@ def get_website_summaries(
     df[website_column_scrape] = df[website_column_scrape].apply(lambda x: x.rstrip("/") if coerced_bool(x) else x)
     df[canonical_website_column] = df[canonical_website_column].apply(lambda x: x.rstrip("/") if coerced_bool(x) else x)
 
+    df['extracted_website_key'] = df[canonical_website_column].apply(
+        lambda x: extract_website_name(x)
+        if coerced_bool(x) else None
+    )
+    summaries = {extract_website_name(k): v for k, v in summaries.items()}
+    df['Website Summary'] = df['extracted_website_key'].map(summaries, None)
+
     return summaries, df
 
 
