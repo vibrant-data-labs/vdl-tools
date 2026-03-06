@@ -387,21 +387,17 @@ def load_ed_taxonomy(
         taxonomy_path
         ):
 
-    pillar_df = pd.read_excel(taxonomy_path, sheet_name="pillars")
-    sub_df = pd.read_excel(taxonomy_path, sheet_name="subpillars")
-    sols_df = pd.read_excel(taxonomy_path, sheet_name="solutions")
+    pillar_df = pd.read_excel(taxonomy_path, sheet_name="level0")
+    sub_df = pd.read_excel(taxonomy_path, sheet_name="level1")
+    sols_df = pd.read_excel(taxonomy_path, sheet_name="level2")
+    subsols_df = pd.read_excel(taxonomy_path, sheet_name="level3")
 
-    # for pillars, sub, and soln exclude any rows that have Exclude == 1 if Exclude column exists
-    if 'Exclude' in pillar_df.columns:
-        pillar_df = pillar_df[pillar_df['Exclude'] != 1].copy()
-    if 'Exclude' in sub_df.columns:
-        sub_df = sub_df[sub_df['Exclude'] != 1].copy()
-    if 'Exclude' in sols_df.columns:
-        sols_df = sols_df[sols_df['Exclude'] != 1].copy()
+
     taxonomy = [
-        {'level': 0, 'name': 'pillar', 'data': pillar_df, 'textattr': 'Expanded Description'},
-        {'level': 1, 'name': 'sub-pillar', 'data': sub_df, 'textattr': 'Expanded Description'},
-        {'level': 2, 'name': 'Solution', 'data': sols_df, 'textattr': 'Expanded Description'}
+        {'level': 0, 'name': 'level0', 'data': pillar_df, 'textattr': 'expanded_definition'},
+        {'level': 1, 'name': 'level1', 'data': sub_df, 'textattr': 'expanded_definition'},
+        {'level': 2, 'name': 'level2', 'data': sols_df, 'textattr': 'expanded_definition'},
+        {'level': 3, 'name': 'level3', 'data': subsols_df, 'textattr': 'expanded_definition'}
     ]
     return taxonomy
 
@@ -428,7 +424,7 @@ def load_one_earth_taxonomy(
     term_df = pd.concat([energy_term_df, ag_term_df, nature_term_df])
     if add_geo_engineering:
         # add terms for geo-engineering pillar
-        # This doesn't work for the standard 
+        # This doesn't work for the standard
         geo_term_df = pd.read_excel(taxonomy_path, sheet_name="Geo-Engineering").ffill()
         term_df = pd.concat([term_df, geo_term_df])
 
@@ -514,11 +510,11 @@ def add_one_earth_taxonomy(
     max_depth=2,
 ):
     paths = paths or pc.get_paths()
-    taxonomy_path = taxonomy_path or paths["one_earth_taxonomy"]
-    results_path = results_path or paths["one_earth_taxonomy_mapping_results"]
-    distributed_funding_results_path = distributed_funding_results_path or paths["oe_tax_mapping_distributed_funding_results"]
-    levers_path = levers_path or paths["one_earth_levers"]
-    levers_results_path = levers_results_path or paths["one_earth_taxonomy_levers_results"]
+    taxonomy_path = taxonomy_path or paths.get("one_earth_taxonomy", None)
+    results_path = results_path or paths.get("one_earth_taxonomy_mapping_results", None)
+    distributed_funding_results_path = distributed_funding_results_path or paths.get("oe_tax_mapping_distributed_funding_results", None)
+    levers_path = levers_path or paths.get("one_earth_levers", None)
+    levers_results_path = levers_results_path or paths.get("one_earth_taxonomy_levers_results", None)
 
     if filter_fewshot_classification and not run_fewshot_classification:
         raise ValueError("Cannot filter few shot classification if it is not run")
@@ -1013,7 +1009,6 @@ def add_lstudio_taxonomy(
     results_path=None,
     distributed_funding_results_path=None,
     max_depth=1,
-    prompt_str=EDUCATION_PROMPT,
 ):
     paths = paths or pc.get_paths()
     taxonomy_path = taxonomy_path or paths["ed_taxonomy"]
@@ -1047,11 +1042,12 @@ def add_lstudio_taxonomy(
         pct_delta=pct_delta_min,
         run_fewshot_classification=run_fewshot_classification,
         filter_fewshot_classification=filter_fewshot_classification,
-        fewshot_examples=None,
+        fewshot_examples=fse.lstudio_examples,
         use_cached_results=use_cached_results,
         force_parents=force_parents,
         mapping_name=mapping_name,
         max_distr_funding_level=max_depth,
+        prompt_str=EDUCATION_PROMPT,
     )
 
     # reduce the number of columns in the output
@@ -1098,7 +1094,7 @@ def add_mapping_name_suffix_to_taxonomy_results(
     mapping_name : str
         The suffix to append to column names. Should be a descriptive name
         for the specific taxonomy mapping (e.g., 'one_earth_category').
-    
+
     Returns
     -------
     pandas.DataFrame
@@ -1122,7 +1118,7 @@ def add_mapping_name_suffix_to_taxonomy_results(
     ... })
     >>> result = add_mapping_name_suffix_to_taxonomy_results(df, taxonomy, 'climate')
     >>> result.columns.tolist()
-    ['level0_climate', 'level1_climate', 'level2_climate', 'pct_climate', 
+    ['level0_climate', 'level1_climate', 'level2_climate', 'pct_climate',
      'sim_climate', 'climate', 'cat_level_climate']
     """
 
