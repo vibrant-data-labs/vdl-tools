@@ -215,7 +215,7 @@ def __investors_query(investor_temp_data: pd.DataFrame, entity_type):
             return None
 
         return people_query(ids)
-    
+
     companies_ids = list(set(df['permalink'].to_list()))
     if len(companies_ids) == 0:
         return None

@@ -138,7 +138,11 @@ DELETE_TAG_COLUMNS = [
 ]
 
 
-def parse_company_tags(tags_dicts_list, suffix='_tag_nzi'):
+def parse_company_tags(
+    tags_dicts_list,
+    suffix='_tag_nzi',
+    flatten_tags=True,
+):
     parsed_tags = defaultdict(list)
     for tag_dict in tags_dicts_list:
         tag_type = tag_dict['tagType']['tagType']
@@ -151,6 +155,11 @@ def parse_company_tags(tags_dicts_list, suffix='_tag_nzi'):
                 formatted_tag_type = f"{formatted_tag_type}_{suffix}"
         if formatted_tag_type not in DELETE_TAG_COLUMNS:
             parsed_tags[formatted_tag_type].append(label)
+    if flatten_tags:
+        all_tags = []
+        for tag_type, tags in parsed_tags.items():
+            all_tags.extend(tags)
+        return all_tags
     return parsed_tags
 
 
@@ -158,7 +167,8 @@ def add_parsed_tags(companies_df: pd.DataFrame, tag_col='tags', tag_suffix='_tag
     company_tags_list = [
         {
             'clientID': client_id,
-            **parse_company_tags(tags, suffix=tag_suffix)
+            **parse_company_tags(tags, suffix=tag_suffix, flatten_tags=False),
+            'flat_tags_nzi': parse_company_tags(tags, suffix=tag_suffix, flatten_tags=True),
         }
         for client_id, tags in zip(companies_df['clientID'], companies_df[tag_col])
     ]
