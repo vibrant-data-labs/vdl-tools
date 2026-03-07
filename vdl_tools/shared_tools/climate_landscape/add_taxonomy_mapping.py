@@ -387,21 +387,17 @@ def load_ed_taxonomy(
         taxonomy_path
         ):
 
-    pillar_df = pd.read_excel(taxonomy_path, sheet_name="pillars")
-    sub_df = pd.read_excel(taxonomy_path, sheet_name="subpillars")
-    sols_df = pd.read_excel(taxonomy_path, sheet_name="solutions")
+    pillar_df = pd.read_excel(taxonomy_path, sheet_name="level0")
+    sub_df = pd.read_excel(taxonomy_path, sheet_name="level1")
+    sols_df = pd.read_excel(taxonomy_path, sheet_name="level2")
+    subsols_df = pd.read_excel(taxonomy_path, sheet_name="level3")
 
-    # for pillars, sub, and soln exclude any rows that have Exclude == 1 if Exclude column exists
-    if 'Exclude' in pillar_df.columns:
-        pillar_df = pillar_df[pillar_df['Exclude'] != 1].copy()
-    if 'Exclude' in sub_df.columns:
-        sub_df = sub_df[sub_df['Exclude'] != 1].copy()
-    if 'Exclude' in sols_df.columns:
-        sols_df = sols_df[sols_df['Exclude'] != 1].copy()
+
     taxonomy = [
-        {'level': 0, 'name': 'pillar', 'data': pillar_df, 'textattr': 'Expanded Description'},
-        {'level': 1, 'name': 'sub-pillar', 'data': sub_df, 'textattr': 'Expanded Description'},
-        {'level': 2, 'name': 'Solution', 'data': sols_df, 'textattr': 'Expanded Description'}
+        {'level': 0, 'name': 'level0', 'data': pillar_df, 'textattr': 'expanded_definition'},
+        {'level': 1, 'name': 'level1', 'data': sub_df, 'textattr': 'expanded_definition'},
+        {'level': 2, 'name': 'level2', 'data': sols_df, 'textattr': 'expanded_definition'},
+        {'level': 3, 'name': 'level3', 'data': subsols_df, 'textattr': 'expanded_definition'}
     ]
     return taxonomy
 
@@ -1013,7 +1009,6 @@ def add_lstudio_taxonomy(
     results_path=None,
     distributed_funding_results_path=None,
     max_depth=1,
-    prompt_str=EDUCATION_PROMPT,
 ):
     paths = paths or pc.get_paths()
     taxonomy_path = taxonomy_path or paths["ed_taxonomy"]
@@ -1047,11 +1042,12 @@ def add_lstudio_taxonomy(
         pct_delta=pct_delta_min,
         run_fewshot_classification=run_fewshot_classification,
         filter_fewshot_classification=filter_fewshot_classification,
-        fewshot_examples=None,
+        fewshot_examples=fse.lstudio_examples,
         use_cached_results=use_cached_results,
         force_parents=force_parents,
         mapping_name=mapping_name,
         max_distr_funding_level=max_depth,
+        prompt_str=EDUCATION_PROMPT,
     )
 
     # reduce the number of columns in the output

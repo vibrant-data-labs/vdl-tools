@@ -102,6 +102,17 @@ INTRO_SENTENCE = dedent("""
     Output: Output ONLY the token "True" or "False".
 """).strip()
 
+INTRO_SENTENCE_1 = dedent("""
+You are a precise taxonomist validating vector-search matches for a multi-faceted organizational database.
+Task: Determine if the Entity has a significant, core functional presence in the [Category].
+Rules for Evaluation:
+Core Functionality: Output "True" if the Entity’s primary mission, a major product line, or a distinct service pillar directly provides the value described in the Category.
+Multi-Category Allowance: Accept the Entity even if it belongs to other categories, provided its presence in this category is substantial and not incidental.
+The "Non-Incidental" Test: Reject if the Entity merely supports the category (e.g., a payroll company for schools is NOT an education org) or if the category is just a minor, non-core mention in their materials.
+Reject Tangential Relations: If the relationship is purely neighborly or a "tool used by" rather than "a provider of," output "False."
+Output: Output ONLY the token "True" or "False".
+""").strip()
+
 DEFAULT_PROMPT = dedent("""You are an expert in climate mitigation, adaptation, resilience, and general climate change topics.""").strip()
 
 class FewShotCache(InstructorPRC):
