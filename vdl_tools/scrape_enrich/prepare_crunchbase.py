@@ -1,13 +1,12 @@
 from datetime import datetime
 from pathlib import Path
 import pandas as pd
+from pandas.io.xml import Any
 from vdl_tools.shared_tools.tools.logger import logger
 import vdl_tools.scrape_enrich.crunchbase.organizations_api_extended as orgs_api
 import vdl_tools.shared_tools.cb_funding_calculations as fcalc
 import vdl_tools.shared_tools.common_functions as cf  # from common directory: commonly used functions
 import vdl_tools.shared_tools.project_config as pc
-
-paths = pc.get_paths()
 
 
 def __validate_crunchbase_args(
@@ -39,14 +38,37 @@ def __validate_crunchbase_args(
 def query_crunchbase_raw_data(
     company_ids=None,
     search_terms_list=None,
-    organizations_file_path=paths.get('expanded_orgs_data'),
-    funding_rounds_file_path=paths.get('expanded_orgs_funding_rounds'),
-    founders_file_path=paths.get('expanded_orgs_founders'),
-    investor_orgs_file_path=paths.get('expanded_orgs_investor_orgs'),
-    investor_person_file_path=paths.get('expanded_orgs_investor_person'),
-    search_terms_path=paths.get('expanded_search_terms_crunchbase'),
+    organizations_file_path=None,
+    funding_rounds_file_path=None,
+    founders_file_path=None,
+    investor_orgs_file_path=None,
+    investor_person_file_path=None,
+    search_terms_path=None,
 ):
     logger.info('querying for crunchbase for raw data')
+
+    if not all([
+        organizations_file_path,
+        funding_rounds_file_path,
+        founders_file_path,
+        investor_orgs_file_path,
+        investor_person_file_path,
+        search_terms_path,
+    ]):
+        paths = pc.get_paths()
+
+    if not organizations_file_path:
+        organizations_file_path=paths.get('expanded_orgs_data')
+    if not funding_rounds_file_path:
+        funding_rounds_file_path=paths.get('expanded_orgs_funding_rounds')
+    if not founders_file_path:
+        founders_file_path=paths.get('expanded_orgs_founders')
+    if not investor_orgs_file_path:
+        investor_orgs_file_path=paths.get('expanded_orgs_investor_orgs')
+    if not investor_person_file_path:
+        investor_person_file_path=paths.get('expanded_orgs_investor_person')
+    if not search_terms_path:
+        search_terms_path=paths.get('expanded_search_terms_crunchbase')
 
     __validate_crunchbase_args(
         search_terms_list=search_terms_list,
@@ -207,16 +229,37 @@ def add_investors(
     df['Investors Data'] = df['permalink'].apply(lambda p: org_to_investors.get(p, None))
     return df
 
-def has_government_investor(investors_data):
-    if not investors_data:
+
+def get_gov_investor_uuids(investors_df: pd.DataFrame):
+    """
+    Returns a set of UUIDs for investors that are either:
+    1. investor_type = 'government_office' (Agencies, State Banks)
+    2. facet_ids contains 'government_entity' (The Government Itself)
+
+    It will be applied at funding round level and at the company level.
+    """
+    return {
+        uuid
+        for uuid, types, facets in zip(investors_df['uuid'],
+                                       investors_df['investor_type'],
+                                       investors_df['facet_ids'])
+        if (isinstance(types, list) and 'government_office' in types)
+           or (isinstance(facets, list) and 'government_entity' in facets)
+    }
+
+
+def check_investor_overlap(investor_list, gov_uuids):
+    """
+    Checks if any investor in the list has a UUID present in the gov_uuids set.
+    """
+    if not investor_list or not isinstance(investor_list, list):
         return False
-    for investor in investors_data:
-        investor_types = investor['investor_type']
-        if not investor_types:
-            continue
-        if 'government_office' in investor_types:
-            return True
-    return False
+
+    # Extract UUIDs from this row's list
+    current_uuids = {inv.get('uuid') for inv in investor_list if inv.get('uuid')}
+
+    # Check for intersection
+    return bool(current_uuids & gov_uuids)
 
 def flag_gov_funder_to_rounds(
     funding_rounds_df: pd.DataFrame,
@@ -224,25 +267,14 @@ def flag_gov_funder_to_rounds(
 ):
     """ Add a boolean column to funding rounds dataframe indicating if any investor is a government investor """
 
-    # More efficient way to get government investor UUIDs
-    # Use explode() to flatten the lists, then filter, then get unique UUIDs
-    gov_investor_uuids = set(
-        orgs_investors_df.explode('investor_type')
-        .query("investor_type == 'government_office'")
-        ['uuid']
+    # get government investor UUIDs
+    gov_investor_uuids = get_gov_investor_uuids(orgs_investors_df)
+
+    # Apply the global helper using lambda
+    # pass the row value (x) and our pre-calculated set
+    return funding_rounds_df['investor_identifiers'].apply(
+        lambda x: check_investor_overlap(x, gov_investor_uuids)
     )
-
-    # More efficient way to check if any investor is a government investor
-    # Single apply with optimized logic
-    def has_gov_investor(investor_list):
-        if not investor_list or not isinstance(investor_list, list):
-            return False
-        # Use set intersection for O(1) lookup instead of nested loops
-        investor_uuids = {inv.get('uuid') for inv in investor_list if inv.get('uuid')}
-        return bool(investor_uuids & gov_investor_uuids)
-
-    gov_funder = funding_rounds_df['investor_identifiers'].apply(has_gov_investor)
-    return gov_funder
 
 
 def __get_values(data, field_name="value", default_value=None):
@@ -269,14 +301,37 @@ def __add_funding_by_year(funding_rounds_df: pd.DataFrame, orgs_df: pd.DataFrame
 
 def process_crunchbase_raw_data(
     filter_yr=2016,
-    organizations_file_path=paths.get('expanded_orgs_data'),
-    funding_rounds_file_path=paths.get('expanded_orgs_funding_rounds'),
-    founders_file_path=paths.get('expanded_orgs_founders'),
-    investor_orgs_file_path=paths.get('expanded_orgs_investor_orgs'),
-    investor_person_file_path=paths.get('expanded_orgs_investor_person'),
-    clean_file_path=paths.get('cb_companies_cleaned'),
+    organizations_file_path=None,
+    funding_rounds_file_path=None,
+    founders_file_path=None,
+    investor_orgs_file_path=None,
+    investor_person_file_path=None,
+    clean_file_path=None,
     filter_to_companies=True,
 ):
+
+    if not all([
+        organizations_file_path,
+        funding_rounds_file_path,
+        founders_file_path,
+        investor_orgs_file_path,
+        investor_person_file_path,
+        clean_file_path,
+    ]):
+        paths = pc.get_paths()
+    if not organizations_file_path:
+        organizations_file_path=paths.get('expanded_orgs_data')
+    if not funding_rounds_file_path:
+        funding_rounds_file_path=paths.get('expanded_orgs_funding_rounds')
+    if not founders_file_path:
+        founders_file_path=paths.get('expanded_orgs_founders')
+    if not investor_orgs_file_path:
+        investor_orgs_file_path=paths.get('expanded_orgs_investor_orgs')
+    if not investor_person_file_path:
+        investor_person_file_path=paths.get('expanded_orgs_investor_person')
+    if not clean_file_path:
+        clean_file_path=paths.get('cb_companies_cleaned')
+
     logger.info('loading raw crunchbase data')
     df_orgs = pd.read_json(organizations_file_path)
     logger.info('loading orgs')
@@ -316,7 +371,7 @@ def process_crunchbase_raw_data(
         'founded_on',
         'website_url',
         'linkedin',
-        'acquirer_identifier',
+        # 'acquirer_identifier',
         'facet_ids',  # investor vs company
         'ipo_status',  # private vs public
         'num_articles',  # news mentions
@@ -377,11 +432,22 @@ def process_crunchbase_raw_data(
     logger.info('Adding investors to organizations')
     df_cb = add_investors(df_cb, df_investor_orgs, df_investor_person)
     logger.info('Added investors to organizations')
+
+    # 1. Combine ALL investor types (Orgs + People) for the "DNA" check
+    all_investors = pd.concat([df_investor_orgs, df_investor_person], ignore_index=True)
+
+    # 2. Use the Master Function (Single Source of Truth)
+    gov_investor_uuids = get_gov_investor_uuids(all_investors)
+
+    logger.info('Extracted investors')
     df_cb['Investors'] = df_cb['Investors Data'].apply(lambda i: __extract_field(i, 'name'))
-    df_cb['Gov_Funder'] = df_cb['Investors Data'].apply(has_government_investor)
+    # Use the shared helper
+    df_cb['Gov_Funder'] = df_cb['Investors Data'].apply(
+        lambda x: check_investor_overlap(x, gov_investor_uuids)
+    )
+
     df_cb['n_Funders'] = df_cb['Investors Data'].apply(lambda i: len(i) if i is not None else 0)
     df_cb['n_Employees'] = df_cb['num_employees_enum'].apply(convert_employees_enum)
-    logger.info('Extracted investors')
 
     logger.info('Extracting founded on and Year Founded')
     df_cb['founded_on'] = df_cb['founded_on'].apply(__get_values)
@@ -398,7 +464,7 @@ def process_crunchbase_raw_data(
     logger.info('Extracting diversity spotlights')
     df_cb['diversity'] = df_cb['diversity_spotlights'].apply(__get_values)
 
-    df_cb['Acquired by'] = df_cb['acquirer_identifier'].apply(__get_values)
+    # df_cb['Acquired by'] = df_cb['acquirer_identifier'].apply(__get_values)
     df_cb['linkedin'] = df_cb['linkedin'].apply(lambda l: __get_values(l))
 
     logger.info('Extracting location identifiers')
@@ -475,12 +541,25 @@ def __get_org_country_from_fr(entries):
     return None  # Return None if no country entry is found
 
 
-def process_funding_rounds(fr_path=paths['expanded_orgs_funding_rounds'],
-                           investor_orgs_path=paths['expanded_orgs_investor_orgs'],
-                           filter_yr=2010):
-    logger.info('processing funding rounds')
+def load_process_funding_rounds(
+    fr_path,
+    investor_orgs_path,
+    filter_yr=2010,
+):
+    logger.info('loading funding rounds')
     df_fr = pd.read_json(fr_path)
-    logger.info('loaded funding rounds')
+    logger.info('loading investor orgs')
+    orgs_investors_df = pd.read_json(investor_orgs_path)
+    logger.info('processing funding rounds')
+    return process_funding_rounds(df_fr, orgs_investors_df, filter_yr)
+
+
+def process_funding_rounds(
+    df_fr: pd.DataFrame,
+    orgs_investors_df: pd.DataFrame,
+    filter_yr=2010,
+):
+    logger.info('processing funding rounds')
     # get year announced
     df_fr['year_announced'] = df_fr['announced_on'].apply(lambda x: int(x.split("-")[0]))
     # get total raised
@@ -498,28 +577,28 @@ def process_funding_rounds(fr_path=paths['expanded_orgs_funding_rounds'],
     df_fr['diversity'] = df_fr['funded_organization_diversity_spotlights'].apply(lambda x: __get_values(x, 'value', None))
     # add gov funder flag to funding rounds
     logger.info('adding government funder flag for each funding round')
-    orgs_investors_df = pd.read_json(investor_orgs_path)
-
     df_fr['gov_funder'] = flag_gov_funder_to_rounds(
         df_fr,
         orgs_investors_df
     )
 
-    keep_columns = ['org_uuid',
-                    'org_permalink',
-                    'announced_on',
-                    'year_announced',
-                    'raised_usd',
-                    'investment_stage',
-                    'investment_type',
-                    'investor_identifiers',
-                    'gov_funder',
-                    'country',
-                    'diversity',
-                    'funded_organization_description',
-                    'permalink',
-                    'uuid'
-                    ]
+    keep_columns = [
+        'org_uuid',
+        'org_permalink',
+        'announced_on',
+        'year_announced',
+        'raised_usd',
+        'investment_stage',
+        'investment_type',
+        'investor_identifiers',
+        'gov_funder',
+        'country',
+        'diversity',
+        "funded_organization_identifier",
+        'funded_organization_description',
+        'permalink',
+        'uuid'
+    ]
     df_fr = df_fr[keep_columns].copy()
     df_fr.rename(columns={'permalink': 'fr_permalink',
                           'uuid': 'fr_uuid'
@@ -534,15 +613,40 @@ def prepare_raw_crunchbase(
     company_ids=None,
     search_terms_list=None,
     search_terms_path=None,  # paths.get('expanded_search_terms_crunchbase'),
-    organizations_file_path=paths.get('expanded_orgs_data'),
-    funding_rounds_file_path=paths.get('expanded_orgs_funding_rounds'),
-    founders_file_path=paths.get('expanded_orgs_founders'),
-    investor_orgs_file_path=paths.get('expanded_orgs_investor_orgs'),
-    investor_person_file_path=paths.get('expanded_orgs_investor_person'),
-    clean_file_path=paths.get('cb_companies_cleaned'),
+    organizations_file_path=None,
+    funding_rounds_file_path=None,
+    founders_file_path=None,
+    investor_orgs_file_path=None,
+    investor_person_file_path=None,
+    clean_file_path=None,
     filter_yr=2016,
     filter_to_companies=True,
 ):
+    if not all([
+        organizations_file_path,
+        funding_rounds_file_path,
+        founders_file_path,
+        investor_orgs_file_path,
+        investor_person_file_path,
+        search_terms_path,
+        clean_file_path
+    ]):
+        paths = pc.get_paths()
+
+    if not organizations_file_path:
+        organizations_file_path=paths.get('expanded_orgs_data')
+    if not funding_rounds_file_path:
+        funding_rounds_file_path=paths.get('expanded_orgs_funding_rounds')
+    if not founders_file_path:
+        founders_file_path=paths.get('expanded_orgs_founders')
+    if not investor_orgs_file_path:
+        investor_orgs_file_path=paths.get('expanded_orgs_investor_orgs')
+    if not investor_person_file_path:
+        investor_person_file_path=paths.get('expanded_orgs_investor_person')
+    if not search_terms_path:
+        search_terms_path=paths.get('expanded_search_terms_crunchbase')
+    if not clean_file_path:
+        clean_file_path=paths.get('cb_companies_cleaned')
 
     if query_crunchbase and not process_crunchbase:
         raise ValueError("Cannot query Crunchbase without processing the data")

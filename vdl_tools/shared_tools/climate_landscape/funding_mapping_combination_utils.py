@@ -1,15 +1,11 @@
-import os
-import json
+
 import datetime as dt
-from sqlalchemy import text
 import pandas as pd
-from git import Repo
 
 from vdl_tools.shared_tools.tools.falsey_checks import coerced_bool
-# from vdl_tools.scrape_enrich.prepare_crunchbase import has_government_investor
+from vdl_tools.scrape_enrich.prepare_crunchbase import load_process_funding_rounds
 from vdl_tools.shared_tools.cb_funding_calculations import ROUND_TO_STAGE
-from vdl_tools.shared_tools.tools.logger import logger
-from vdl_tools.shared_tools.project_config import get_paths
+
 
 CB_COL_MAP = {
     "uuid": "round_uuid",
@@ -18,6 +14,9 @@ CB_COL_MAP = {
     "vdl_investment_stage": "vdl_stage",
     "money_raised_usd": "funding",
     "investment_type": "investment_type",
+    "country": "country",
+    "diversity": "diversity",
+    "gov_funder": "gov_funder",
 }
 
 CD_COL_MAP = {
@@ -37,15 +36,19 @@ def rename_df_cols(
     prefix,
     exclude_cols=[],
 ):
+    if prefix:
+        pattern = "{prefix}_{col}"
+    else:
+        pattern = "{col}"
     rename_dict = {
-        col: f"{prefix}_{col}".lower().replace(" ", "_") for col in df.columns if col not in exclude_cols
+        col: pattern.format(prefix=prefix, col=col).lower().replace(" ", "_").replace("-", "_") for col in df.columns if col not in exclude_cols
     }
     return df.rename(columns=rename_dict)
 
 
 def combine_funding_data(
     round_df,
-    candid_long_df,
+    candid_long_df=None,
     cb_col_map=CB_COL_MAP,
     cd_col_map=CD_COL_MAP,
     min_year=2010,
@@ -57,15 +60,22 @@ def combine_funding_data(
     cb_rounds = cb_rounds[cb_col_map.values()]
     cb_rounds["data_source"] = "crunchbase"
 
-    cd_funding = candid_long_df.copy()
-    cd_funding = cd_funding.rename(columns=cd_col_map)
-    cd_funding = cd_funding[cd_col_map.values()]
-    cd_funding["data_source"] = "candid"
-    cd_funding["round_uuid"] = cd_funding.apply(
-        lambda x: f"{x['uid']}_{x['year']}", axis=1
-    )
+    if candid_long_df is not None:
+        cd_funding = candid_long_df.copy()
+        cd_funding = cd_funding.rename(columns=cd_col_map)
+        cd_funding = cd_funding[cd_col_map.values()]
+        cd_funding["data_source"] = "candid"
+        cd_funding["round_uuid"] = cd_funding.apply(
+            lambda x: f"{x['uid']}_{x['year']}", axis=1
+        )
 
-    funding_df = pd.concat([cb_rounds, cd_funding], axis=0)
+        cd_funding['country'] = None
+        cd_funding['diversity'] = None
+        cd_funding['gov_funder'] = None
+
+        funding_df = pd.concat([cb_rounds, cd_funding], axis=0)
+    else:
+        funding_df = cb_rounds
     funding_df = funding_df.sort_values("year", ascending=True)
     if min_year:
         funding_df = funding_df[funding_df["year"] >= min_year]
@@ -78,22 +88,32 @@ def combine_funding_data(
     return funding_df
 
 
-def load_cb_round_data(funding_rounds_path):
-    full_round_df = pd.read_json(funding_rounds_path)
+def load_cb_round_data(funding_rounds_path, investor_orgs_path):
+    full_round_df = load_process_funding_rounds(
+        funding_rounds_path,
+        investor_orgs_path
+    )
+
     full_round_df["organization_uuid"] = full_round_df[
         "funded_organization_identifier"
     ].apply(lambda x: x.get("uuid"))
-    full_round_df["money_raised_usd"] = full_round_df["money_raised"].apply(
-        lambda x: x.get("value_usd") if coerced_bool(x) else None
-    )
+    full_round_df["money_raised_usd"] = full_round_df["raised_usd"]
+    full_round_df["uuid"] = full_round_df["fr_uuid"]
     round_df = full_round_df[
         [
             "uuid",
+            "fr_uuid",
             "announced_on",
             "investment_stage",
             "investment_type",
             "organization_uuid",
             "money_raised_usd",
+            "year_announced",
+            "org_permalink",
+            "org_uuid",
+            "country",
+            "diversity",
+            "gov_funder"
         ]
     ]
 
@@ -157,7 +177,9 @@ def reshape_candid_funding(
     candid_funding_long["vdl_stage"] = "Philanthropy"
     candid_funding_long["funding_investment_type"] = "Philanthropy"
 
+    candid_funding_long = candid_funding_long[candid_funding_long['Funding'].apply(lambda x: isinstance(x, float) or isinstance(x, int))]
+    candid_funding_long['Funding'] = candid_funding_long["Funding"].astype(float)
+
     if drop_no_funding:
-        candid_funding_long["Funding"].fillna(0, inplace=True)
         return candid_funding_long[candid_funding_long["Funding"] > 0]
     return candid_funding_long

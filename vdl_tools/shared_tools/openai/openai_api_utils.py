@@ -109,7 +109,8 @@ def _get_completion_kwargs(
         if top_logprobs is not None:
             kwargs["top_logprobs"] = top_logprobs
 
-    if model in ("o3-mini", "gpt-5", "gpt-5-nano", "gpt-5-mini"):
+    # patch up args for reasoning models
+    if model.startswith("o") or model.startswith("gpt-5"):
         max_tokens = kwargs.pop("max_tokens")
         kwargs["max_completion_tokens"] = max_tokens
         kwargs.pop("top_p")

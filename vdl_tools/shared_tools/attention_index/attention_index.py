@@ -36,8 +36,6 @@ class AttentionIndexer:
         taxonomy_mapping_results,
         taxonomy_mapping_id_col,
         meta_df,
-        round_df,
-        candid_funding_long,
         combined_funding_df,
         min_year=2018,
         max_year=2025,
@@ -50,8 +48,6 @@ class AttentionIndexer:
         self._taxonomy = taxonomy
         self._taxonomy_mapping_results = taxonomy_mapping_results
         self._meta_df = meta_df
-        self._round_df = round_df
-        self._candid_funding_long = candid_funding_long
         self._combined_funding_df = combined_funding_df
         self._taxonomy_mapping_id_col = taxonomy_mapping_id_col
 
@@ -85,8 +81,6 @@ class AttentionIndexer:
         self.taxonomy = self._taxonomy.copy()
         self.taxonomy_mapping_results = self._taxonomy_mapping_results.copy()
         self.meta_df = self._meta_df.copy()
-        self.round_df = self._round_df.copy()
-        self.candid_funding_long = self._candid_funding_long.copy()
         self.combined_funding_df = self._combined_funding_df.copy()
 
         self.distributed_funding_df = self.redistribute_funding_fracs()
@@ -216,7 +210,7 @@ class AttentionIndexer:
         self.org_level_aggregation_df = (
             self.filtered_funding_mapped_to_taxonomy_df.groupby(['tax_map_uid'] + taxonomy_level_columns)
             .agg({
-                 # Sum up all the distributed_funding for all the lower levels 
+                 # Sum up all the distributed_funding for all the lower levels
                 "distributed_funding": "sum",
                 # Because we are at the round level this will have been multiplied for each round, so take the mean of it
                 "tax_map_fundingfrac": "mean",
@@ -407,24 +401,57 @@ class AttentionIndexer:
         return attention_index_df[column_order]
 
 
-def load_files(
+def load_one_earth_files(
     taxonomy_path,
     taxonomy_mapping_results_path,
     meta_df_path,
     funding_round_path,
+    investor_orgs_path,
     candid_funding_path,
     add_geo_engineering=False,  # Only works for the re-worked taxonomy for grantham
 ):
+
+    meta_df, round_df, candid_funding_long, combined_funding_df = load_non_taxonomy_files(
+        meta_df_path,
+        funding_round_path,
+        investor_orgs_path,
+        candid_funding_path,
+    )
+
     taxonomy = load_one_earth_taxonomy(
-        taxonomy_path,
-        add_geo_engineering=add_geo_engineering
+        taxonomy_path, add_geo_engineering=add_geo_engineering
     )
     taxonomy_mapping_results = pd.read_json(taxonomy_mapping_results_path)
-    taxonomy_mapping_results = remove_mapping_name_suffix_from_taxonomy_results(taxonomy_mapping_results, "one_earth_category")
+    if add_geo_engineering:
+        category_suffix = "one_earth"
+    else:
+        category_suffix = "one_earth_category"
+    taxonomy_mapping_results = (
+        remove_mapping_name_suffix_from_taxonomy_results(
+            taxonomy_mapping_results, category_suffix
+        )
+    )
+
+    return (
+        taxonomy,
+        taxonomy_mapping_results,
+        meta_df,
+        round_df,
+        candid_funding_long,
+        combined_funding_df,
+    )
+
+
+def load_non_taxonomy_files(
+    meta_df_path,
+    funding_round_path,
+    investor_orgs_path,
+    candid_funding_path,
+):
     meta_df = pd.read_json(meta_df_path)
-    round_df = fmcu.load_cb_round_data(funding_round_path)
+    round_df = fmcu.load_cb_round_data(funding_round_path, investor_orgs_path)
     candid_funding_raw = pd.read_excel(candid_funding_path)
     candid_funding_long = fmcu.reshape_candid_funding(candid_funding_raw, id_col='id')
     combined_funding_df = fmcu.combine_funding_data(round_df, candid_funding_long)
-
-    return taxonomy, taxonomy_mapping_results, meta_df, round_df, candid_funding_long, combined_funding_df
+    return meta_df, round_df, candid_funding_long, combined_funding_df
+    

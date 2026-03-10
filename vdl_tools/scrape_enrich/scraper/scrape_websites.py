@@ -1,37 +1,25 @@
-from concurrent.futures import ThreadPoolExecutor as ThreadPool
+import asyncio
 from concurrent.futures import ProcessPoolExecutor as ProcessPool
-import threading
+
 
 from enum import Enum
 from more_itertools import chunked
 import pandas as pd
 from urllib.parse import urljoin, urlparse
 
-import vdl_tools.scrape_enrich.scraper.direct_loader as dl
-import vdl_tools.scrape_enrich.scraper.page_scraper as ps
 import vdl_tools.scrape_enrich.scraper.website_processor as wp
-from vdl_tools.shared_tools.web_summarization.make_page_text import make_group_text, MIN_TEXT_LENGTH
+from vdl_tools.scrape_enrich.scraper.async_scraper import AsyncScraper
+from vdl_tools.shared_tools.web_summarization.make_page_text import make_group_text
 from vdl_tools.shared_tools.tools.logger import logger
 from vdl_tools.shared_tools.database_cache.database_models.web_scraping import WebPagesScraped, WebPagesParsed
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 from vdl_tools.shared_tools.tools.text_cleaning import clean_scraped_text
 
 
-thread_local = threading.local()
-
-
-def __get_driver():
-    Driver = getattr(thread_local, 'driver', None)
-    if Driver is None:
-        Driver = ps.page_scraper()
-        Driver.set_page_load_timeout(25)
-        setattr(thread_local, 'driver', Driver)
-
-    return Driver
-
 class PageType(Enum):
     INDEX = "index",
     PAGE = "page"
+
 
 MAX_ERRORS = 5
 
@@ -53,8 +41,6 @@ SINGLE_PAGE_WEBSITES = [
 
 BAD_URL_PATH_CHARS = '/?=&#@'
 
-__selenium_instance = None
-
 
 def check_is_single_page_websites(url: str, single_page_websites: list = []):
     return len([x for x in [*SINGLE_PAGE_WEBSITES, *single_page_websites] if x in url.lower()]) > 0
@@ -70,7 +56,7 @@ def __clean_website_path(value: str) -> str:
     /page?page_title=about-us -> page_page_title_about-us
     '''
     if 'www' in value:
-        logger.warn("Invalid value because path contains 'www': {value}")
+        logger.warning(f"Invalid value because path contains 'www': {value}")
         return None
     try:
         path = value.split(
@@ -82,7 +68,7 @@ def __clean_website_path(value: str) -> str:
 
         return path
     except Exception as ex:
-        logger.warn(f'Error cleaning website path: {value}')
+        logger.warning(f'Error cleaning website path: {value}')
         return None
 
 
@@ -110,6 +96,19 @@ def extract_website_name(value: str) -> str:
         return None
 
 
+def ensure_url_scheme(url: str) -> str:
+    """Ensure URL has a scheme (https:// by default).
+
+    This is necessary for urljoin to work correctly when constructing
+    internal page URLs from relative paths.
+    """
+    if not url:
+        return url
+    if not url.startswith(('http://', 'https://')):
+        return f'https://{url}'
+    return url
+
+
 def process_website_text(url, data, add_section_links=False):
     return wp.get_page_text(url, data, add_section_links=add_section_links)
 
@@ -122,53 +121,50 @@ def get_netloc(url):
         netloc = netloc.replace('www.', '')
     return netloc
 
-
-def load_website(url, scraper, filter_no_body=True, verify_ssl=True):
-    data, status_code = dl.load_website_psql(
-        url,
-        filter_no_body=filter_no_body,
-        verify_ssl=verify_ssl,
-    )
-
-    if data:
-        return scraper, data, status_code
-
-    data = ps.scrape_website(url, scraper)
-    if data:
-        status_code = 200
-
-    return scraper, data, status_code
-
-
-def get_page_data(
-    url: str,
+def process_scraped_content(
+    scraped_result: dict,
     cache_id: str,
     data_type: PageType = PageType.INDEX,
     clean_path: str = None,
     root_path: str = None,
-    subpage_type: str = 'all',
     single_page_websites: list = [],
     clean_text=True,
-    max_per_subpath: int = 6,
-    scraper=None,
     return_raw_html: bool = False,
     filter_no_body: bool=True,
     add_section_links=False,
-    verify_ssl: bool = True,
 ):
+    """
+    Process raw scraped content into structured data format.
+    Replaces get_page_data/load_website synchronous logic.
+    """
     res = []
+    url = scraped_result['url']
+    web_content = scraped_result['content']
+    status_code = scraped_result.get('status_code', 0)
+
     root_url = url if not root_path else root_path
     subpath = '/' if data_type == PageType.INDEX else clean_path
 
-    scraper, web_content, status_code = load_website(
-        url,
-        scraper=scraper,
-        filter_no_body=filter_no_body,
-        verify_ssl=verify_ssl,
-    )
+    logger.info("Processing page data for %s", url)
 
-    logger.info("Getting page data for %s", url)
     if web_content:
+        # Check for empty body if required
+        if filter_no_body and len(web_content.strip()) < 50:  # Simple check, refine if needed
+             logger.warning('Received empty page content for %s', url)
+             # Mark as error if body is effectively empty
+             res.append({
+                "cleaned_key": cache_id,
+                "full_path": url,
+                "home_url": root_url,
+                "subpath": subpath,
+                "raw_html": "",
+                "parsed_html": "",
+                "response_status_code": status_code,
+                "num_errors": 1,
+                "page_type": str(data_type)
+            })
+             return res
+
         website_text = process_website_text(
             url,
             web_content,
@@ -188,21 +184,11 @@ def get_page_data(
 
         is_single_page = check_is_single_page_websites(url, single_page_websites)
 
-        if data_type == PageType.INDEX and not is_single_page:
-            res.extend(process_internal_pages(
-                url,
-                web_content,
-                subpage_type,
-                max_per_subpath,
-                scraper=scraper,
-                return_raw_html=return_raw_html,
-                filter_no_body=filter_no_body,
-                add_section_links=add_section_links,
-            ))
-        elif is_single_page:
-            logger.debug(f'{url} is marked as single page website, proceeding without scraping the internal pages')
+        if is_single_page:
+            logger.debug(f'{url} is marked as single page website, skipping internal pages')
+
     else:
-        logger.warn(f"Failed to receive data for {url}, marking it as error")
+        logger.warning(f"Failed to receive data for {url}, marking it as error")
         res.append({
             "cleaned_key": cache_id,
             "full_path": url,
@@ -223,41 +209,6 @@ def get_page_data(
             if isinstance(row['raw_html'], bytes):
                 row['raw_html'] = "PDF file"
             row['raw_html'] = row['raw_html'].replace("\x00", "\uFFFD")
-
-    return res
-
-
-def process_internal_pages(
-    url: str,
-    website_content: str,
-    subpage_type:str,
-    max_per_subpath:int = 6,
-    scraper=None,
-    return_raw_html: bool = False,
-    filter_no_body: bool=True,
-    add_section_links=False,
-):
-    links = wp.extract_website_links(url, website_content, subpage_type, max_per_subpath)
-    res = []
-    for link in links:
-        website_id = extract_website_name(url)
-        logger.debug(f'({website_id}) Processing {link}')
-        clean_path = __clean_website_path(link)
-        if not clean_path:
-            continue
-        full_path = f'{website_id}/{clean_path}'
-        page_data = get_page_data(
-            url=urljoin(url, link),
-            cache_id=full_path,
-            data_type=PageType.PAGE,
-            clean_path=link,
-            root_path=url,
-            scraper=scraper,
-            return_raw_html=return_raw_html,
-            filter_no_body=filter_no_body,
-            add_section_links=add_section_links,
-        )
-        res.extend(page_data)
 
     return res
 
@@ -285,38 +236,17 @@ def scrape_websites_psql(
     single_page_websites: list = [],
     n_per_commit: int = 10,
     max_errors: int = MAX_ERRORS,
-    max_workers: int = 5,
+    max_workers: int = 5,  # Default workers - can be adjusted based on system resources
     return_raw_html: bool = False,
     filter_no_body: bool = True,
     add_section_links: bool = False,
     summary_prompt: str = None,
     return_combined_res: bool = True,
     verify_ssl: bool = True,
+    max_per_subpath: int = 6,
 ) -> pd.DataFrame:
-    def __get_page_data_parallel(
-        url_website_id,
-    ):
-        url, website_id = url_website_id
-        scraper = __get_driver()
-        try:
-            response = get_page_data(
-                url,
-                website_id,
-                data_type=PageType.INDEX,
-                subpage_type=subpage_type,
-                single_page_websites=single_page_websites,
-                scraper=scraper,
-                return_raw_html=return_raw_html,
-                filter_no_body=filter_no_body,
-                add_section_links=add_section_links,
-                verify_ssl=verify_ssl,
-            )
-            return response
-        except Exception as ex:
-            logger.warning(f'Error processing website: {url} {ex}')
-            return []
 
-    urls_ids = [(url, extract_website_name(url)) for url in urls]
+    urls_ids = [(ensure_url_scheme(url), extract_website_name(url)) for url in urls]
 
     with get_session(session=session) as session:
 
@@ -395,36 +325,125 @@ def scrape_websites_psql(
 
         # URLs that need scraping (not in WebPagesScraped or have errors)
         urls_to_scrape = [
-            x for x in urls_to_process 
-            if x[1] not in existing_scraped_keys or 
+            x for x in urls_to_process
+            if x[1] not in existing_scraped_keys or
             1 <= existing_scraped_keys[x[1]] < max_errors
         ]
 
         # Step 3: Scrape URLs that don't exist in WebPagesScraped
         newly_scraped_data = []
-        if urls_to_scrape:
-            logger.info(f"Scraping {len(urls_to_scrape)} websites...")
-            # Scraping logic here (similar to current implementation)
-            # Store results in newly_scraped_data
 
-            logger.info("Starting to scrape %s websites...", len(urls_to_scrape))
-            scrapping_chunks = list(chunked(urls_to_scrape, n_per_commit))
-            with ThreadPool(max_workers=max_workers) as executor:
-                for i, chunk in enumerate(scrapping_chunks):
-                    try:
-                        logger.info(f"Scraping chunk {i+1} / {len(scrapping_chunks)}")
-                        results = list(executor.map(__get_page_data_parallel, chunk))
-                        flat_results = [page for pagelist in results if pagelist  for page in pagelist]
-                        for row in flat_results:
+        async def process_scraping_job(chunks, existing_scraped_keys):
+            """Process scraping jobs asynchronously with proper error handling."""
+            # Configure Async Scraper Limits
+            max_http = min(20, max_workers * 4)
+            max_browser = min(3, max_workers)
+
+            async with AsyncScraper(max_http, max_browser, verify_ssl=verify_ssl) as scraper:
+                for i, chunk in enumerate(chunks):
+                    logger.info(f"Scraping chunk {i+1} / {len(chunks)}")
+                    chunk_urls = [x[0] for x in chunk]
+
+                    # Scrape main pages with error handling
+                    tasks = [scraper.scrape_url(url) for url in chunk_urls]
+                    scrape_results = await asyncio.gather(*tasks)
+
+                    # Process main pages
+                    internal_links_to_scrape = []
+                    for res, (original_url, website_id) in zip(scrape_results, chunk):
+
+                        # Process the main index page
+                        processed_pages = process_scraped_content(
+                            res,
+                            cache_id=website_id,
+                            data_type=PageType.INDEX,
+                            clean_path=None,
+                            root_path=original_url,
+                            single_page_websites=single_page_websites,
+                            return_raw_html=return_raw_html,
+                            filter_no_body=filter_no_body,
+                            add_section_links=add_section_links
+                        )
+                        # Store main page
+                        for row in processed_pages:
                             if row['num_errors']:
                                 row['num_errors'] += existing_scraped_keys.get(row['cleaned_key'], 0)
                             webpage_obj = WebPagesScraped(**row)
                             session.merge(webpage_obj)
                             newly_scraped_data.append(webpage_obj.to_dict())
-                        session.commit()
-                    except KeyboardInterrupt:
-                        logger.warning("Received KeyboardInterrupt, returning the currently scraped data...")
-                        break
+
+                        # Check for internal pages to scrape (if not single page app)
+                        is_single_page = check_is_single_page_websites(original_url, single_page_websites)
+                        if res.get('success') and not is_single_page and res.get('content'):
+                            # Extract links synchronously here (fast operation on local HTML)
+                            links = wp.extract_website_links(original_url, res['content'], subpage_type, max_per_subpath=max_per_subpath)
+                            if links:
+                                for link in links:
+                                    clean_path = __clean_website_path(link)
+                                    if not clean_path:
+                                        continue
+                                    full_path = f'{website_id}/{clean_path}'
+                                    full_url = urljoin(original_url, link)
+                                    internal_links_to_scrape.append((full_url, full_path, original_url, link))
+
+                    # Scrape internal pages
+                    if internal_links_to_scrape:
+                        logger.info(f"Scraping {len(internal_links_to_scrape)} internal pages for chunk {i+1}")
+                        internal_urls = [x[0] for x in internal_links_to_scrape]
+
+                        internal_tasks = [scraper.scrape_url(url) for url in internal_urls]
+                        internal_results = await asyncio.gather(*internal_tasks)
+
+                        for int_res, (full_url, full_path, root_url, clean_path) in zip(internal_results, internal_links_to_scrape):
+
+                            processed_internal = process_scraped_content(
+                                int_res,
+                                cache_id=full_path,
+                                data_type=PageType.PAGE,
+                                clean_path=clean_path,
+                                root_path=root_url,
+                                return_raw_html=return_raw_html,
+                                filter_no_body=filter_no_body,
+                                add_section_links=add_section_links
+                            )
+                            for row in processed_internal:
+                                if row['num_errors']:
+                                    row['num_errors'] += existing_scraped_keys.get(row['cleaned_key'], 0)
+                                webpage_obj = WebPagesScraped(**row)
+                                session.merge(webpage_obj)
+                                newly_scraped_data.append(webpage_obj.to_dict())
+
+                    session.commit()
+
+        if urls_to_scrape:
+            logger.info(f"Scraping {len(urls_to_scrape)} websites...")
+
+            # Batch URLs for async scraping
+            # We do it in chunks to avoid overwhelming everything at once and allow partial commits
+            scrapping_chunks = list(chunked(urls_to_scrape, n_per_commit))
+
+            interrupted = False
+            try:
+                asyncio.run(process_scraping_job(scrapping_chunks, existing_scraped_keys))
+            except KeyboardInterrupt:
+                logger.warning("Received KeyboardInterrupt, returning the currently scraped data...")
+                interrupted = True
+                # Commit any pending data before returning
+                try:
+                    session.commit()
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.error(f"Error during scraping: {e}")
+                # Try to commit any successful scrapes before re-raising
+                try:
+                    session.commit()
+                except Exception:
+                    pass
+                raise
+
+            if interrupted:
+                logger.info(f"Returning {len(newly_scraped_data)} scraped pages after interruption")
 
         # Combine existing and newly scraped data
         all_scraped_data = existing_scraped_data + newly_scraped_data
@@ -459,6 +478,8 @@ def scrape_websites_psql(
                 )
 
         prompt_str_for_counting = summary_prompt or "test prompt " * 100
+
+        # Use ProcessPool for CPU-intensive text combination
         with ProcessPool(max_workers=max_workers) as executor:
             for i, chunk in enumerate(unfound_chunks):
                 logger.info(f"Processing chunk {i+1}/{len(unfound_chunks)}")
@@ -552,10 +573,3 @@ if __name__ == '__main__':
         return_combined_res=True,
         single_page_websites=['https://elementalimpact.com/funding-opportunities/commercial-projects/']
     )
-    # res = scrape_websites_psql(
-    #     urls,
-    #     add_section_links=True,
-    #     skip_existing=True,
-    #     subpage_type='about',
-    #     return_combined_res=False,
-    # )

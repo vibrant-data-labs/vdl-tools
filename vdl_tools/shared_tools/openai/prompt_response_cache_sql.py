@@ -348,6 +348,7 @@ class PromptResponseCacheSQL():
         else:
             given_ids_texts = given_ids_texts
 
+        requested_given_ids = {given_id for given_id, _ in given_ids_texts}
         if use_cached_result:
             found_rows, unfound_ids_errors = self.get_prompt_response_obj_bulk(
                 given_ids_texts,
@@ -395,7 +396,11 @@ class PromptResponseCacheSQL():
             )
             return data.to_dict()
 
+        if len(unfound_rows) == 0:
+            res = {x: res[x] for x in requested_given_ids if x in res}
+            return res
         n_run = 0
+
         with ThreadPool(max_workers=max_workers) as executor:
             for chunk in chunked(unfound_rows, n_per_commit):
                 given_ids, _ = zip(*chunk)
@@ -411,10 +416,15 @@ class PromptResponseCacheSQL():
                     logger.warning("Received KeyboardInterrupt, returning the currently scraped data...")
                     break
 
-                if len(res) % 500 == 0:
-                    logger.info("Completed %s of %s", len(res), len_unfound)
+                if n_run % (10 * n_per_commit) == 0:
+                    logger.info(
+                        "Completed %s of %s (%s / %s total completed)",
+                        n_run,
+                        len_unfound,
+                        len(res),
+                        len(requested_given_ids),
+                    )
 
-        requested_given_ids = {given_id for given_id, _ in given_ids_texts}
         # filter res to only the requested given_ids
         res = {x: res[x] for x in requested_given_ids if x in res}
         return res

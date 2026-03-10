@@ -204,7 +204,7 @@ def layout_single_cluster(g, pos, scale, center, jitter_frac=0.03):
 #                                       center=center)
     if jitter_frac > 0:
         pts = np.array(list(new_pos.values()))
-        rng = pts.ptp(axis=0)
+        rng = np.ptp(pts, axis=0)
         jitter = np.random.uniform(low=-1, high=1, size=pts.shape) * rng * jitter_frac
         new_pts = pts + jitter
         new_pos = {node: new_pts[idx] for idx, node in enumerate(new_pos.keys())}
@@ -268,8 +268,8 @@ def run_cluster_layout(nw, nodes_df, dists=None, maxdist=5, cluster_attr='Cluste
             scale = np.sqrt(len(subg) * clus_scale[clus])
             new_pos = layout_single_cluster(subg, pos, scale, center)
             new_positions.update(new_pos)
-    new_positions = compress_groups(nodes_df, new_positions, cluster_attr,
-                                    overlap_frac, max_expansion, scale_factor)
+    #new_positions = compress_groups(nodes_df, new_positions, cluster_attr,
+                                   # overlap_frac, max_expansion, scale_factor)
     layout = [list(new_positions[idx]) for idx in layout_dict.keys()]
     return new_positions, layout
 

@@ -15,6 +15,7 @@ from vdl_tools.shared_tools.web_summarization.website_summarization_cache_psql i
     WebsiteSummarizationCache,
     GENERIC_ORG_WEBSITE_PROMPT_TEXT,
 )
+from vdl_tools.shared_tools.openai.prompt_response_cache_sql import DEFAULT_MODEL
 
 
 def summarize_scraped_df(
@@ -25,6 +26,7 @@ def summarize_scraped_df(
     n_per_commit: int = 50,
     max_workers: int = 5,
     max_errors: int = 1,
+    model=DEFAULT_MODEL
 ) -> dict:
     """Runs website summarization on a dataframe that went through VDL's website_scraping code.
 
@@ -65,13 +67,16 @@ def summarize_scraped_df(
 
     logger.info(f"Summarizing {len(given_ids_texts)} websites")
     with get_session() as session:
-        cache = WebsiteSummarizationCache(session=session, prompt_str=prompt_str)
+        cache = WebsiteSummarizationCache(session=session,
+                                          prompt_str=prompt_str,
+                                          model=model)
         summaries = cache.bulk_get_cache_or_run(
             given_ids_texts,
             use_cached_result=skip_existing,
             n_per_commit=n_per_commit,
             max_workers=max_workers,
             max_errors=max_errors,
+            
         )
 
     summaries = {k.rstrip("/"): v['response_text'] for k, v in summaries.items()}

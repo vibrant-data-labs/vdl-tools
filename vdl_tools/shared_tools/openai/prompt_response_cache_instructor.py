@@ -54,6 +54,7 @@ class InstructorPRC(PromptResponseCacheSQL):
     ):
         function_kwargs = dict(
             response_model=self.response_model,
+            model=self.model,
             max_tokens=max_tokens,
             max_retries=1,
             messages=[
@@ -72,7 +73,7 @@ class InstructorPRC(PromptResponseCacheSQL):
                 }
             ],
         )
-        if self.model == "o3-mini":
+        if self.model == "o3-mini" or self.model.startswith("gpt-5"):
             max_tokens = function_kwargs.pop("max_tokens")
             function_kwargs["max_completion_tokens"] = max_tokens
 

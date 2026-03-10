@@ -13,6 +13,8 @@ class Sorting(BaseModel):
 
 class StartupFilter(BaseModel):
     """Filter criteria for startups."""
+    ids: Optional[List[int]] = None
+    name: Optional[str] = None
     searchableLocations: Optional[List[int]] = None
     stages: Optional[List[int]] = None
     fundings: Optional[List[int]] = None
@@ -53,6 +55,7 @@ class StartupFilter(BaseModel):
     applicationDateTo: Optional[str] = None
     grantedDateFrom: Optional[str] = None
     grantedDateTo: Optional[str] = None
+    commercialAgreementCountFrom: Optional[int] = None
 
 
 class DealFilter(BaseModel):

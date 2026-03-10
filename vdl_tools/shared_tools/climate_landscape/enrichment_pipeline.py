@@ -1,5 +1,8 @@
+import os
 import numpy as np
 import pandas as pd
+
+import socket; socket.setdefaulttimeout(30)
 
 # from common: commonly used functions
 from vdl_tools.linkedin import org_loader as li
@@ -37,6 +40,7 @@ GLOBAL_CONFIG = get_configuration()
 
 
 MAX_WORKERS = 10
+MAX_SCRAPE_WEBSITES_WORKERS = int(os.environ.get("MAX_SCRAPE_WEBSITES_WORKERS", 5))
 MIN_DESCRIPTION_LENGTH = 100
 TEXT_FIELDS = ["Description", "Description_990", "Website Summary", "About LinkedIn"]
 
@@ -51,6 +55,7 @@ def get_website_summaries(
     use_combined=True,
     max_workers=MAX_WORKERS,
     max_errors=1,
+    max_scrape_websites_workers=MAX_SCRAPE_WEBSITES_WORKERS,
 ):
     df_web, df = get_scraped_df(
         df,
@@ -60,7 +65,7 @@ def get_website_summaries(
         skip_existing=skip_existing,
         summary_prompt=summary_prompt,
         return_combined_res=use_combined,
-        max_workers=max_workers,
+        max_workers=max_scrape_websites_workers,
         max_errors=max_errors,
     )
 
@@ -77,6 +82,13 @@ def get_website_summaries(
     summaries = {k.rstrip("/"): v for k, v in summaries.items() if v}
     df[website_column_scrape] = df[website_column_scrape].apply(lambda x: x.rstrip("/") if coerced_bool(x) else x)
     df[canonical_website_column] = df[canonical_website_column].apply(lambda x: x.rstrip("/") if coerced_bool(x) else x)
+
+    df['extracted_website_key'] = df[canonical_website_column].apply(
+        lambda x: extract_website_name(x)
+        if coerced_bool(x) else None
+    )
+    summaries = {extract_website_name(k): v for k, v in summaries.items()}
+    df['Website Summary'] = df['extracted_website_key'].map(summaries, None)
 
     return summaries, df
 
@@ -207,28 +219,31 @@ def get_scraped_df(
     return df_web_success, df
 
 
-def _missing_description_mask(df, min_description_length=MIN_DESCRIPTION_LENGTH):
+def _missing_description_mask(df, min_description_length=MIN_DESCRIPTION_LENGTH, description_col='Description'):
     """returns a filtering mask when the description is missing or too short"""
     return (
-        (df['Description'].isnull()) |
-        (df['Description'].str.len() < min_description_length)
+            (df[description_col].isnull()) |
+            (df[description_col].str.len() < min_description_length)
     )
 
 
-def prepare_for_relevance_model(df, max_workers=MAX_WORKERS):
+def prepare_for_relevance_model(df, max_workers=MAX_WORKERS, description_col='Description'):
     """The relevance models require descriptive text.
     CB and Candid descriptions have shown to be enough text for the models to work.
     However, sometimes we are missing the descriptions from the original source.
 
     In this case, we will use summaries from their scraped websites.
-    
+
     If the website urls are are missing, we will scrape LinkedIn for their website urls and descriptions.
     Then we
     """
     # Determine which organizations have missing descriptions or their descriptions are too short
+    # Note: Assuming _missing_description_mask handles the column selection or defaults to 'Description' internally.
+    # If it is hardcoded to 'Description', you might want to update it to use description_col as well.
     missing_descriptions_mask = _missing_description_mask(
         df,
         min_description_length=MIN_DESCRIPTION_LENGTH,
+        description_col=description_col
     )
 
     # Scrape websites for those missing descriptions
@@ -245,7 +260,9 @@ def prepare_for_relevance_model(df, max_workers=MAX_WORKERS):
         summaries_for_missing_desc = {}
         df_missing_descriptions = pd.DataFrame()
 
-    df['text_for_relevance_model'] = df['Description']
+    # UPDATED: Uses the custom column if provided, defaults to 'Description'
+    df['text_for_relevance_model'] = df[description_col]
+
     df['Website'] = None
 
     # df_missing_descriptions will have a Website either from Website_cb_cd or LinkedIn
@@ -269,6 +286,7 @@ def run_relevance_model(
     use_cached_results=True,
     system_prompt=None,
     prompt_format=None,
+    prompt_name="climate_relevance_classification",
 ):
     model_name_safe = model_name.replace("-", "_").replace(":", "_")
 
@@ -284,6 +302,7 @@ def run_relevance_model(
         system_prompt=system_prompt,
         prompt_format=prompt_format,
         label_override_filepath=label_override_filepath,
+        prompt_name=prompt_name,
     )
 
     df_with_predictions.rename(columns={"prediction": "prediction_relevant", "probability": "probability_relevant"}, inplace=True)
