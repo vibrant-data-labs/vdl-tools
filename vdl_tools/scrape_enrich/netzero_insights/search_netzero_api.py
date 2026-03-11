@@ -214,6 +214,7 @@ def get_full_details_from_company_ids(
     read_from_cache: bool = True,
     write_to_cache: bool = True,
     netzero_api: NetZeroAPI = None,
+    save_path: str = None,
 ):
     netzero_api = netzero_api or get_netzero_api(
         use_sandbox=use_sandbox,
@@ -270,6 +271,8 @@ def get_full_details_from_company_ids(
         )
         return_data["commercial_deals"] = pd.DataFrame(commercial_deals)
 
+    if save_path:
+        json.dump(return_data, open(save_path, "w"))
     return return_data
 
 
