@@ -276,7 +276,8 @@ def get_full_details_from_company_ids(
 
     if save_path:
         logger.info(f"Saving data to {save_path}")
-        json.dump(return_data, open(save_path, "w"))
+        safe_return_data = {key: value.to_dict(orient="records") for key, value in return_data.items()}
+        json.dump(safe_return_data, open(save_path, "w"))
     return return_data
 
 
