@@ -15,6 +15,7 @@ def get_or_compute_embeddings(
     text_col,
     used_cached_result=True,
     max_workers=3,
+    n_per_commit=1500,
     embedding_provider="openai",
     embedding_model="text-embedding-3-large"
 ):
@@ -22,6 +23,7 @@ def get_or_compute_embeddings(
     embeddings = embed_texts_with_cache(
         ids_texts=ids_text,
         use_cached_result=used_cached_result,
+        n_per_commit=n_per_commit,
         return_flat=True,
         max_workers=max_workers,
         embedding_provider=embedding_provider,
@@ -482,7 +484,7 @@ def redistribute_funding_fracs(
                 _total_df = total_l1_df
         else:
             _total_df = df
-        
+
     # for each uid, group togather fractions with same soln level
     total_grps = _total_df.groupby([id_attr, 'cat_level'] + levels)
     parts = [total_grps[frac_attr].sum()]

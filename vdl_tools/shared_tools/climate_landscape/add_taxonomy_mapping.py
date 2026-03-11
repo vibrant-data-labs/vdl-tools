@@ -507,6 +507,7 @@ def add_one_earth_taxonomy(
     levers_path=None,
     levers_results_path=None,
     max_depth=2,
+    n_embeddings_per_commit=1500,
 ):
     paths = paths or pc.get_paths()
     taxonomy_path = taxonomy_path or paths.get("one_earth_taxonomy", None)
@@ -522,7 +523,8 @@ def add_one_earth_taxonomy(
         org_df=df,
         id_col=id_col,
         text_col=text_col,
-        max_workers=max_workers
+        max_workers=max_workers,
+        n_per_commit=n_embeddings_per_commit,
     )
 
     taxonomy = load_one_earth_taxonomy(
