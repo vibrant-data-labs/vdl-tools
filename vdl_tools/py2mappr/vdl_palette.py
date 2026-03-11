@@ -53,6 +53,14 @@ one_earth_colors_darker_BGR = [ # Nature, Energy, Ag
     {"col": "#FF805F"},  # Energy - Red
     {"col": "#a7a7a8"},  # Other - grey
 ]
+
+one_earth_colors_darker_RGB = [ # Nature, Energy, Ag
+    {"col": "#FF805F"},  # Energy - Red
+    {"col": "#7CBEA2"},  # Agriculture - Green
+    {"col": "#62ACFF"},  # Nature - Blue
+    {"col": "#a7a7a8"},  # Other - Grey
+]
+
 grey_palette = [{"col": "#BDBFC1"},  # grey
                 ]
 
