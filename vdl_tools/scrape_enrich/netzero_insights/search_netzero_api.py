@@ -1,5 +1,8 @@
+import json
+
 import asyncio
 import pandas as pd
+
 from vdl_tools.shared_tools.tools.config_utils import get_configuration
 from vdl_tools.scrape_enrich.netzero_insights.netzero_api import NetZeroAPI
 from vdl_tools.scrape_enrich.netzero_insights.filters import MainFilter, StartupFilter, InvestorFilter
