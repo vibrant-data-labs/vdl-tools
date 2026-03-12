@@ -1,0 +1,1900 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Climate Finance Tracker — Data Pipeline</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300..700;1,9..40,300..700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --green-deep: #0b3d2e;
+      --green-primary: #0f4c3a;
+      --green-mid: #1a7a5c;
+      --green-light: #28a678;
+      --green-pale: #e3f1ea;
+      --green-faint: #f0f7f4;
+      --amber: #c08b2d;
+      --amber-light: #f5e8cc;
+      --amber-dark: #8a6420;
+      --bg: #f5f2ec;
+      --bg-warm: #faf8f4;
+      --card: #ffffff;
+      --border: #e0dbd3;
+      --border-light: #ece8e1;
+      --text: #1a1a1a;
+      --text-mid: #4a4540;
+      --text-light: #7a7570;
+      --text-lighter: #a09a92;
+      --shadow-sm: 0 1px 3px rgba(15,76,58,0.06);
+      --shadow-md: 0 4px 16px rgba(15,76,58,0.08);
+      --shadow-lg: 0 8px 32px rgba(15,76,58,0.10);
+      --radius: 12px;
+      --radius-sm: 8px;
+      --transition: 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; font-size: 16px; }
+
+    body {
+      font-family: 'DM Sans', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* === HERO === */
+    .hero {
+      position: relative;
+      padding: 80px 40px 60px;
+      background: linear-gradient(170deg, var(--green-deep) 0%, var(--green-primary) 40%, #145a42 100%);
+      overflow: hidden;
+      min-height: 520px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .hero::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 600px 400px at 15% 20%, rgba(40,166,120,0.15) 0%, transparent 70%),
+        radial-gradient(ellipse 500px 500px at 85% 70%, rgba(192,139,45,0.08) 0%, transparent 60%);
+      pointer-events: none;
+    }
+
+    .hero::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M30 0c1 10 5 20 15 30-10 1-20 5-30 15C14 35 10 25 0 15 10 14 20 10 30 0z' fill='none' stroke='rgba(255,255,255,0.03)' stroke-width='0.5'/%3E%3C/svg%3E");
+      pointer-events: none;
+    }
+
+    .hero-inner {
+      position: relative;
+      max-width: 900px;
+      text-align: center;
+      z-index: 1;
+    }
+
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 16px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 100px;
+      color: rgba(255,255,255,0.7);
+      font-size: 0.8rem;
+      font-weight: 500;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      margin-bottom: 28px;
+      backdrop-filter: blur(8px);
+    }
+
+    .hero-badge .dot {
+      width: 6px; height: 6px;
+      background: var(--green-light);
+      border-radius: 50%;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 0.6; transform: scale(1); }
+      50% { opacity: 1; transform: scale(1.3); }
+    }
+
+    .hero h1 {
+      font-family: 'Instrument Serif', Georgia, serif;
+      font-size: clamp(2.8rem, 5.5vw, 4.2rem);
+      font-weight: 400;
+      color: #fff;
+      line-height: 1.1;
+      margin-bottom: 16px;
+      letter-spacing: -0.02em;
+    }
+
+    .hero h1 em {
+      font-style: italic;
+      color: var(--green-light);
+    }
+
+    .hero-subtitle {
+      font-size: 1.15rem;
+      color: rgba(255,255,255,0.6);
+      max-width: 600px;
+      margin: 0 auto 48px;
+      line-height: 1.7;
+    }
+
+    .stats-row {
+      display: flex;
+      justify-content: center;
+      gap: 48px;
+      flex-wrap: wrap;
+    }
+
+    .stat-item {
+      text-align: center;
+    }
+
+    .stat-value {
+      font-family: 'Instrument Serif', Georgia, serif;
+      font-size: 2.4rem;
+      color: #fff;
+      line-height: 1.1;
+    }
+
+    .stat-value .unit {
+      font-size: 0.5em;
+      color: var(--green-light);
+      vertical-align: super;
+    }
+
+    .stat-label {
+      font-size: 0.75rem;
+      color: rgba(255,255,255,0.45);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-top: 4px;
+    }
+
+    /* === PIPELINE NAV === */
+    .pipeline-nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(255,255,255,0.92);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border-light);
+      padding: 0 24px;
+      transition: box-shadow 0.3s;
+    }
+
+    .pipeline-nav.scrolled {
+      box-shadow: 0 2px 20px rgba(15,76,58,0.08);
+    }
+
+    .nav-inner {
+      max-width: 1100px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      overflow-x: auto;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+      padding: 12px 0;
+    }
+
+    .nav-inner::-webkit-scrollbar { display: none; }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 14px;
+      border-radius: 100px;
+      cursor: pointer;
+      white-space: nowrap;
+      font-size: 0.78rem;
+      font-weight: 500;
+      color: var(--text-light);
+      transition: all var(--transition);
+      border: 1px solid transparent;
+      flex-shrink: 0;
+    }
+
+    .nav-item:hover {
+      color: var(--green-primary);
+      background: var(--green-faint);
+    }
+
+    .nav-item.active {
+      color: var(--green-primary);
+      background: var(--green-pale);
+      border-color: rgba(15,76,58,0.1);
+    }
+
+    .nav-num {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: var(--border-light);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.7rem;
+      font-weight: 600;
+      transition: all var(--transition);
+    }
+
+    .nav-item.active .nav-num {
+      background: var(--green-primary);
+      color: #fff;
+    }
+
+    .nav-connector {
+      width: 16px;
+      height: 1px;
+      background: var(--border);
+      flex-shrink: 0;
+    }
+
+    /* === MAIN CONTENT === */
+    .main-content {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 40px 24px 80px;
+    }
+
+    /* === FUNNEL VISUAL === */
+    .funnel-section {
+      margin-bottom: 64px;
+      text-align: center;
+    }
+
+    .funnel-section h2 {
+      font-family: 'Instrument Serif', Georgia, serif;
+      font-size: 1.6rem;
+      font-weight: 400;
+      color: var(--text);
+      margin-bottom: 8px;
+    }
+
+    .funnel-section p {
+      color: var(--text-light);
+      font-size: 0.9rem;
+      margin-bottom: 32px;
+    }
+
+    .funnel {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0;
+      padding: 24px 0;
+    }
+
+    .funnel-step {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      flex: 1;
+      max-width: 160px;
+    }
+
+    .funnel-bar {
+      height: 8px;
+      width: 100%;
+      border-radius: 4px;
+      transition: width 1s ease-out;
+    }
+
+    .funnel-step:nth-child(1) .funnel-bar { background: var(--green-deep); width: 100%; }
+    .funnel-step:nth-child(3) .funnel-bar { background: var(--green-primary); width: 85%; }
+    .funnel-step:nth-child(5) .funnel-bar { background: var(--green-mid); width: 20%; }
+    .funnel-step:nth-child(7) .funnel-bar { background: var(--amber); width: 20%; height: 12px; }
+
+    .funnel-num {
+      font-family: 'Instrument Serif', Georgia, serif;
+      font-size: 1.5rem;
+      color: var(--text);
+      line-height: 1;
+    }
+
+    .funnel-label {
+      font-size: 0.72rem;
+      color: var(--text-light);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .funnel-arrow {
+      color: var(--border);
+      font-size: 1.2rem;
+      flex-shrink: 0;
+      margin: 0 4px;
+      margin-top: -18px;
+    }
+
+    /* === STAGE CARDS === */
+    .stage {
+      margin-bottom: 20px;
+      scroll-margin-top: 80px;
+      opacity: 0;
+      transform: translateY(20px);
+      transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+    }
+
+    .stage.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .stage-card {
+      background: var(--card);
+      border-radius: var(--radius);
+      border: 1px solid var(--border-light);
+      overflow: hidden;
+      transition: box-shadow var(--transition), border-color var(--transition);
+    }
+
+    .stage-card:hover {
+      box-shadow: var(--shadow-md);
+      border-color: var(--border);
+    }
+
+    .stage-card.expanded {
+      box-shadow: var(--shadow-lg);
+      border-color: rgba(15,76,58,0.15);
+    }
+
+    .stage-header {
+      display: flex;
+      align-items: flex-start;
+      gap: 20px;
+      padding: 28px 32px;
+      cursor: pointer;
+      user-select: none;
+      position: relative;
+    }
+
+    .stage-number {
+      font-family: 'Instrument Serif', Georgia, serif;
+      font-size: 2.8rem;
+      line-height: 1;
+      color: var(--green-pale);
+      font-weight: 400;
+      flex-shrink: 0;
+      width: 48px;
+      transition: color var(--transition);
+    }
+
+    .stage-card.expanded .stage-number,
+    .stage-card:hover .stage-number {
+      color: var(--green-mid);
+    }
+
+    .stage-info { flex: 1; padding-top: 4px; }
+
+    .stage-title {
+      font-family: 'Instrument Serif', Georgia, serif;
+      font-size: 1.45rem;
+      font-weight: 400;
+      color: var(--text);
+      line-height: 1.2;
+      margin-bottom: 6px;
+    }
+
+    .stage-desc {
+      font-size: 0.88rem;
+      color: var(--text-light);
+      line-height: 1.6;
+    }
+
+    .stage-meta {
+      display: flex;
+      gap: 16px;
+      margin-top: 12px;
+      flex-wrap: wrap;
+    }
+
+    .meta-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 10px;
+      border-radius: 100px;
+      font-size: 0.72rem;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+    }
+
+    .meta-tag.source { background: #eef0ff; color: #4a52b5; }
+    .meta-tag.ai { background: #fce8f0; color: #a3365a; }
+    .meta-tag.nlp { background: #e8f5e8; color: #2d7a2d; }
+    .meta-tag.api { background: #fff3e0; color: #b5722d; }
+    .meta-tag.output { background: var(--amber-light); color: var(--amber-dark); }
+    .meta-tag.data { background: #e8eef5; color: #3a5a8a; }
+
+    .stage-toggle {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: var(--green-faint);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: all var(--transition);
+      margin-top: 6px;
+    }
+
+    .stage-toggle svg {
+      width: 16px;
+      height: 16px;
+      stroke: var(--green-mid);
+      transition: transform var(--transition);
+    }
+
+    .stage-card.expanded .stage-toggle {
+      background: var(--green-primary);
+    }
+
+    .stage-card.expanded .stage-toggle svg {
+      stroke: #fff;
+      transform: rotate(180deg);
+    }
+
+    .stage-body {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .stage-card.expanded .stage-body {
+      max-height: 3000px;
+    }
+
+    .stage-body-inner {
+      padding: 0 32px 28px;
+      padding-left: 100px;
+    }
+
+    .flow-indicator {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+      background: var(--green-faint);
+      border-radius: var(--radius-sm);
+      margin-bottom: 20px;
+      font-size: 0.82rem;
+      color: var(--text-mid);
+    }
+
+    .flow-indicator .arrow {
+      color: var(--green-mid);
+      font-weight: 600;
+    }
+
+    .flow-indicator strong {
+      color: var(--green-primary);
+      font-weight: 600;
+    }
+
+    /* === SUBSTEPS === */
+    .substep {
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-sm);
+      margin-bottom: 10px;
+      overflow: hidden;
+      transition: border-color var(--transition), box-shadow var(--transition);
+    }
+
+    .substep:hover {
+      border-color: var(--border);
+    }
+
+    .substep.expanded {
+      border-color: rgba(15,76,58,0.15);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .substep-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .substep-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.9rem;
+      flex-shrink: 0;
+      background: var(--green-faint);
+    }
+
+    .substep-title {
+      flex: 1;
+      font-size: 0.88rem;
+      font-weight: 500;
+      color: var(--text);
+    }
+
+    .substep-toggle {
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-lighter);
+      font-size: 1.1rem;
+      transition: transform var(--transition);
+    }
+
+    .substep.expanded .substep-toggle {
+      transform: rotate(45deg);
+      color: var(--green-mid);
+    }
+
+    .substep-content {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .substep.expanded .substep-content {
+      max-height: 1500px;
+    }
+
+    .substep-body {
+      padding: 0 16px 16px 60px;
+      font-size: 0.84rem;
+      color: var(--text-mid);
+      line-height: 1.7;
+    }
+
+    .substep-body p { margin-bottom: 12px; }
+    .substep-body p:last-child { margin-bottom: 0; }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .detail-item {
+      padding: 10px 12px;
+      background: var(--bg);
+      border-radius: 6px;
+    }
+
+    .detail-label {
+      display: block;
+      font-size: 0.68rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-lighter);
+      margin-bottom: 3px;
+    }
+
+    .detail-value {
+      font-size: 0.82rem;
+      color: var(--text);
+      font-weight: 500;
+    }
+
+    .detail-item.full {
+      grid-column: 1 / -1;
+    }
+
+    .tech-list {
+      list-style: none;
+      padding: 0;
+      margin: 8px 0 0;
+    }
+
+    .tech-list li {
+      padding: 4px 0;
+      padding-left: 16px;
+      position: relative;
+      font-size: 0.82rem;
+      color: var(--text-mid);
+    }
+
+    .tech-list li::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 12px;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--green-pale);
+      border: 1.5px solid var(--green-mid);
+    }
+
+    /* === FINAL SECTION === */
+    .final-section {
+      margin-top: 64px;
+      text-align: center;
+      padding: 48px 32px;
+      background: var(--card);
+      border-radius: var(--radius);
+      border: 1px solid var(--border-light);
+    }
+
+    .final-section h2 {
+      font-family: 'Instrument Serif', Georgia, serif;
+      font-size: 1.8rem;
+      font-weight: 400;
+      margin-bottom: 12px;
+    }
+
+    .final-section p {
+      color: var(--text-light);
+      font-size: 0.9rem;
+      max-width: 550px;
+      margin: 0 auto 32px;
+      line-height: 1.7;
+    }
+
+    .output-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      text-align: left;
+    }
+
+    .output-card {
+      padding: 20px;
+      background: var(--bg);
+      border-radius: var(--radius-sm);
+    }
+
+    .output-card h4 {
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 6px;
+    }
+
+    .output-card p {
+      font-size: 0.78rem;
+      color: var(--text-light);
+      margin: 0;
+      line-height: 1.5;
+    }
+
+    .output-card .ext {
+      display: inline-block;
+      padding: 2px 8px;
+      background: var(--green-pale);
+      color: var(--green-primary);
+      border-radius: 4px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      margin-top: 8px;
+    }
+
+    /* === FOOTER === */
+    .footer {
+      text-align: center;
+      padding: 32px 24px;
+      color: var(--text-lighter);
+      font-size: 0.78rem;
+    }
+
+    /* === RESPONSIVE === */
+    @media (max-width: 768px) {
+      .hero { padding: 60px 24px 48px; min-height: auto; }
+      .hero h1 { font-size: 2.2rem; }
+      .stats-row { gap: 24px; }
+      .stat-value { font-size: 1.8rem; }
+      .stage-header { padding: 20px; gap: 14px; }
+      .stage-number { font-size: 2rem; width: 36px; }
+      .stage-body-inner { padding-left: 70px; }
+      .detail-grid { grid-template-columns: 1fr; }
+      .output-grid { grid-template-columns: 1fr; }
+      .funnel { flex-direction: column; gap: 8px; }
+      .funnel-arrow { transform: rotate(90deg); margin: 0; }
+      .funnel-bar { width: 100% !important; max-width: 200px; }
+    }
+
+    @media (max-width: 480px) {
+      .stage-body-inner { padding-left: 20px; }
+      .substep-body { padding-left: 16px; }
+      .nav-item span:not(.nav-num) { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ======== HERO ======== -->
+  <header class="hero">
+    <div class="hero-inner">
+      <div class="hero-badge">
+        <span class="dot"></span>
+        Vibrant Data Labs
+      </div>
+      <h1>Climate Finance Tracker<br><em>Data Pipeline</em></h1>
+      <p class="hero-subtitle">
+        How we collect, classify, and enrich half a million organizations to surface
+        33,000+ climate-relevant entities with deep taxonomic annotations.
+      </p>
+      <div class="stats-row">
+        <div class="stat-item">
+          <div class="stat-value">2</div>
+          <div class="stat-label">Data Sources</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value">500<span class="unit">K+</span></div>
+          <div class="stat-label">Raw Records</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value">5</div>
+          <div class="stat-label">AI Models</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value">33<span class="unit">K</span></div>
+          <div class="stat-label">Climate Orgs</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value">150<span class="unit">+</span></div>
+          <div class="stat-label">Data Fields</div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ======== PIPELINE NAV ======== -->
+  <nav class="pipeline-nav" id="pipelineNav">
+    <div class="nav-inner">
+      <div class="nav-item active" data-target="stage-1">
+        <span class="nav-num">1</span><span>Acquire</span>
+      </div>
+      <div class="nav-connector"></div>
+      <div class="nav-item" data-target="stage-2">
+        <span class="nav-num">2</span><span>Prepare</span>
+      </div>
+      <div class="nav-connector"></div>
+      <div class="nav-item" data-target="stage-3">
+        <span class="nav-num">3</span><span>Enrich Text</span>
+      </div>
+      <div class="nav-connector"></div>
+      <div class="nav-item" data-target="stage-4">
+        <span class="nav-num">4</span><span>Filter</span>
+      </div>
+      <div class="nav-connector"></div>
+      <div class="nav-item" data-target="stage-5">
+        <span class="nav-num">5</span><span>Classify</span>
+      </div>
+      <div class="nav-connector"></div>
+      <div class="nav-item" data-target="stage-6">
+        <span class="nav-num">6</span><span>Taxonomy</span>
+      </div>
+      <div class="nav-connector"></div>
+      <div class="nav-item" data-target="stage-7">
+        <span class="nav-num">7</span><span>Tag &amp; Geo</span>
+      </div>
+      <div class="nav-connector"></div>
+      <div class="nav-item" data-target="stage-8">
+        <span class="nav-num">8</span><span>Output</span>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ======== MAIN CONTENT ======== -->
+  <div class="main-content">
+
+    <!-- Funnel Visual -->
+    <section class="funnel-section">
+      <h2>The Data Journey</h2>
+      <p>From raw commercial databases to a curated, AI-enriched climate finance dataset.</p>
+      <div class="funnel">
+        <div class="funnel-step">
+          <div class="funnel-num">500K+</div>
+          <div class="funnel-bar"></div>
+          <div class="funnel-label">Raw Records</div>
+        </div>
+        <div class="funnel-arrow">&#8594;</div>
+        <div class="funnel-step">
+          <div class="funnel-num">500K</div>
+          <div class="funnel-bar"></div>
+          <div class="funnel-label">Combined</div>
+        </div>
+        <div class="funnel-arrow">&#8594;</div>
+        <div class="funnel-step">
+          <div class="funnel-num">33K</div>
+          <div class="funnel-bar"></div>
+          <div class="funnel-label">Climate Relevant</div>
+        </div>
+        <div class="funnel-arrow">&#8594;</div>
+        <div class="funnel-step">
+          <div class="funnel-num">33K</div>
+          <div class="funnel-bar"></div>
+          <div class="funnel-label">Enriched Output</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======== STAGE 1 ======== -->
+    <section class="stage" id="stage-1">
+      <div class="stage-card">
+        <div class="stage-header" onclick="toggleStage(this)">
+          <div class="stage-number">1</div>
+          <div class="stage-info">
+            <h3 class="stage-title">Data Acquisition</h3>
+            <p class="stage-desc">Pull organization records from two major databases using hundreds of climate-focused search terms.</p>
+            <div class="stage-meta">
+              <span class="meta-tag source">Crunchbase</span>
+              <span class="meta-tag source">Candid</span>
+              <span class="meta-tag data">500K+ Records</span>
+            </div>
+          </div>
+          <div class="stage-toggle">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+          </div>
+        </div>
+        <div class="stage-body">
+          <div class="stage-body-inner">
+            <div class="flow-indicator">
+              <strong>Input:</strong> Climate search terms &amp; API credentials
+              <span class="arrow">&#8594;</span>
+              <strong>Output:</strong> Raw organization files
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x1F4CA;</div>
+                <div class="substep-title">Crunchbase Data Pull</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>Queries the Crunchbase API using 500+ curated climate search terms to retrieve venture-backed companies and startups. Filters to company entities only (excluding pure investor profiles).</p>
+                  <div class="detail-grid">
+                    <div class="detail-item">
+                      <span class="detail-label">Data Files Queried</span>
+                      <span class="detail-value">Organizations, Funding Rounds, Founders, Investors</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Key Fields</span>
+                      <span class="detail-value">Name, funding, sectors, employee count, website, founders</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Funding Detail</span>
+                      <span class="detail-value">Round-by-round history from 2010 onward, investor identities</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Special Flags</span>
+                      <span class="detail-value">Government funders, diversity spotlights, IPO status</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x1F3DB;</div>
+                <div class="substep-title">Candid Data Pull</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>Ingests nonprofit and philanthropic organization data from Candid (formerly Foundation Center / GuideStar). Includes grant data, 990 tax filings, board and personnel records, and program descriptions.</p>
+                  <div class="detail-grid">
+                    <div class="detail-item">
+                      <span class="detail-label">Data Files</span>
+                      <span class="detail-value">Main data, funders, personnel, programs, 990 filings</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Min. Funding</span>
+                      <span class="detail-value">$20,000 threshold</span>
+                    </div>
+                    <div class="detail-item full">
+                      <span class="detail-label">Special Processing</span>
+                      <span class="detail-value">Government funder identification via metadata; ALL CAPS text normalization from 990 filings</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x1F50D;</div>
+                <div class="substep-title">Climate Search Terms</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>A curated and expanded set of approximately 500 climate-related search terms, updated quarterly. These terms drive the initial Crunchbase query and are later used for keyword tagging.</p>
+                  <div class="detail-grid">
+                    <div class="detail-item">
+                      <span class="detail-label">Term Count</span>
+                      <span class="detail-value">~500 expanded terms</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Update Cycle</span>
+                      <span class="detail-value">Quarterly (e.g., 2025 Q2)</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======== STAGE 2 ======== -->
+    <section class="stage" id="stage-2">
+      <div class="stage-card">
+        <div class="stage-header" onclick="toggleStage(this)">
+          <div class="stage-number">2</div>
+          <div class="stage-info">
+            <h3 class="stage-title">Data Preparation &amp; Combination</h3>
+            <p class="stage-desc">Clean, standardize, and merge both data sources into a single unified dataset.</p>
+            <div class="stage-meta">
+              <span class="meta-tag nlp">Standardization</span>
+              <span class="meta-tag data">Deduplication</span>
+            </div>
+          </div>
+          <div class="stage-toggle">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+          </div>
+        </div>
+        <div class="stage-body">
+          <div class="stage-body-inner">
+            <div class="flow-indicator">
+              <strong>Input:</strong> Raw CB + Candid files
+              <span class="arrow">&#8594;</span>
+              <strong>Output:</strong> Combined dataset (~500K records)
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x2699;</div>
+                <div class="substep-title">Crunchbase Cleaning</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>Filters to company entities and processes raw Crunchbase data. Maps employee enum codes to human-readable ranges, extracts chronological funding-by-year data, and identifies government-backed organizations.</p>
+                  <ul class="tech-list">
+                    <li>Filter to companies founded or funded after 2010</li>
+                    <li>Map employee enums (e.g., <code>c_00001_00010</code> &#8594; "1-10")</li>
+                    <li>Organize funding rounds chronologically and by type</li>
+                    <li>Flag government funders based on investor metadata</li>
+                    <li>Deduce org type (for-profit vs non-profit) from context</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x2699;</div>
+                <div class="substep-title">Candid Cleaning</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>Processes Candid nonprofit data, identifying government funders, applying minimum funding thresholds, normalizing text casing from IRS 990 filings, and standardizing columns to match the Crunchbase schema.</p>
+                  <ul class="tech-list">
+                    <li>Identify government funders via <code>gm_type</code> / <code>funder_type</code> metadata</li>
+                    <li>Add funding-by-year from separate Candid metadata</li>
+                    <li>Filter: minimum total funding of $20,000</li>
+                    <li>Normalize ALL CAPS text from 990 filing descriptions</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x1F500;</div>
+                <div class="substep-title">Combine &amp; Deduplicate</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>Merges both datasets into a single dataframe. Removes exact duplicates, standardizes org types and funding stages, and classifies funding as Philanthropy or Venture. Optionally tags each organization with matched search terms.</p>
+                  <div class="detail-grid">
+                    <div class="detail-item">
+                      <span class="detail-label">Dedup Key</span>
+                      <span class="detail-value">(id, Data Source) tuple</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Standardization</span>
+                      <span class="detail-value">Org type, funding stage, sector, industry</span>
+                    </div>
+                    <div class="detail-item full">
+                      <span class="detail-label">Search Term Tagging</span>
+                      <span class="detail-value">Matches org text fields against expanded search terms; creates master term mappings</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======== STAGE 3 ======== -->
+    <section class="stage" id="stage-3">
+      <div class="stage-card">
+        <div class="stage-header" onclick="toggleStage(this)">
+          <div class="stage-number">3</div>
+          <div class="stage-info">
+            <h3 class="stage-title">Text Enrichment</h3>
+            <p class="stage-desc">Fill gaps in organization descriptions by scraping websites and LinkedIn profiles.</p>
+            <div class="stage-meta">
+              <span class="meta-tag api">CoreSignal API</span>
+              <span class="meta-tag api">Web Scraping</span>
+              <span class="meta-tag data">PostgreSQL Cache</span>
+            </div>
+          </div>
+          <div class="stage-toggle">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+          </div>
+        </div>
+        <div class="stage-body">
+          <div class="stage-body-inner">
+            <div class="flow-indicator">
+              <strong>Input:</strong> Combined dataset (many short descriptions)
+              <span class="arrow">&#8594;</span>
+              <strong>Output:</strong> Text-enriched dataset
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x1F310;</div>
+                <div class="substep-title">Website Scraping &amp; Summarization</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>Identifies organizations with descriptions shorter than 100 characters and scrapes their websites to extract richer content. Uses Playwright for rendering JavaScript-heavy sites. An LLM then summarizes the scraped content into concise descriptions.</p>
+                  <div class="detail-grid">
+                    <div class="detail-item">
+                      <span class="detail-label">Threshold</span>
+                      <span class="detail-value">&lt; 100 character descriptions</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Scraping Tool</span>
+                      <span class="detail-value">Playwright (headless browser)</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Pages Scraped</span>
+                      <span class="detail-value">Home page + "About" subpages</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Caching</span>
+                      <span class="detail-value">PostgreSQL (avoids re-scraping)</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x1F4BC;</div>
+                <div class="substep-title">LinkedIn Data Integration</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>Retrieves structured company profile data from LinkedIn via the CoreSignal API. Extracts employee counts, specialties, industry classification, logo URLs, and "About" text. Merges on normalized LinkedIn URL, handling variations in http/https and trailing slashes.</p>
+                  <div class="detail-grid">
+                    <div class="detail-item">
+                      <span class="detail-label">API Provider</span>
+                      <span class="detail-value">CoreSignal</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Fields Extracted</span>
+                      <span class="detail-value">Employee count, specialties, about, logo, industry</span>
+                    </div>
+                    <div class="detail-item full">
+                      <span class="detail-label">Merge Logic</span>
+                      <span class="detail-value">Robust LinkedIn URL normalization; employee range mapping from LI to CB format; sector and industry deduplication</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x1F9F9;</div>
+                <div class="substep-title">Text Processing &amp; Validation</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>Combines all available text fields (Description, 990 Filing, Website Summary, LinkedIn About) into unified text representations. Cleans whitespace, line breaks, and encoding issues. Validates that each organization has sufficient text coverage for downstream models.</p>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======== STAGE 4 ======== -->
+    <section class="stage" id="stage-4">
+      <div class="stage-card">
+        <div class="stage-header" onclick="toggleStage(this)">
+          <div class="stage-number">4</div>
+          <div class="stage-info">
+            <h3 class="stage-title">Climate Relevance Filtering</h3>
+            <p class="stage-desc">The critical gate: a fine-tuned AI model identifies the ~7% of organizations that are truly climate-relevant.</p>
+            <div class="stage-meta">
+              <span class="meta-tag ai">Fine-tuned GPT-4o-mini</span>
+              <span class="meta-tag data">500K &#8594; 33K</span>
+            </div>
+          </div>
+          <div class="stage-toggle">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+          </div>
+        </div>
+        <div class="stage-body">
+          <div class="stage-body-inner">
+            <div class="flow-indicator">
+              <strong>Input:</strong> ~500K organizations with enriched text
+              <span class="arrow">&#8594;</span>
+              <strong>Output:</strong> ~33K climate-relevant organizations
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x1F916;</div>
+                <div class="substep-title">Relevance Classification Model</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>A fine-tuned GPT-4o-mini model acts as a climate change expert, reading each organization's combined text and making a binary determination: climate-relevant (1) or irrelevant (0). Each prediction includes a probability score for confidence tracking.</p>
+                  <div class="detail-grid">
+                    <div class="detail-item">
+                      <span class="detail-label">Model</span>
+                      <span class="detail-value">Fine-tuned GPT-4o-mini</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">System Prompt</span>
+                      <span class="detail-value">"You are a climate change expert."</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Output</span>
+                      <span class="detail-value">Binary (0/1) + probability score</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Approach</span>
+                      <span class="detail-value">Conservative (precision over recall)</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x2705;</div>
+                <div class="substep-title">Quality Control &amp; Overrides</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>A manual label override mechanism allows human experts to correct known misclassifications. Results are cached in a database to avoid reprocessing on subsequent pipeline runs.</p>
+                  <ul class="tech-list">
+                    <li>Label override file for post-hoc corrections</li>
+                    <li>Results cached in database for efficiency</li>
+                    <li>All predictions saved (including filtered orgs) for audit</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x1F3AF;</div>
+                <div class="substep-title">Filtering Results</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>Only organizations classified as climate-relevant (prediction = 1) proceed to the enrichment stages. This is the single largest data reduction step, removing approximately 93% of records.</p>
+                  <div class="detail-grid">
+                    <div class="detail-item">
+                      <span class="detail-label">Input</span>
+                      <span class="detail-value">~500,000 organizations</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Output</span>
+                      <span class="detail-value">~33,000 organizations</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Reduction</span>
+                      <span class="detail-value">~93% of records filtered out</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Saved</span>
+                      <span class="detail-value">Full prediction results (including filtered) for audit</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======== STAGE 5 ======== -->
+    <section class="stage" id="stage-5">
+      <div class="stage-card">
+        <div class="stage-header" onclick="toggleStage(this)">
+          <div class="stage-number">5</div>
+          <div class="stage-info">
+            <h3 class="stage-title">AI-Powered Classification</h3>
+            <p class="stage-desc">Classify organizations by climate strategy, entity type, and generate unified summaries.</p>
+            <div class="stage-meta">
+              <span class="meta-tag ai">ClimateBERT</span>
+              <span class="meta-tag ai">AdaBoost Ensemble</span>
+              <span class="meta-tag ai">GPT-4o-mini</span>
+            </div>
+          </div>
+          <div class="stage-toggle">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+          </div>
+        </div>
+        <div class="stage-body">
+          <div class="stage-body-inner">
+            <div class="flow-indicator">
+              <strong>Input:</strong> ~33K climate-relevant orgs
+              <span class="arrow">&#8594;</span>
+              <strong>Output:</strong> Classified orgs with unified summaries
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x1F321;</div>
+                <div class="substep-title">Adaptation vs. Mitigation Classification</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>A ClimateBERT-based model, hosted on Baseten, classifies each organization's climate focus into one of three categories: <strong>Adaptation</strong> (adapting to climate impacts), <strong>Mitigation</strong> (reducing emissions), or <strong>Both</strong>. Organizations that don't fit any category are removed.</p>
+                  <div class="detail-grid">
+                    <div class="detail-item">
+                      <span class="detail-label">Model</span>
+                      <span class="detail-value">ClimateBERT (CPI 2024)</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Hosting</span>
+                      <span class="detail-value">Baseten API</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Categories</span>
+                      <span class="detail-value">Adaptation, Mitigation, Both</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Processing</span>
+                      <span class="detail-value">Batched inference with caching</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x1F3E2;</div>
+                <div class="substep-title">Organization Type Classification</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>An AdaBoost ensemble classifier predicts whether each organization is For-Profit or Non-Profit. It combines TF-IDF text features with category encodings from LinkedIn industry and Crunchbase sectors. Heuristic overrides handle edge cases (e.g., venture-funded orgs forced to for-profit).</p>
+                  <div class="detail-grid">
+                    <div class="detail-item">
+                      <span class="detail-label">Model</span>
+                      <span class="detail-value">AdaBoost ensemble</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Features</span>
+                      <span class="detail-value">TF-IDF (1-3 n-grams) + category encoding</span>
+                    </div>
+                    <div class="detail-item full">
+                      <span class="detail-label">Override Rules</span>
+                      <span class="detail-value">Venture funding &#8594; For-Profit; LinkedIn "Non-Profit" &#8594; Non-Profit</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x1F4DD;</div>
+                <div class="substep-title">Summary Generation</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>Synthesizes all available text (original description, 990 filings, website summary, LinkedIn about) into a single unified description of 4-5 sentences using GPT-4o-mini. This "summary of summaries" becomes the canonical description used throughout the platform.</p>
+                  <div class="detail-grid">
+                    <div class="detail-item">
+                      <span class="detail-label">Model</span>
+                      <span class="detail-value">GPT-4o-mini</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Output Length</span>
+                      <span class="detail-value">4-5 sentence paragraph</span>
+                    </div>
+                    <div class="detail-item full">
+                      <span class="detail-label">Text Sources Combined</span>
+                      <span class="detail-value">Description, 990 Filing Description, Website Summary, LinkedIn About</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======== STAGE 6 ======== -->
+    <section class="stage" id="stage-6">
+      <div class="stage-card">
+        <div class="stage-header" onclick="toggleStage(this)">
+          <div class="stage-number">6</div>
+          <div class="stage-info">
+            <h3 class="stage-title">Taxonomy Mapping</h3>
+            <p class="stage-desc">Map each organization to the One Earth Solutions taxonomy using embeddings, semantic similarity, and few-shot classification.</p>
+            <div class="stage-meta">
+              <span class="meta-tag ai">OpenAI Embeddings</span>
+              <span class="meta-tag nlp">Cosine Similarity</span>
+              <span class="meta-tag ai">Few-Shot LLM</span>
+            </div>
+          </div>
+          <div class="stage-toggle">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+          </div>
+        </div>
+        <div class="stage-body">
+          <div class="stage-body-inner">
+            <div class="flow-indicator">
+              <strong>Input:</strong> Classified orgs + taxonomy definitions
+              <span class="arrow">&#8594;</span>
+              <strong>Output:</strong> Hierarchical solution category assignments
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x1F9E0;</div>
+                <div class="substep-title">Text Embedding Generation</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>Generates dense vector representations (embeddings) for every organization's text and every taxonomy term definition. Uses OpenAI's <code>text-embedding-3-large</code> model (3,072 dimensions). All embeddings are cached in PostgreSQL for reuse across pipeline runs.</p>
+                  <div class="detail-grid">
+                    <div class="detail-item">
+                      <span class="detail-label">Embedding Model</span>
+                      <span class="detail-value">text-embedding-3-large</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Dimensions</span>
+                      <span class="detail-value">3,072</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Items Embedded</span>
+                      <span class="detail-value">~33K org texts + ~250 taxonomy terms</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Caching</span>
+                      <span class="detail-value">PostgreSQL embedding cache</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x1F4D0;</div>
+                <div class="substep-title">Semantic Similarity Matching</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>Computes cosine similarity between each organization embedding and every taxonomy term embedding. Uses percentile-based ranking rather than raw scores, making the matching position-independent and more robust. A few-shot LLM classifier refines edge cases where similarity scores are ambiguous.</p>
+                  <div class="detail-grid">
+                    <div class="detail-item">
+                      <span class="detail-label">Method</span>
+                      <span class="detail-value">Cosine similarity matrix</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Ranking</span>
+                      <span class="detail-value">Percentile-based (position-independent)</span>
+                    </div>
+                    <div class="detail-item full">
+                      <span class="detail-label">Refinement</span>
+                      <span class="detail-value">Few-shot LLM classification validates and adjusts ambiguous matches</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x1F333;</div>
+                <div class="substep-title">One Earth Solutions Taxonomy</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>The primary taxonomy is the One Earth Solutions framework, a 4-level hierarchy of ~250 climate solution categories. Each organization is mapped to its most relevant categories at every level of the hierarchy.</p>
+                  <div class="detail-grid">
+                    <div class="detail-item">
+                      <span class="detail-label">Level 0 (Pillar)</span>
+                      <span class="detail-value">e.g., Energy Transition</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Level 1 (Sub-Pillar)</span>
+                      <span class="detail-value">e.g., Renewable Power</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Level 2 (Solution)</span>
+                      <span class="detail-value">e.g., Advanced Nuclear</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Level 3 (Term)</span>
+                      <span class="detail-value">e.g., Small Modular Reactors</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x26A0;</div>
+                <div class="substep-title">False Solutions &amp; Levers of Change</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>Two additional taxonomy layers are applied: <strong>False Solutions</strong> flags potentially harmful or misleading approaches (greenwashing), and <strong>Levers of Change</strong> categorizes the implementation strategies organizations use to create impact (e.g., policy, technology, finance).</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x1F4B0;</div>
+                <div class="substep-title">Funding Distribution</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>Each organization's funding is fractionally distributed across its matched taxonomy categories based on match confidence scores. This enables aggregate analysis of funding flows by solution area, redistributed hierarchically across all taxonomy levels.</p>
+                  <div class="detail-grid">
+                    <div class="detail-item">
+                      <span class="detail-label">Method</span>
+                      <span class="detail-value">Fractional distribution by match confidence</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Redistribution</span>
+                      <span class="detail-value">Hierarchical across all taxonomy levels</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======== STAGE 7 ======== -->
+    <section class="stage" id="stage-7">
+      <div class="stage-card">
+        <div class="stage-header" onclick="toggleStage(this)">
+          <div class="stage-number">7</div>
+          <div class="stage-info">
+            <h3 class="stage-title">Tagging &amp; Geography</h3>
+            <p class="stage-desc">Extract climate keywords, geographic mentions, and diversity indicators from every organization.</p>
+            <div class="stage-meta">
+              <span class="meta-tag nlp">N-gram Matching</span>
+              <span class="meta-tag ai">LLM Geotagging</span>
+              <span class="meta-tag api">Google Geocoding</span>
+            </div>
+          </div>
+          <div class="stage-toggle">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+          </div>
+        </div>
+        <div class="stage-body">
+          <div class="stage-body-inner">
+            <div class="flow-indicator">
+              <strong>Input:</strong> Taxonomy-mapped organizations
+              <span class="arrow">&#8594;</span>
+              <strong>Output:</strong> Fully tagged &amp; geolocated orgs
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x1F3F7;</div>
+                <div class="substep-title">Climate Keyword Extraction</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>Scans all text fields using n-gram matching (unigrams through trigrams) against a curated climate keyword taxonomy. Weights each tag by frequency and importance. Separates tags into distinct categories for different analysis needs.</p>
+                  <div class="detail-grid">
+                    <div class="detail-item">
+                      <span class="detail-label">Method</span>
+                      <span class="detail-value">N-gram matching (1-3 grams)</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Tag Source</span>
+                      <span class="detail-value">Curated keyword taxonomy (~150 terms)</span>
+                    </div>
+                  </div>
+                  <p style="margin-top: 12px"><strong>Tag categories produced:</strong></p>
+                  <ul class="tech-list">
+                    <li>Main climate tags (energy, sustainability, renewable, etc.)</li>
+                    <li>Equity &amp; Justice tags (justice, indigenous, low income, etc.)</li>
+                    <li>Approach / Strategy tags (technology, policy, finance, etc.)</li>
+                    <li>Underserved Community keywords</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x1F30D;</div>
+                <div class="substep-title">Geographic Tagging</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>Uses an LLM with optimized prompting to extract geographic entities (countries, states, cities) mentioned in organization descriptions. Produces both flat tag lists and structured location dictionaries for mapping.</p>
+                  <div class="detail-grid">
+                    <div class="detail-item">
+                      <span class="detail-label">Method</span>
+                      <span class="detail-value">LLM-based extraction (GPT-4.1-mini)</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Output Format</span>
+                      <span class="detail-value">{city, state_region, country}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x1F4CD;</div>
+                <div class="substep-title">HQ Geocoding</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>Geocodes each organization's headquarters address to latitude/longitude coordinates using the Google Geocoding API. Parsed addresses are cleaned and validated to produce standardized City, State, and Country fields.</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x1F91D;</div>
+                <div class="substep-title">Diversity &amp; Equity Tags</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>Consolidates diversity data from Crunchbase spotlights into standardized tags. Maps founder demographics (Women, Black, Latine, South Asian, East Asian, Southeast Asian, MENA, Indigenous) and produces summary flags for BIPOC representation, equity/justice mentions, and underserved community focus.</p>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======== STAGE 8 ======== -->
+    <section class="stage" id="stage-8">
+      <div class="stage-card">
+        <div class="stage-header" onclick="toggleStage(this)">
+          <div class="stage-number">8</div>
+          <div class="stage-info">
+            <h3 class="stage-title">Output &amp; Delivery</h3>
+            <p class="stage-desc">The final dataset: 33,000+ climate organizations enriched with 150+ fields, ready for the platform.</p>
+            <div class="stage-meta">
+              <span class="meta-tag output">JSON</span>
+              <span class="meta-tag output">Excel</span>
+              <span class="meta-tag output">Network Viz</span>
+            </div>
+          </div>
+          <div class="stage-toggle">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+          </div>
+        </div>
+        <div class="stage-body">
+          <div class="stage-body-inner">
+            <div class="flow-indicator">
+              <strong>Input:</strong> Fully enriched dataset
+              <span class="arrow">&#8594;</span>
+              <strong>Output:</strong> Platform-ready files &amp; visualizations
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x1F4E6;</div>
+                <div class="substep-title">Data Export</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>The enriched dataset is exported in multiple formats for different consumers. The primary output includes the full organization records, along with separate files for taxonomy mapping results, relevance model scores, and funding distribution data.</p>
+                  <div class="detail-grid">
+                    <div class="detail-item">
+                      <span class="detail-label">Primary Output</span>
+                      <span class="detail-value">cb_cd_li_meta.json / .xlsx</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Records</span>
+                      <span class="detail-value">~33,000+ organizations</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Fields per Record</span>
+                      <span class="detail-value">150+ enriched columns</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Supplementary Files</span>
+                      <span class="detail-value">Taxonomy mappings, relevance scores, funding distributions</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x1F578;</div>
+                <div class="substep-title">Network Visualization</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>Organizations are connected into a tag-co-occurrence network graph. Community detection (Louvain clustering) identifies natural groupings. The network is laid out using force-directed or UMAP algorithms, producing an interactive visualization for the platform.</p>
+                  <div class="detail-grid">
+                    <div class="detail-item">
+                      <span class="detail-label">Graph Type</span>
+                      <span class="detail-value">Tag co-occurrence network</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Clustering</span>
+                      <span class="detail-value">Louvain community detection</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Layouts</span>
+                      <span class="detail-value">Force-directed, UMAP, t-SNE</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">Viewer</span>
+                      <span class="detail-value">Interactive MapPR player</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="substep" onclick="toggleSubstep(event, this)">
+              <div class="substep-header">
+                <div class="substep-icon">&#x1F4CA;</div>
+                <div class="substep-title">Final Dataset Schema</div>
+                <div class="substep-toggle">+</div>
+              </div>
+              <div class="substep-content">
+                <div class="substep-body">
+                  <p>The final dataset contains 150+ columns organized into major field groups:</p>
+                  <ul class="tech-list">
+                    <li><strong>Identity:</strong> Name, ID, source, URLs, logo</li>
+                    <li><strong>Funding:</strong> Total funding, stage, by-year breakdown, investors, donors</li>
+                    <li><strong>Classification:</strong> Org type, adaptation/mitigation, climate relevance score</li>
+                    <li><strong>Taxonomy:</strong> One Earth categories at 4 hierarchy levels, false solutions, levers</li>
+                    <li><strong>Text:</strong> Original description, website summary, LinkedIn about, unified summary</li>
+                    <li><strong>Tags:</strong> Climate keywords, equity/justice, approach, underserved communities</li>
+                    <li><strong>Geography:</strong> HQ coordinates, geo tags, city/state/country</li>
+                    <li><strong>People:</strong> Founders, executives, board, employee count, diversity tags</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======== FINAL SUMMARY ======== -->
+    <section class="final-section">
+      <h2>What Powers the Pipeline</h2>
+      <p>A multi-model architecture with aggressive caching ensures scalability, quality, and cost efficiency across every run.</p>
+      <div class="output-grid">
+        <div class="output-card">
+          <h4>AI &amp; ML Models</h4>
+          <p>Fine-tuned GPT-4o-mini for relevance, ClimateBERT for adaptation/mitigation, AdaBoost for org type, OpenAI embeddings for taxonomy, few-shot LLM for refinement.</p>
+          <span class="ext">5 Models</span>
+        </div>
+        <div class="output-card">
+          <h4>External APIs</h4>
+          <p>Crunchbase for venture data, Candid for philanthropy, CoreSignal for LinkedIn, Google for geocoding, OpenAI for embeddings &amp; classification.</p>
+          <span class="ext">5 APIs</span>
+        </div>
+        <div class="output-card">
+          <h4>Caching Layer</h4>
+          <p>PostgreSQL-backed caching for embeddings, LLM responses, web scraping, and LinkedIn data. Dramatically reduces cost and runtime on subsequent pipeline runs.</p>
+          <span class="ext">PostgreSQL</span>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <footer class="footer">
+    <p>Climate Finance Tracker Data Pipeline &middot; Vibrant Data Labs</p>
+  </footer>
+
+  <script>
+    // ===== Stage Expand/Collapse =====
+    function toggleStage(header) {
+      const card = header.closest('.stage-card');
+      const wasExpanded = card.classList.contains('expanded');
+
+      // Close all stages
+      document.querySelectorAll('.stage-card.expanded').forEach(c => {
+        if (c !== card) c.classList.remove('expanded');
+      });
+
+      card.classList.toggle('expanded', !wasExpanded);
+    }
+
+    // ===== Substep Expand/Collapse =====
+    function toggleSubstep(event, substep) {
+      event.stopPropagation();
+      substep.classList.toggle('expanded');
+    }
+
+    // ===== Sticky Nav Shadow =====
+    const nav = document.getElementById('pipelineNav');
+    const heroEl = document.querySelector('.hero');
+
+    const navObserver = new IntersectionObserver(([entry]) => {
+      nav.classList.toggle('scrolled', !entry.isIntersecting);
+    }, { threshold: 0 });
+    navObserver.observe(heroEl);
+
+    // ===== Nav Active State =====
+    const stages = document.querySelectorAll('.stage');
+    const navItems = document.querySelectorAll('.nav-item');
+
+    const stageObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const id = entry.target.id;
+          navItems.forEach(item => {
+            item.classList.toggle('active', item.dataset.target === id);
+          });
+          // Scroll nav item into view
+          const activeNav = document.querySelector(`.nav-item[data-target="${id}"]`);
+          if (activeNav) {
+            activeNav.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+          }
+        }
+      });
+    }, {
+      rootMargin: '-20% 0px -60% 0px',
+      threshold: 0
+    });
+
+    stages.forEach(s => stageObserver.observe(s));
+
+    // ===== Nav Click Scroll =====
+    navItems.forEach(item => {
+      item.addEventListener('click', () => {
+        const target = document.getElementById(item.dataset.target);
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth' });
+          // Also expand the stage
+          const card = target.querySelector('.stage-card');
+          if (card && !card.classList.contains('expanded')) {
+            // Close others
+            document.querySelectorAll('.stage-card.expanded').forEach(c => {
+              if (c !== card) c.classList.remove('expanded');
+            });
+            card.classList.add('expanded');
+          }
+        }
+      });
+    });
+
+    // ===== Scroll Reveal =====
+    const revealObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+          revealObserver.unobserve(entry.target);
+        }
+      });
+    }, {
+      threshold: 0.1,
+      rootMargin: '0px 0px -40px 0px'
+    });
+
+    stages.forEach((s, i) => {
+      s.style.transitionDelay = `${i * 0.05}s`;
+      revealObserver.observe(s);
+    });
+
+    // Also observe funnel and final sections
+    const funnel = document.querySelector('.funnel-section');
+    const finalSection = document.querySelector('.final-section');
+    [funnel, finalSection].forEach(el => {
+      if (el) {
+        el.style.opacity = '0';
+        el.style.transform = 'translateY(20px)';
+        el.style.transition = 'opacity 0.6s ease-out, transform 0.6s ease-out';
+        const obs = new IntersectionObserver(([entry]) => {
+          if (entry.isIntersecting) {
+            el.style.opacity = '1';
+            el.style.transform = 'translateY(0)';
+            obs.unobserve(el);
+          }
+        }, { threshold: 0.1 });
+        obs.observe(el);
+      }
+    });
+  </script>
+</body>
+</html>
