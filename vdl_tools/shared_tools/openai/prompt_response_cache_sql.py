@@ -197,7 +197,7 @@ class PromptResponseCacheSQL():
         else:
             prompt_response_obj = PromptResponse(
                 prompt_id=self.prompt.id,
-                given_id=given_id,
+                given_id=str(given_id),
                 model_name=self.model,
                 input_text=text,
                 response_full=response_full,
@@ -214,7 +214,7 @@ class PromptResponseCacheSQL():
     ):
         prompt_response_obj = PromptResponse(
             prompt_id=self.prompt.id,
-            given_id=given_id,
+            given_id=str(given_id),
             model_name=self.model,
             input_text=text,
             response_full=response.model_dump_json(),
