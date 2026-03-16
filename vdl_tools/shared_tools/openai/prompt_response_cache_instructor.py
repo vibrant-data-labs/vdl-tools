@@ -89,7 +89,7 @@ class InstructorPRC(PromptResponseCacheSQL):
     ):
         prompt_response_obj = PromptResponse(
             prompt_id=self.prompt.id,
-            given_id=given_id,
+            given_id=str(given_id),
             model_name=self.model,
             input_text=text,
             response_full=response._raw_response.model_dump(),
