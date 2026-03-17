@@ -341,6 +341,9 @@ class PromptResponseCacheSQL():
             logger.warning("No given_ids_texts passed")
             return {}
 
+        # Convert the given_ids to strings in case they are integers
+        given_ids_texts = [(str(x[0]), x[1]) for x in given_ids_texts]
+
         # Remove duplicates when the text is a string
         # Sometimes it's a dict like with taxonmy mapping
         if isinstance(given_ids_texts[0][1], str):
