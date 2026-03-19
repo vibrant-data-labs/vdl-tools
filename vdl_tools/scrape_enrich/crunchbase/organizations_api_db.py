@@ -1,4 +1,5 @@
 from typing import TypedDict
+from more_itertools import chunked
 import pandas as pd
 import hashlib
 import json
@@ -65,19 +66,22 @@ def __hash_query(search_condition, items_list, extra_filters):
     return hashlib.md5(payload.encode()).hexdigest()
 
 
-def __upsert_dataframe(session, model, df, index_elements):
+def __upsert_dataframe(
+    session,
+    model,
+    df,
+    chunk_size=1000,
+):
     if df is None or df.empty:
         return
-
-    table_cols = {col.name for col in model.__table__.columns}
-    for record in df.to_dict(orient="records"):
-        data = {
-            k: (None if pd.api.types.is_scalar(v) and pd.isna(v) else v)
-            for k, v in record.items()
-            if k in table_cols
-        }
-        if all(data.get(pk) is not None for pk in index_elements):
-            session.merge(model(**data))
+    safe_records = json.loads(df.to_json(orient="records"))
+    logger.info("Upserting %s records into %s", len(safe_records), model.__tablename__)
+    for chunk in chunked(safe_records, chunk_size):
+        logger.info("Upserting chunk of %s records into %s", len(chunk), model.__tablename__)
+        for record in chunk:
+            sql_obj = model(**record)
+            session.merge(sql_obj)
+        session.commit()
 
 
 def __fetch_cached(session, model, ids, api_query_fn, *, use_cache, save_to_cache):
@@ -109,7 +113,7 @@ def __fetch_cached(session, model, ids, api_query_fn, *, use_cache, save_to_cach
                 else new_df
             )
             if save_to_cache:
-                __upsert_dataframe(session, model, new_df, ["uuid"])
+                __upsert_dataframe(session, model, new_df)
 
     return cached_df
 
@@ -383,7 +387,7 @@ def query_companies_extended(
             organizations = __dedup_df(organizations)
 
             if organizations is not None and not organizations.empty and save_to_cache:
-                __upsert_dataframe(session, CbOrganization, organizations, ["uuid"])
+                __upsert_dataframe(session, CbOrganization, organizations)
                 if search_condition != "id":
                     uuids = organizations["uuid"].tolist() if "uuid" in organizations.columns else []
                     stmt = insert(CbQueryCache).values([{
@@ -421,7 +425,7 @@ def query_companies_extended(
                 companies_funding_rounds = funding_rounds_query(org_ids)
                 companies_funding_rounds = __dedup_df(companies_funding_rounds)
                 if companies_funding_rounds is not None and not companies_funding_rounds.empty and save_to_cache:
-                    __upsert_dataframe(session, CbFundingRound, companies_funding_rounds, ["uuid"])
+                    __upsert_dataframe(session, CbFundingRound, companies_funding_rounds)
 
         # --- Investors ---
         people_investors = None
