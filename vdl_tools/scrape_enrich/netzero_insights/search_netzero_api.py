@@ -39,6 +39,8 @@ def create_search_filter(
     exclude_startup_ids: list[int] = None,
     minimum_funding: int = None,
     maximum_funding: int = None,
+    min_number_of_rounds: int = None,
+    max_number_of_rounds: int = None,
     include_investors: list[int] = None,
     exclude_investors: list[int] = None,
     include_taxonomy_items: list[int] = None,
@@ -88,6 +90,14 @@ def create_search_filter(
     if maximum_funding:
         startup_include_filter = startup_include_filter or StartupFilter()
         startup_include_filter.fundingsTo = maximum_funding
+
+    if min_number_of_rounds:
+        startup_include_filter = startup_include_filter or StartupFilter()
+        startup_include_filter.numberOfRoundFrom = min_number_of_rounds
+
+    if max_number_of_rounds:
+        startup_include_filter = startup_include_filter or StartupFilter()
+        startup_include_filter.numberOfRoundTo = max_number_of_rounds
 
     if include_headquarters:
         startup_include_filter = startup_include_filter or StartupFilter()

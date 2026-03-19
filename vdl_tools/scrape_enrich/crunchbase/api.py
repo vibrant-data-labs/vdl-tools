@@ -1,4 +1,7 @@
+import threading
 from typing import Callable
+
+_progress_lock = threading.Lock()
 
 
 def __predicate(field, operator, values=list()):
@@ -67,13 +70,13 @@ def domain_includes(field, values):
 
 
 def print_progress_bar(iteration, total, prefix = '', suffix = '', decimals = 1, length = 100, fill = '█', printEnd = "\r"):
-    percent = ("{0:." + str(decimals) + "f}").format(100 * (iteration / float(total)))
-    filledLength = int(length * iteration // total)
-    bar = fill * filledLength + '-' * (length - filledLength)
-    print(f'\r{prefix} |{bar}| {percent}% {suffix}', end = printEnd)
-    # Print New Line on Complete
-    if iteration == total:
-        print()
+    with _progress_lock:
+        percent = ("{0:." + str(decimals) + "f}").format(100 * (iteration / float(total)))
+        filledLength = int(length * iteration // total)
+        bar = fill * filledLength + '-' * (length - filledLength)
+        print(f'\r{prefix} |{bar}| {percent}% {suffix}', end = printEnd)
+        if iteration == total:
+            print()
 
 def api_count_factory(url, default_fields,) -> Callable:
     import requests
