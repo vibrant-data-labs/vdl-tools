@@ -74,13 +74,32 @@ def __upsert_dataframe(
 ):
     if df is None or df.empty:
         return
+
+    table = model.__table__
+    table_col_names = {col.name for col in table.columns}
+    pk_cols = [col.name for col in table.primary_key.columns]
+    non_pk_cols = [
+        c.name for c in table.columns
+        if c.name not in set(pk_cols) and c.name != "updated_at"
+    ]
+
     safe_records = json.loads(df.to_json(orient="records"))
+    safe_records = [
+        {k: v for k, v in rec.items() if k in table_col_names and k != "updated_at"}
+        for rec in safe_records
+    ]
+
     logger.info("Upserting %s records into %s", len(safe_records), model.__tablename__)
     for chunk in chunked(safe_records, chunk_size):
-        logger.info("Upserting chunk of %s records into %s", len(chunk), model.__tablename__)
-        for record in chunk:
-            sql_obj = model(**record)
-            session.merge(sql_obj)
+        stmt = insert(table).values(chunk)
+        set_ = {col: stmt.excluded[col] for col in non_pk_cols}
+        if "updated_at" in table_col_names:
+            set_["updated_at"] = sa.func.now()
+        stmt = stmt.on_conflict_do_update(
+            index_elements=pk_cols,
+            set_=set_,
+        )
+        session.execute(stmt)
         session.commit()
 
 
