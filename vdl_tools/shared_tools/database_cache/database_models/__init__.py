@@ -13,8 +13,13 @@ from .netzero.company_commercial_deal import CompanyCommercialDeal #pylint: disa
 from .netzero.company_funding_rounds import CompanyFundingRounds #pylint: disable=no-name-in-module
 from .netzero.investor import Investor #pylint: disable=no-name-in-module
 from .netzero.startup import Startup #pylint: disable=no-name-in-module
+from .crunchbase import CbOrganization, CbFundingRound, CbPerson, CbQueryCache
 
 __all__ = (
+    "CbOrganization",
+    "CbFundingRound",
+    "CbPerson",
+    "CbQueryCache",
     "CompanyCommercialDeal",
     "CompanyFundingRounds",
     "Embedding",

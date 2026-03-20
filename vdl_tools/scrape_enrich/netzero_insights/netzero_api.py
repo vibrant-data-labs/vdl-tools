@@ -574,6 +574,43 @@ class NetZeroAPI:
             return flat_data
         return company_rounds_objects
 
+    async def _get_entity_details(
+        self,
+        id: int,
+        endpoint: str,
+        model_class: Type,
+        primary_key_field: str = "clientID",
+        read_from_cache: bool = None,
+        write_to_cache: bool = None,
+    ) -> Dict:
+        """Get detailed information about a specific entity."""
+        entity = await self._get_details_batch(
+            ids=[id],
+            endpoint=endpoint,
+            model_class=model_class,
+            primary_key_field=primary_key_field,
+            read_from_cache=read_from_cache,
+            write_to_cache=write_to_cache
+        )
+        return entity[0]
+
+    async def get_funding_round_details(
+        self,
+        funding_round_id: int,
+        read_from_cache: bool = None,
+        write_to_cache: bool = None,
+    ) -> List[Dict]:
+        """Get detailed information about multiple funding rounds."""
+        funding_round = await self._get_entity_details(
+            id=funding_round_id,
+            endpoint="fundingRound",
+            model_class=CompanyFundingRounds,
+            primary_key_field="id",
+            read_from_cache=read_from_cache,
+            write_to_cache=write_to_cache
+        )
+        return funding_round
+
     def get_taxonomy_children(self, parent_id: int) -> List[Dict]:
         """Get taxonomy for a specific parent ID."""
         payload = {
