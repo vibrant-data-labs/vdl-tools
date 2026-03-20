@@ -90,8 +90,10 @@ def __upsert_dataframe(
     ]
 
     logger.info("Upserting %s records into %s", len(safe_records), model.__tablename__)
-    for i, chunk in enumerate(chunked(safe_records, chunk_size)):
-        logger.info("Upserting chunk %s of %s", i + 1, len(safe_records) // chunk_size)
+    chunks = chunked(safe_records, chunk_size)
+    num_chunks = len(chunks)
+    for i, chunk in enumerate(chunks):
+        logger.info("Upserting chunk %s of %s", i + 1, num_chunks)
         stmt = insert(table).values(chunk)
         set_ = {col: stmt.excluded[col] for col in non_pk_cols}
         if "updated_at" in table_col_names:
@@ -421,6 +423,7 @@ def query_companies_extended(
                         set_={"resulting_uuids": uuids, "updated_at": sa.func.now()},
                     )
                     session.execute(stmt)
+                    session.commit()
 
         if organizations is None or organizations.empty:
             return None
