@@ -313,18 +313,19 @@ def __get_aggregated_data(organizations: pd.DataFrame, list_column: str):
     temp_data["type"] = temp_data.apply(lambda x: x[list_column]['entity_def_id'] if 'permalink' in x[list_column] else None, axis=1)
     temp_data = temp_data[temp_data['type'].notnull()]
     temp_data['permalink'] = temp_data.apply(lambda x: x[list_column]['permalink'], axis=1)
+    temp_data['uuid'] = temp_data.apply(lambda x: x[list_column].get('uuid'), axis=1)
     return temp_data
 
 
 def __investors_query(session, investor_temp_data: pd.DataFrame, entity_type, *, use_cache, save_to_cache):
     df = investor_temp_data[investor_temp_data["type"] == entity_type]
     if entity_type == "person":
-        ids = df['permalink'].to_list()
+        ids = df['uuid'].dropna().to_list()
         if len(ids) == 0:
             return None
         return __fetch_cached(session, CbPerson, ids, people_query, use_cache=use_cache, save_to_cache=save_to_cache)
 
-    companies_ids = list(set(df['uuid'].to_list()))
+    companies_ids = list(set(df['uuid'].dropna().to_list()))
     if len(companies_ids) == 0:
         return None
     return __fetch_cached(session, CbOrganization, companies_ids, companies_id_query, use_cache=use_cache, save_to_cache=save_to_cache)
@@ -353,6 +354,7 @@ def __aggregate_investors(funding_rounds_df: pd.DataFrame):
     temp_data = temp_data[temp_data['investor_identifiers'].notnull()]
     temp_data['type'] = temp_data['investor_identifiers'].apply(lambda x: x['entity_def_id'])
     temp_data['permalink'] = temp_data['investor_identifiers'].apply(lambda x: x['permalink'])
+    temp_data['uuid'] = temp_data['investor_identifiers'].apply(lambda x: x.get('uuid'))
     return temp_data
 
 
@@ -465,23 +467,23 @@ def query_companies_extended(
             if people_investors is None:
                 logger.info('Investors of type `person` are not found, skipping...')
             else:
-                temp_investors = investor_temp_data[investor_temp_data['type'] == 'person'][['permalink', 'org_permalink']]
-                people_investors = pd.merge(temp_investors, people_investors, how="left", on="permalink")
+                temp_investors = investor_temp_data[investor_temp_data['type'] == 'person'][['uuid', 'org_permalink']]
+                people_investors = pd.merge(temp_investors, people_investors, how="left", on="uuid")
                 people_investors = __dedup_df(people_investors)
 
             org_investors = __investors_query(session, investor_temp_data, "organization", use_cache=use_cache, save_to_cache=save_to_cache)
             if org_investors is None:
                 logger.info('Investors of type `organizations` are not found, skipping...')
             else:
-                temp_investors = investor_temp_data[investor_temp_data['type'] == 'organization'][['permalink', 'org_permalink']]
-                org_investors = pd.merge(temp_investors, org_investors, how="left", on="permalink")
+                temp_investors = investor_temp_data[investor_temp_data['type'] == 'organization'][['uuid', 'org_permalink']]
+                org_investors = pd.merge(temp_investors, org_investors, how="left", on="uuid")
                 org_investors = __dedup_df(org_investors)
 
         # --- Founders ---
         founders = None
         founders_temp_data = __get_aggregated_data(organizations, "founder_identifiers")
         logger.info("Found %s organizations with known founders", founders_temp_data.shape[0])
-        founder_ids = founders_temp_data['uuid'].to_list()
+        founder_ids = founders_temp_data['uuid'].dropna().to_list()
 
         if len(founder_ids) == 0:
             logger.info('No founders found, skipping...')
