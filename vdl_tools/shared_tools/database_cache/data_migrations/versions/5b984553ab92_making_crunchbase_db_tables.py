@@ -1,8 +1,8 @@
-"""Add crunchbase tables
+"""Making crunchbase db tables
 
-Revision ID: 1a236e4007ba
+Revision ID: 5b984553ab92
 Revises: e0d5da7248b4
-Create Date: 2026-03-19 11:49:03.300199
+Create Date: 2026-03-20 12:39:22.500203
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '1a236e4007ba'
+revision: str = '5b984553ab92'
 down_revision: Union[str, None] = 'e0d5da7248b4'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -31,6 +31,7 @@ def upgrade() -> None:
     sa.Column('investment_stage', sa.String(), nullable=True),
     sa.Column('funded_organization_funding_stage', sa.String(), nullable=True),
     sa.Column('investment_type', sa.String(), nullable=True),
+    sa.Column('identifier', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
     sa.Column('closed_on', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
     sa.Column('funded_organization_categories', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
     sa.Column('funded_organization_description', sa.String(), nullable=True),
@@ -135,7 +136,7 @@ def upgrade() -> None:
     sa.Column('school_program', sa.String(), nullable=True),
     sa.Column('school_type', sa.String(), nullable=True),
     sa.Column('stock_exchange_symbol', sa.String(), nullable=True),
-    sa.Column('stock_symbol', sa.String(), nullable=True),
+    sa.Column('stock_symbol', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
     sa.Column('twitter', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
     sa.Column('valuation', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
     sa.Column('valuation_date', sa.String(), nullable=True),
