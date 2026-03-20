@@ -38,7 +38,7 @@ class CbOrganization(Base):
     acquirer_identifier = Column(JSONB)
     equity_funding_total = Column(JSONB)
     diversity_spotlights = Column(JSONB)
-    
+
     aliases = Column(JSONB)
     closed_on = Column(JSONB)
     contact_email = Column(String)
@@ -97,7 +97,7 @@ class CbOrganization(Base):
     valuation = Column(JSONB)
     valuation_date = Column(String)
     went_public_on = Column(JSONB)
-    
+
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
 
@@ -114,7 +114,7 @@ class CbFundingRound(Base):
     investment_stage = Column(String)
     funded_organization_funding_stage = Column(String)
     investment_type = Column(String)
-    
+    identifier = Column(JSONB)
     closed_on = Column(JSONB)
     funded_organization_categories = Column(JSONB)
     funded_organization_description = Column(String)
@@ -131,7 +131,7 @@ class CbFundingRound(Base):
     rank_funding_round = Column(Integer)
     short_description = Column(String)
     target_money_raised = Column(JSONB)
-    
+
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
 
@@ -186,7 +186,7 @@ class CbPerson(Base):
     short_description = Column(String)
     twitter = Column(JSONB)
     website_url = Column(String)
-    
+
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
 
