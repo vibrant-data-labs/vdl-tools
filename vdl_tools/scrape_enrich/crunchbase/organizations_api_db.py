@@ -115,14 +115,14 @@ def __fetch_cached(session, model, ids, api_query_fn, *, use_cache, save_to_cach
     if use_cache:
         rows = (
             session.query(model)
-            .filter(sa.or_(model.uuid.in_(ids), model.permalink.in_(ids)))
+            .filter(model.uuid.in_(ids))
             .all()
         )
         cached_df = __rows_to_df(rows)
 
     missing = ids
     if cached_df is not None and not cached_df.empty:
-        found = set(cached_df["uuid"].tolist() + cached_df["permalink"].tolist())
+        found = set(cached_df["uuid"].tolist())
         missing = [i for i in ids if i not in found]
 
     if missing:
@@ -324,7 +324,7 @@ def __investors_query(session, investor_temp_data: pd.DataFrame, entity_type, *,
             return None
         return __fetch_cached(session, CbPerson, ids, people_query, use_cache=use_cache, save_to_cache=save_to_cache)
 
-    companies_ids = list(set(df['permalink'].to_list()))
+    companies_ids = list(set(df['uuid'].to_list()))
     if len(companies_ids) == 0:
         return None
     return __fetch_cached(session, CbOrganization, companies_ids, companies_id_query, use_cache=use_cache, save_to_cache=save_to_cache)
@@ -481,14 +481,14 @@ def query_companies_extended(
         founders = None
         founders_temp_data = __get_aggregated_data(organizations, "founder_identifiers")
         logger.info("Found %s organizations with known founders", founders_temp_data.shape[0])
-        founder_ids = founders_temp_data['permalink'].to_list()
+        founder_ids = founders_temp_data['uuid'].to_list()
 
         if len(founder_ids) == 0:
             logger.info('No founders found, skipping...')
         else:
             founders = __fetch_cached(session, CbPerson, founder_ids, people_query, use_cache=use_cache, save_to_cache=save_to_cache)
             if founders is not None and not founders.empty:
-                founders = pd.merge(founders_temp_data[['permalink', 'org_permalink']], founders, how="left", on="permalink")
+                founders = pd.merge(founders_temp_data[['uuid', 'org_permalink']], founders, how="left", on="uuid")
                 founders = __dedup_df(founders)
 
         return {
