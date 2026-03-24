@@ -36,4 +36,5 @@ coverage.xml
 .hatch.toml
 
 # Ruff cache
-.ruff_cache/
+.ruff_cache/.python-version
+.python-version

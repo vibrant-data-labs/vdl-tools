@@ -193,7 +193,8 @@ def get_entity_categories(
     all_text = dict()
     level_text = []
     for tx in taxonomy:
-        txt_dict = dict(zip(tx['data'][tx['name']], tx['data'][tx['textattr']]))
+        retrieval_attr = tx.get('retrieval_textattr', tx['textattr'])
+        txt_dict = dict(zip(tx['data'][tx['name']], tx['data'][retrieval_attr]))
         all_text |= txt_dict
         level_text.append(txt_dict)
     # match up to nmax categories
