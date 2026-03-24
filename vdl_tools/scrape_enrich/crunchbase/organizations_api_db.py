@@ -371,6 +371,72 @@ def query_companies_extended(
     use_cache=True,
     save_to_cache=True,
 ) -> QueryCompaniesExtendedResult | None:
+    """Query Crunchbase organizations and related entities with Postgres DB caching.
+
+    Searches for companies via the Crunchbase API based on the given search
+    condition, then resolves their funding rounds, investors (people and
+    organizations), and founders. Results are cached in a Postgres database
+    so that subsequent calls can skip the API for already-fetched records.
+
+    Parameters
+    ----------
+    items_list : list
+        Values to search for. Interpretation depends on ``search_condition``:
+        search terms, company names, URLs, industry IDs, or Crunchbase UUIDs.
+    search_condition : {'search_terms', 'name', 'url', 'industry', 'id'}, default 'search_terms'
+        Determines how ``items_list`` is interpreted and which Crunchbase API
+        endpoint is queried.
+    extra_filters : list, optional
+        Additional Crunchbase API filter predicates (e.g.,
+        ``[api.eq("status", "operating")]``). Ignored when
+        ``search_condition='id'``.
+    force_query : bool, default False
+        When True, bypass the query-level cache and always hit the API for
+        organizations (per-record caching via ``use_cache`` still applies).
+    use_cache : bool, default True
+        When True, attempt to load organizations, funding rounds, investors,
+        and founders from the Postgres cache before falling back to the API.
+    save_to_cache : bool, default True
+        When True, upsert newly fetched records into the Postgres cache for
+        future reuse. Independent of ``use_cache`` and ``force_query``.
+
+    Notes
+    -----
+    ``use_cache`` controls whether **any** DB reads happen.
+    ``force_query`` is narrower: it only skips the org query-cache /
+    id-preload and the funding-rounds DB preload, but still allows DB reads
+    for investors and founders when ``use_cache=True``.
+
+    Typical combinations:
+
+    ================  ==============  =========================================
+    ``use_cache``     ``force_query`` Effect
+    ================  ==============  =========================================
+    True              False           Normal: reuse query cache + DB where
+                                      possible, API only for gaps.
+    True              True            Refresh org list + funding rounds from
+                                      API; still use DB for investors and
+                                      founders.
+    False             ``*``           Skip all DB reads; fetch everything from
+                                      the API.
+    ================  ==============  =========================================
+
+    Returns
+    -------
+    QueryCompaniesExtendedResult or None
+        A TypedDict with the following keys, or ``None`` if no organizations
+        matched the query:
+
+        - **organizations** : pd.DataFrame -- matched Crunchbase organizations.
+        - **funding_rounds** : pd.DataFrame or None -- funding rounds for
+          organizations that have them.
+        - **people_investors** : pd.DataFrame or None -- person-type investors
+          linked via funding rounds, merged with their organization permalink.
+        - **org_investors** : pd.DataFrame or None -- organization-type
+          investors, merged with their investee organization permalink.
+        - **founders** : pd.DataFrame or None -- founders of the matched
+          organizations, merged with their organization permalink.
+    """
     extra_filters = extra_filters or []
     query_hash = __hash_query(search_condition, items_list, extra_filters)
 
