@@ -38,6 +38,7 @@ dependencies = [
     "openpyxl",
     "pandas>=2.0.0,<3.0.0",
     "playwright>=1.56.0,<2.0.0",
+    "playwright-stealth>=2.0.0,<3.0.0",
     "plotly",
     "psycopg2-binary",
     "PySocks",
