@@ -4,6 +4,7 @@ import httpx
 from enum import Enum
 from typing import Optional, Dict, Any, List, Tuple
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright_stealth import Stealth
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,8 @@ DEFAULT_READ_TIMEOUT = 15.0    # Allow time for slow servers
 # JS wall / bot protection patterns that indicate browser rendering is needed
 # These are checked against lowercased response text
 JS_WALL_PATTERNS = [
+    'forbidden',
+    'access denied',
     # Generic JS required messages
     'enable javascript',
     'javascript is required',
@@ -156,14 +159,14 @@ class AsyncScraper:
         if self.playwright:
             await self.playwright.stop()
 
-    async def fetch_http(self, url: str) -> Tuple[Optional[str], FailureReason]:
+    async def fetch_http(self, url: str) -> Tuple[Optional[str], FailureReason, int]:
         """
         Attempt to fetch the page using lightweight HTTP request with retry logic.
         Uses exponential backoff for transient failures only (read timeouts, 5xx errors).
 
         Returns:
-            Tuple of (content, failure_reason). If content is not None, failure_reason is NONE.
-            failure_reason indicates why the request failed and whether browser fallback is worthwhile.
+            Tuple of (content, failure_reason, status_code).
+            status_code is the actual HTTP status code, or 0 if the request never completed.
         """
         async with self.http_sem:
             if not url.startswith('http'):
@@ -175,50 +178,53 @@ class AsyncScraper:
 
                     if response.status_code >= 400:
                         logger.warning(f"HTTP {response.status_code} for {url}")
+                        # 403 is commonly used by bot protection -- check body before giving up
+                        if response.status_code == 403:
+                            lower_text = response.text.lower()
+                            if any(pattern in lower_text for pattern in JS_WALL_PATTERNS):
+                                logger.info(f"Detected bot protection behind 403 for {url}, will try browser")
+                                return None, FailureReason.JS_WALL, response.status_code
                         # Don't retry on 4xx client errors (except 429 rate limit)
                         if 400 <= response.status_code < 500 and response.status_code != 429:
-                            return None, FailureReason.HTTP_ERROR
+                            return None, FailureReason.HTTP_ERROR, response.status_code
                         # Retry on 5xx server errors or 429 rate limit
                         if attempt < self.http_retries - 1:
                             delay = self.retry_delay * (2 ** attempt)
                             logger.debug(f"Retrying {url} in {delay}s (attempt {attempt + 1}/{self.http_retries})")
                             await asyncio.sleep(delay)
                             continue
-                        return None, FailureReason.HTTP_ERROR
+                        return None, FailureReason.HTTP_ERROR, response.status_code
 
                     text = response.text
                     if not text:
-                        return None, FailureReason.OTHER
+                        return None, FailureReason.OTHER, response.status_code
 
                     # Detect JS-wall / bot protection patterns that require a browser
                     lower_text = text.lower()
                     if any(pattern in lower_text for pattern in JS_WALL_PATTERNS):
                         logger.info(f"Detected JS wall for {url}, will try browser")
-                        return None, FailureReason.JS_WALL
+                        return None, FailureReason.JS_WALL, response.status_code
 
-                    return text, FailureReason.NONE
+                    return text, FailureReason.NONE, response.status_code
 
                 except (httpx.ConnectError, httpx.ConnectTimeout) as e:
-                    # Connection/DNS failures - server is unreachable, don't retry or use browser
                     logger.debug(f"Dead link (connection failed) for {url}: {type(e).__name__}")
-                    return None, FailureReason.DEAD_LINK
+                    return None, FailureReason.DEAD_LINK, 0
 
                 except (httpx.ReadTimeout, httpx.ReadError) as e:
-                    # Read errors might be transient - retry with backoff
                     if attempt < self.http_retries - 1:
                         delay = self.retry_delay * (2 ** attempt)
                         logger.debug(f"Retrying {url} in {delay}s after {type(e).__name__} (attempt {attempt + 1}/{self.http_retries})")
                         await asyncio.sleep(delay)
                     else:
                         logger.debug(f"HTTP fetch failed for {url} after {self.http_retries} attempts: {str(e)}")
-                        return None, FailureReason.OTHER
+                        return None, FailureReason.OTHER, 0
 
                 except Exception as e:
-                    # Don't retry on other exceptions
                     logger.debug(f"HTTP fetch failed for {url}: {str(e)}")
-                    return None, FailureReason.OTHER
+                    return None, FailureReason.OTHER, 0
 
-            return None, FailureReason.OTHER
+            return None, FailureReason.OTHER, 0
 
     async def fetch_browser(self, url: str) -> Optional[str]:
         """
@@ -259,13 +265,14 @@ class AsyncScraper:
         try:
             # Create context with resource blocking to save bandwidth/memory
             context = await self.browser.new_context(
-                user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'
+                user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             )
 
-            # Block images, fonts, media to speed up loading
-            await context.route("**/*.{png,jpg,jpeg,gif,webp,svg,css,woff,woff2,mp4,mp3}", lambda route: route.abort())
+            # Block heavy resources but keep CSS (blocking it is a bot fingerprint)
+            await context.route("**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2,mp4,mp3}", lambda route: route.abort())
 
             page = await context.new_page()
+            await Stealth().apply_stealth_async(page)
 
             try:
                 # Navigate with timeout
@@ -321,7 +328,7 @@ class AsyncScraper:
         logger.debug(f"Scraping {url}")
 
         # 1. Try lightweight HTTP first
-        content, failure_reason = await self.fetch_http(url)
+        content, failure_reason, status_code = await self.fetch_http(url)
         method = "http"
 
         # 2. Only fall back to browser if it might help (JS wall detected)
@@ -330,13 +337,15 @@ class AsyncScraper:
             logger.info(f"Falling back to browser for {url} (JS wall detected)")
             content = await self.fetch_browser(url)
             method = "browser"
+            if content:
+                status_code = 200
         elif not content:
             logger.debug(f"Skipping browser fallback for {url} (failure reason: {failure_reason.value})")
 
         return {
             "url": url,
             "content": content,
-            "status_code": 200 if content else 0,  # Simplified status
+            "status_code": status_code,
             "method": method if content else "failed",
             "success": bool(content),
             "failure_reason": failure_reason.value if not content else None,

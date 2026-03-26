@@ -5,6 +5,10 @@ import pandas as pd
 from vdl_tools.shared_tools.tools.text_cleaning import camel_to_snake
 from vdl_tools.shared_tools.tools.falsey_checks import coerced_bool
 
+BANNED_LINKEDIN_URLS = [
+    'https://www.linkedin.com/company/pitchbook'
+]
+
 
 ORIGINAL_COMPANY_DETAILS_COLUMNS = [
     "logo",
@@ -229,6 +233,7 @@ def process_nzi_companies_details(
     keep_suffix: str = '_nzi',
 ) -> pd.DataFrame:
     companies_df = companies_df.copy()
+
     companies_df = add_parsed_tags(
         companies_df,
         tag_col=tag_col,
@@ -242,4 +247,7 @@ def process_nzi_companies_details(
     )
     companies_df['trl_parsed_nzi'] = companies_df['trl'].apply(lambda x: x.get('label') if coerced_bool(x) else None)
     companies_df = filter_format_columns(companies_df, keep_suffix=keep_suffix)
+    companies_df['linkedin_url_nzi_cleaned'] = companies_df['linkedin_url_nzi'].apply(
+        lambda x: x if x not in BANNED_LINKEDIN_URLS else None
+    )
     return companies_df
