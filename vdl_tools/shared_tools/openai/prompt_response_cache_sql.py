@@ -405,7 +405,7 @@ class PromptResponseCacheSQL():
         else:
             prompt_response_obj = PromptResponse(
                 prompt_id=self.prompt.id,
-                given_id=given_id,
+                given_id=str(given_id),
                 model_name=self.model,
                 input_text=text,
                 response_full=response_full,
@@ -443,7 +443,7 @@ class PromptResponseCacheSQL():
         """
         prompt_response_obj = PromptResponse(
             prompt_id=self.prompt.id,
-            given_id=given_id,
+            given_id=str(given_id),
             model_name=self.model,
             input_text=text,
             response_full=response.model_dump_json(),
@@ -652,6 +652,9 @@ class PromptResponseCacheSQL():
         if not given_ids_texts:
             logger.warning("No given_ids_texts passed")
             return {}
+
+        # Convert the given_ids to strings in case they are integers
+        given_ids_texts = [(str(x[0]), x[1]) for x in given_ids_texts]
 
         # Remove duplicates when the text is a string
         # Sometimes it's a dict like with taxonmy mapping

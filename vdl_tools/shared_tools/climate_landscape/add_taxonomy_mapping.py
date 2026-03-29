@@ -339,7 +339,6 @@ def load_arpah_taxonomy(
 
 def load_arpah_hazard_sols(
         taxonomy_path,
-        #haz_sheet_name = "Hazard",
         cat_sheet_name = "Category",
         subcat_sheet_name = "Sub-Category",
         ):
@@ -355,16 +354,16 @@ def load_arpah_hazard_sols(
 
     taxonomy = [
         #{'level': 0, 'name': 'Hazard', 'data': hazard_df, 'textattr': 'Expanded Definition'},
-        {'level': 0, 'name': 'Category', 'data': pillar_df, 'textattr': 'Expanded Definition'},
-        {'level': 1, 'name': 'Sub-Category', 'data': sub_df, 'textattr': 'Expanded Definition'},
+        {'level': 0, 'name': 'Prevention Category', 'data': pillar_df, 'textattr': 'Definition'},
+        {'level': 1, 'name': 'Prevention Sub-Category', 'data': sub_df, 'textattr': 'Definition'},
 
     ]
     return taxonomy
 
 def load_arpah_treat_sols(
         taxonomy_path,
-        cat_sheet_name = "Treatment_Categories",
-        subcat_sheet_name = "Treatment_Solutions",
+        cat_sheet_name = "Category",
+        subcat_sheet_name = "Sub-Category",
         ):
 
     pillar_df = pd.read_excel(taxonomy_path, sheet_name=cat_sheet_name)
@@ -378,7 +377,7 @@ def load_arpah_treat_sols(
 
     taxonomy = [
         {'level': 0, 'name': 'Treatment Category', 'data': pillar_df, 'textattr': 'Definition'},
-        {'level': 1, 'name': 'Treatment Solution', 'data': sub_df, 'textattr': 'Definition'},
+        {'level': 1, 'name': 'Treatment Sub-Category', 'data': sub_df, 'textattr': 'Definition'},
 
     ]
     return taxonomy
@@ -508,6 +507,7 @@ def add_one_earth_taxonomy(
     levers_path=None,
     levers_results_path=None,
     max_depth=2,
+    n_embeddings_per_commit=1500,
 ):
     paths = paths or pc.get_paths()
     taxonomy_path = taxonomy_path or paths.get("one_earth_taxonomy", None)
@@ -523,7 +523,8 @@ def add_one_earth_taxonomy(
         org_df=df,
         id_col=id_col,
         text_col=text_col,
-        max_workers=max_workers
+        max_workers=max_workers,
+        n_per_commit=n_embeddings_per_commit,
     )
 
     taxonomy = load_one_earth_taxonomy(
@@ -818,7 +819,7 @@ def add_netzero_taxonomy(
 
     return new_df
 
-def add_arpah_hazard_solutions(
+def add_arpah_preventions(
     df,
     id_col,
     text_col,
@@ -832,7 +833,7 @@ def add_arpah_hazard_solutions(
     paths=None,
     max_workers=3,
     force_parents=True,
-    mapping_name="Prevention_Solutions",
+    mapping_name="Preventions",
     taxonomy_path=None,
     results_path=None,
     envrisk_solutions_distributed_funding_results_path=None,
@@ -856,12 +857,11 @@ def add_arpah_hazard_solutions(
 
     taxonomy = load_arpah_hazard_sols(
         taxonomy_path,
-        #haz_sheet_name="Hazard",
         cat_sheet_name="Category",
         subcat_sheet_name="Sub-Category",
     )
     # add main taxonomy mapping
-    logger.info('Mapping to Prevention Solutions')
+    logger.info('Mapping to Preventions')
     all_df, distr_df = add_taxonomy_mapping(
         df,
         entity_embeddings,
@@ -904,7 +904,7 @@ def add_arpah_hazard_solutions(
     new_df = tm.add_mapping_to_orgs(df, all_df, id_col, pct=pct, sim=sim, cats=cols)
     return new_df
 
-def add_arpah_treatment_solutions(
+def add_arpah_treatments(
     df,
     id_col,
     text_col,
@@ -918,7 +918,7 @@ def add_arpah_treatment_solutions(
     paths=None,
     max_workers=3,
     force_parents=True,
-    mapping_name="Treatment_Solutions",
+    mapping_name="Treatments",
     taxonomy_path=None,
     results_path=None,
     healthout_solutions_distributed_funding_results_path=None,
@@ -944,7 +944,7 @@ def add_arpah_treatment_solutions(
         taxonomy_path,
     )
     # add main taxonomy mapping
-    logger.info('Mapping to Health Outcomes Solutions')
+    logger.info('Mapping to Treatments')
     all_df, distr_df = add_taxonomy_mapping(
         df,
         entity_embeddings,

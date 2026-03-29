@@ -1,5 +1,8 @@
+import json
+
 import asyncio
 import pandas as pd
+
 from vdl_tools.shared_tools.tools.config_utils import get_configuration
 from vdl_tools.scrape_enrich.netzero_insights.netzero_api import NetZeroAPI
 from vdl_tools.scrape_enrich.netzero_insights.filters import MainFilter, StartupFilter, InvestorFilter
@@ -34,6 +37,10 @@ def create_search_filter(
     exclude_headquarters: list[str] = None,
     include_startup_ids: list[int] = None,
     exclude_startup_ids: list[int] = None,
+    minimum_funding: int = None,
+    maximum_funding: int = None,
+    min_number_of_rounds: int = None,
+    max_number_of_rounds: int = None,
     include_investors: list[int] = None,
     exclude_investors: list[int] = None,
     include_taxonomy_items: list[int] = None,
@@ -75,6 +82,22 @@ def create_search_filter(
     if name:
         startup_include_filter = startup_include_filter or StartupFilter()
         startup_include_filter.name = name
+
+    if minimum_funding:
+        startup_include_filter = startup_include_filter or StartupFilter()
+        startup_include_filter.fundingsFrom = minimum_funding
+
+    if maximum_funding:
+        startup_include_filter = startup_include_filter or StartupFilter()
+        startup_include_filter.fundingsTo = maximum_funding
+
+    if min_number_of_rounds:
+        startup_include_filter = startup_include_filter or StartupFilter()
+        startup_include_filter.numberOfRoundFrom = min_number_of_rounds
+
+    if max_number_of_rounds:
+        startup_include_filter = startup_include_filter or StartupFilter()
+        startup_include_filter.numberOfRoundTo = max_number_of_rounds
 
     if include_headquarters:
         startup_include_filter = startup_include_filter or StartupFilter()
@@ -199,10 +222,12 @@ def get_full_details_from_company_ids(
     company_ids: list[int],
     return_investor_details: bool = True,
     return_funding_rounds: bool = True,
+    get_commercial_deals: bool = False,
     use_sandbox: bool = False,
     read_from_cache: bool = True,
     write_to_cache: bool = True,
     netzero_api: NetZeroAPI = None,
+    save_path: str = None,
 ):
     netzero_api = netzero_api or get_netzero_api(
         use_sandbox=use_sandbox,
@@ -249,6 +274,20 @@ def get_full_details_from_company_ids(
         )
         return_data["investor_details"] = pd.DataFrame(investor_details)
 
+    if get_commercial_deals:
+        commercial_deals = get_company_commercial_deals(
+            company_ids=company_ids,
+            use_sandbox=use_sandbox,
+            read_from_cache=read_from_cache,
+            write_to_cache=write_to_cache,
+            netzero_api=netzero_api,
+        )
+        return_data["commercial_deals"] = pd.DataFrame(commercial_deals)
+
+    if save_path:
+        logger.info(f"Saving data to {save_path}")
+        safe_return_data = {key: value.to_dict(orient="records") for key, value in return_data.items()}
+        json.dump(safe_return_data, open(save_path, "w"))
     return return_data
 
 

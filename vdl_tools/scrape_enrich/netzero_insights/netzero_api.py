@@ -388,36 +388,50 @@ class NetZeroAPI:
         if not missing_ids:
             return [results[id] for id in ids]
 
-        # Get cookies from the authenticated session
         cookies = self.session.cookies.get_dict()
+        if not cookies:
+            logger.warning("No session cookies found — requests may fail auth")
+        request_timeout = aiohttp.ClientTimeout(total=90)
+        max_retries = 3
+        max_concurrent = 10
+        semaphore = asyncio.Semaphore(max_concurrent)
 
-        # Fetch remaining entities from API
         async def fetch_entity(session: aiohttp.ClientSession, id: int) -> Dict:
-            try:
-                async with session.get(
-                    f"{self.base_url}/{endpoint.rstrip('/')}/{id}",
-                    cookies=cookies,
-                    ssl=self.verify_ssl,
-                ) as response:
-                    response.raise_for_status()
-                    data = await response.json()
-                    # Needs to mimic as if read from database like when we write to database
-                    # We filter for columns that exist in the model but are not defined in the base mixin
-                    args = {}
-                    valid_columns = model_class.__table__.columns.keys()
-                    base_cls = model_class.__bases__[0]
-
-                    # We could just ignore this and do {clientID: id, fullData: data}
-                    # But for specific tables we might want to add more fields to the table like name, etc.
-                    if isinstance(data, dict):
-                        for k, v in data.items():
-                            if k in valid_columns and not hasattr(base_cls, k):
-                                args[k] = v
-                    args[primary_key_field] = id
-                    args["fullData"] = data
-                    return id, args
-            except Exception as e:
-                logger.error(f"Failed to fetch {endpoint} {id}: {str(e)}")
+            async with semaphore:
+                for attempt in range(max_retries):
+                    try:
+                        async with session.get(
+                            f"{self.base_url}/{endpoint.rstrip('/')}/{id}",
+                            cookies=cookies,
+                            headers={"Accept": "application/json, text/plain, */*"},
+                            timeout=request_timeout,
+                            ssl=self.verify_ssl,
+                        ) as response:
+                            if response.status >= 400:
+                                body = (await response.text())[:500]
+                                logger.error(f"Failed {endpoint} {id}: HTTP {response.status} | {body!r}")
+                                return id, None
+                            data = await response.json()
+                            args = {}
+                            valid_columns = model_class.__table__.columns.keys()
+                            base_cls = model_class.__bases__[0]
+                            if isinstance(data, dict):
+                                for k, v in data.items():
+                                    if k in valid_columns and not hasattr(base_cls, k):
+                                        args[k] = v
+                            args[primary_key_field] = id
+                            args["fullData"] = data
+                            return id, args
+                    except (TimeoutError, asyncio.TimeoutError):
+                        if attempt < max_retries - 1:
+                            logger.warning(f"Timeout {endpoint} {id} (attempt {attempt + 1}/{max_retries}), retrying...")
+                            await asyncio.sleep(2 ** attempt)
+                        else:
+                            logger.error(f"Failed {endpoint} {id}: timeout after {max_retries} attempts")
+                            return id, None
+                    except Exception as e:
+                        logger.error(f"Failed {endpoint} {id}: {type(e).__name__}: {e}")
+                        return id, None
                 return id, None
 
         async def process_batch(batch: List[Dict]):
@@ -457,9 +471,12 @@ class NetZeroAPI:
             if batch:
                 await process_batch(batch)
 
-        logger.info(f"Successfully fetched {len(results)} `{endpoint}`s")
         unfound_ids = set(ids) - set(results.keys())
-        logger.warning(f"Unfound IDs for endpoint {endpoint}: {unfound_ids}")
+        total = len(ids)
+        failed = len(unfound_ids)
+        logger.info(f"Fetched {total - failed}/{total} `{endpoint}`s")
+        if failed:
+            logger.warning(f"{failed}/{total} `{endpoint}`s failed ({100 * failed / total:.1f}%): {unfound_ids}")
         return [results.get(id) for id in ids if id in results]
 
     async def get_startup_details(
@@ -556,6 +573,43 @@ class NetZeroAPI:
                 flat_data.extend(company_rounds['fullData'])
             return flat_data
         return company_rounds_objects
+
+    async def _get_entity_details(
+        self,
+        id: int,
+        endpoint: str,
+        model_class: Type,
+        primary_key_field: str = "clientID",
+        read_from_cache: bool = None,
+        write_to_cache: bool = None,
+    ) -> Dict:
+        """Get detailed information about a specific entity."""
+        entity = await self._get_details_batch(
+            ids=[id],
+            endpoint=endpoint,
+            model_class=model_class,
+            primary_key_field=primary_key_field,
+            read_from_cache=read_from_cache,
+            write_to_cache=write_to_cache
+        )
+        return entity[0]
+
+    async def get_funding_round_details(
+        self,
+        funding_round_id: int,
+        read_from_cache: bool = None,
+        write_to_cache: bool = None,
+    ) -> List[Dict]:
+        """Get detailed information about multiple funding rounds."""
+        funding_round = await self._get_entity_details(
+            id=funding_round_id,
+            endpoint="fundingRound",
+            model_class=CompanyFundingRounds,
+            primary_key_field="id",
+            read_from_cache=read_from_cache,
+            write_to_cache=write_to_cache
+        )
+        return funding_round
 
     def get_taxonomy_children(self, parent_id: int) -> List[Dict]:
         """Get taxonomy for a specific parent ID."""
