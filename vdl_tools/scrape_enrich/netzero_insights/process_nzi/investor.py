@@ -94,11 +94,44 @@ def add_investor_type_flag(
     )
     return investor_df
 
-def process_nzi_investors(
+
+def add_investor_boolean_flags(
     investor_df: pd.DataFrame,
+    column_name: str,
     keep_suffix: str = '_nzi',
 ) -> pd.DataFrame:
     investor_df = investor_df.copy()
-    investor_df = add_investor_type_flag(investor_df, investor_type='Government', keep_suffix=keep_suffix)
+    investor_df[f'is_{column_name}_investor_calced{keep_suffix}'] = investor_df[column_name].astype(bool)
+    return investor_df
+
+
+INVESTOR_TYPES_TO_ADD = [
+    'Government',
+    'Private Equity',
+    'Venture Capital',
+    'Non-Profit Organisation',
+    'Commercial Bank',
+    'Investment Bank',
+    'Bank',
+    'Foundation',
+    'Corporation',
+]
+
+INVESTOR_BOOLEAN_FLAGS_TO_ADD = [
+    'strategic',
+
+]
+
+
+def process_nzi_investors(
+    investor_df: pd.DataFrame,
+    keep_suffix: str = '_nzi',
+    investor_types_to_add: list[str] = INVESTOR_TYPES_TO_ADD,
+) -> pd.DataFrame:
+    investor_df = investor_df.copy()
+    for investor_type in investor_types_to_add:
+        investor_df = add_investor_type_flag(investor_df, investor_type=investor_type, keep_suffix=keep_suffix)
+    for boolean_flag in INVESTOR_BOOLEAN_FLAGS_TO_ADD:
+        investor_df = add_investor_boolean_flags(investor_df, column_name=boolean_flag, keep_suffix=keep_suffix)
     investor_df = filter_format_columns(investor_df, keep_suffix=keep_suffix)
     return investor_df

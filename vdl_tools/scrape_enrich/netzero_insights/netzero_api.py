@@ -568,8 +568,6 @@ class NetZeroAPI:
         if flatten:
             flat_data = []
             for company_rounds in company_rounds_objects:
-                if not company_rounds:
-                    import ipdb; ipdb.set_trace()
                 flat_data.extend(company_rounds['fullData'])
             return flat_data
         return company_rounds_objects
