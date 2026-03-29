@@ -7,6 +7,7 @@ import os
 from vdl_tools.shared_tools.openai.openai_constants import MODEL_DATA, SEED
 from vdl_tools.shared_tools.tools.config_utils import get_configuration
 
+
 logging.basicConfig(level=logging.DEBUG)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -18,6 +19,10 @@ if not api_key:
 CLIENT = OpenAI(max_retries=4,
                 api_key=api_key)
 ASYNC_CLIENT = AsyncOpenAI(api_key=api_key)
+
+
+def is_reasoning_model(model):
+    return model.startswith("gpt-5")
 
 
 def get_num_tokens(text, model_name):
@@ -102,7 +107,7 @@ def _get_completion_kwargs(
         "stop": stop,
         "response_format": {"type": response_format_type},
     }
-    
+
     # Add logprobs if specified
     if logprobs is not None:
         kwargs["logprobs"] = logprobs
@@ -123,94 +128,78 @@ def _get_completion_kwargs(
     return kwargs
 
 
-async def get_completion_async(
-    prompt,
-    model,
-    text,
-    messages=None,
-    temperature=0.2,
-    max_tokens=2000,
-    top_p=1,
-    seed=SEED,
-    frequency_penalty=0,
-    presence_penalty=0,
-    stop=None,
-    response_format_type="text",
-    return_all=True,
-    dry_run=False,
-    logprobs=None,
-    top_logprobs=None,
-):
-    kwargs = _get_completion_kwargs(
-        prompt,
-        model,
-        text,
-        messages=messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        top_p=top_p,
-        seed=seed,
-        frequency_penalty=frequency_penalty,
-        presence_penalty=presence_penalty,
-        stop=stop,
-        response_format_type=response_format_type,
-        logprobs=logprobs,
-        top_logprobs=top_logprobs,
-    )
-    if dry_run:
-        return kwargs
-
-    completion = await ASYNC_CLIENT.chat.completions.create(**kwargs)
-    if return_all:
-        return completion
-    return completion.choices[0].message.content
-
-
 def get_completion(
     prompt,
     model,
     text,
-    messages=None,
-    temperature=0.2,
-    max_tokens=2000,
-    top_p=1,
-    seed=SEED,
-    frequency_penalty=0,
-    presence_penalty=0,
-    stop=None,
-    return_all=True,
-    verbose=False,
-    response_format_type="text",
-    logprobs=None,
-    top_logprobs=None,
+    return_all=False,
+    **kwargs,
 ):
-    if not verbose:
-        logging.getLogger("httpcore").setLevel(logging.WARNING)
-        logging.getLogger("httpx").setLevel(logging.WARNING)
-        logging.getLogger("urllib3").setLevel(logging.WARNING)
-        logging.getLogger("openai").setLevel(logging.WARNING)
+    """Call the OpenAI Responses API and return the parsed completion.
 
-    kwargs = _get_completion_kwargs(
-        prompt,
-        model,
-        text,
-        messages=messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        top_p=top_p,
-        seed=seed,
-        frequency_penalty=frequency_penalty,
-        presence_penalty=presence_penalty,
-        stop=stop,
-        response_format_type=response_format_type,
-        logprobs=logprobs,
-        top_logprobs=top_logprobs,
-    )
+    Uses `CLIENT.responses.parse()` with the given prompt and user text.
+    By default returns only the parsed output; if `return_all` is True,
+    returns the full response object.
 
-    completion = CLIENT.chat.completions.create(**kwargs)
+    Notes
+    -----
+    **Reasoning vs non-reasoning models**
+
+    - **Reasoning models** (identified by `is_reasoning_model`: model name
+      starts with "gpt-5") use the Responses API in instruction mode:
+      the prompt is passed as `instructions` and only the latest user
+      message is passed as `input`. This matches the expected format
+      for reasoning/agent-style models.
+    - **Non-reasoning models** receive the full conversation: the prompt
+      as a system message and the user text as a user message, both
+      passed together as `input` (messages list). No separate
+      `instructions` field is used.
+
+    Parameters
+    ----------
+    prompt : str
+        System prompt or instructions for the model.
+    model : str
+        OpenAI model name (e.g. gpt-4o-mini, gpt-5-*).
+    text : str
+        User message content.
+    return_all : bool, optional
+        If True, return the full API response; otherwise return only
+        `response.output_parsed`. Default is False.
+    **kwargs
+        Passed through to `responses.parse()` (e.g. response_format).
+
+    Returns
+    -------
+    Parsed completion, or the full response object if `return_all` is True.
+    """
+    messages = [
+        {
+            "role": "system",
+            "content": prompt,
+        },
+        {
+            "role": "user",
+            "content": text,
+        },
+    ]
+
+    response_kwargs = {
+        "model": model,
+        "input": messages,
+        **kwargs,
+    }
+
+    if is_reasoning_model(model):
+        # Make the prompt_str the instructions
+        response_kwargs["instructions"] = prompt
+        last_message = messages[-1]['content']
+        response_kwargs['input'] = last_message
+
+    response = CLIENT.responses.parse(**response_kwargs)
     if return_all:
-        return completion
-    return completion.choices[0].message.content
+        return response
+    return response.output_parsed
 
 
 
