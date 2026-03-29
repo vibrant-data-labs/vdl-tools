@@ -95,16 +95,28 @@ def divide_funding_rows(
         late_vc_types = DISCLOSED_STAGES_ORDERED[
             DISCLOSED_STAGES_ORDERED.index(early_vc_cutoff) + 1:
         ]
+        early_vc_types = DISCLOSED_STAGES_ORDERED[
+            :DISCLOSED_STAGES_ORDERED.index(early_vc_cutoff) + 1
+        ] + ["Early VC"]
 
-        # Legacy behavior: early stage continues until the first late venture round appears.
+        # Early stage continues until the first late venture round appears.
         late_stage_start_rows = company_funding_rows[
             company_funding_rows['round_type_nzi'].isin(late_vc_types + ["Late VC"])
         ]
         if late_stage_start_rows.shape[0] == 0:
+            if company_funding_rows['round_type_nzi'].isin(early_vc_types).any():
+                return company_funding_rows, None
             return None, None
 
         late_stage_start_index = late_stage_start_rows.index[0]
         early_stage_end_index = late_stage_start_index - 1
+
+        if early_stage_end_index < 0:
+            return None, None
+
+        early_candidate_rows = company_funding_rows.loc[:early_stage_end_index]
+        if not early_candidate_rows['round_type_nzi'].isin(early_vc_types).any():
+            return None, None
     elif split_strategy == SPLIT_AFTER_LAST_EARLY_ROUND:
         early_stage_anchor_types = [early_vc_cutoff]
         if early_vc_cutoff == "Series A":
@@ -133,9 +145,8 @@ def divide_funding_rows(
         company_funding_rows=company_funding_rows,
         max_late_vc_stage=max_late_vc_stage,
     )
-    # No late stage anchor rows found meaning no late stage funding
     if late_stage_end_index < late_stage_start_index:
-        early_stage_funding_rows = company_funding_rows.iloc[:early_stage_end_index]
+        early_stage_funding_rows = company_funding_rows.loc[:early_stage_end_index]
         return early_stage_funding_rows, None
 
     early_stage_funding_rows = company_funding_rows.loc[:early_stage_end_index]

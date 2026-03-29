@@ -4,6 +4,8 @@ import pandas as pd
 
 from vdl_tools.shared_tools.tools.text_cleaning import camel_to_snake
 from vdl_tools.shared_tools.tools.falsey_checks import coerced_bool
+from vdl_tools.scrape_enrich.netzero_insights.process_nzi.investor import INVESTOR_TYPES_TO_ADD, INVESTOR_BOOLEAN_FLAGS_TO_ADD
+from vdl_tools.scrape_enrich.netzero_insights.process_nzi.funding_round import add_project_finance_indicators
 
 BANNED_LINKEDIN_URLS = [
     'https://www.linkedin.com/company/pitchbook'
@@ -82,13 +84,13 @@ ORIGINAL_COMPANY_DETAILS_COLUMNS = [
     #   "commercialPartner",
     #   "dealsLastReviewer",
     #   "fundingRangeIDUSD",
-    #   "trlFiveYearsPrior",
-    #   "trlLastThreeYears",
+      "trlFiveYearsPrior",
+      "trlLastThreeYears",
     #   "commercialBuyCount",
     #   "lastRoundAmountUSD",
     #   "trlAcquisitionDate",
-    #   "trlThreeYearsPrior",
-    #   "employeesGrowthJSON",
+      "trlThreeYearsPrior",
+      "employeesGrowthJSON",
     #   "lastEquityRoundType",
     #   "numberOfEquityRounds",
     #   "sustainabilityMetric",
@@ -98,12 +100,12 @@ ORIGINAL_COMPANY_DETAILS_COLUMNS = [
     #   "totalEquityFundingUSD",
     #   "sustainabilityMetricID",
     #   "linkedInRevenuesRangeID",
-    #   "commercialAgreementCount",
+      "commercialAgreementCount",
     #   "lastRoundAmountStringUSD",
     #   "trlFiveYearsHorizonPrior",
     #   "sustainabilityMetricLabel",
     #   "trlThreeYearsHorizonPrior",
-    #   "commercialPartnershipCount",
+      "commercialPartnershipCount",
     #   "financialStageOneYearPrior",
     #   "totalNonDilutiveFundingEUR",
     "totalNonDilutiveFundingUSD",
@@ -116,14 +118,14 @@ ORIGINAL_COMPANY_DETAILS_COLUMNS = [
     #   "financialStageFiveYearsHorizonPrior",
     #   "alternativeNames",
     #   "lastCommercialDeal",
-    #   "qoQEmployeesGrowth",
-    #   "yoYEmployeesGrowth",
+      "qoQEmployeesGrowth",
+      "yoYEmployeesGrowth",
     #   "qoQCorrespondingQuarter",
     #   "yoYCorrespondingQuarter",
     #   "lastSeenDate",
     #   "legalNames",
     #   "lastInfrastructureProject",
-    #   "infrastructureProjectsCount",
+      "infrastructureProjectsCount",
     "clientID",
 ]
 
@@ -211,7 +213,11 @@ def add_investor_type_flag(
 ) -> pd.DataFrame:
 
     has_investor_type_flag_col_name = f'has_{investor_type.lower()}_investor_calced{keep_suffix}'
-    has_investor_type_flag_df = processed_funding_round_df.groupby('client_id_nzi').agg({has_investor_type_flag_col_name: 'sum'}).reset_index()
+    has_investor_type_flag_df = (
+        processed_funding_round_df.groupby('client_id_nzi')
+        .agg({has_investor_type_flag_col_name: 'sum'})
+        .reset_index()
+    )
     has_investor_type_flag_df[has_investor_type_flag_col_name] = has_investor_type_flag_df[has_investor_type_flag_col_name].astype(bool)
 
     companies_df = companies_df.merge(
@@ -239,12 +245,27 @@ def process_nzi_companies_details(
         tag_col=tag_col,
         tag_suffix=tag_suffix
     )
-    companies_df = add_investor_type_flag(
-        companies_df,
+    for investor_type in INVESTOR_TYPES_TO_ADD + INVESTOR_BOOLEAN_FLAGS_TO_ADD:
+        companies_df = add_investor_type_flag(
+            companies_df,
+            processed_funding_round_df,
+            keep_suffix=keep_suffix,
+            investor_type=investor_type
+        )
+    project_finance_indicators_df = add_project_finance_indicators(
         processed_funding_round_df,
-        keep_suffix=keep_suffix,
-        investor_type='Government'
+        id_col='client_id_nzi',
+        round_type_col='round_type_nzi',
+        round_amount_usd_col='round_amount_usd_nzi',
     )
+    companies_df = companies_df.merge(
+        project_finance_indicators_df,
+        left_on='clientID',
+        right_on='client_id_nzi',
+        how='left'
+    )
+    companies_df.drop(columns=['client_id_nzi'], inplace=True)
+
     companies_df['trl_parsed_nzi'] = companies_df['trl'].apply(lambda x: x.get('label') if coerced_bool(x) else None)
     companies_df = filter_format_columns(companies_df, keep_suffix=keep_suffix)
     companies_df['linkedin_url_nzi_cleaned'] = companies_df['linkedin_url_nzi'].apply(
