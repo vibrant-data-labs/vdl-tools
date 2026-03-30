@@ -142,7 +142,6 @@ def add_project_finance_indicators(
     return project_finance_indicators_df
 
 
-
 def process_nzi_funding_rounds(
     funding_round_df: pd.DataFrame,
     processed_investor_df: pd.DataFrame,
