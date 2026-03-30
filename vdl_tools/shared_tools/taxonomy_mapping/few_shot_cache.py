@@ -63,8 +63,6 @@ class EntityActivityDictExamplesDict(BaseModel):
 
 
 class IsRelevant(BaseModel):
-    """Structured response: whether the entity is relevant to the activity/category."""
-
     is_relevant: bool
 
 
