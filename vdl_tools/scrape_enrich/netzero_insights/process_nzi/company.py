@@ -264,6 +264,7 @@ def process_nzi_companies_details(
         right_on='client_id_nzi',
         how='left'
     )
+    companies_df['has_project_finance_calced_nzi'] = companies_df['has_project_finance_calced_nzi'].fillna(False)
     companies_df.drop(columns=['client_id_nzi'], inplace=True)
 
     companies_df['trl_parsed_nzi'] = companies_df['trl'].apply(lambda x: x.get('label') if coerced_bool(x) else None)

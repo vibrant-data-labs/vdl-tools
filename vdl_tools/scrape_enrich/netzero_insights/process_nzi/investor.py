@@ -110,7 +110,7 @@ INVESTOR_TYPES_TO_ADD = [
     'Private Equity',
     'Venture Capital',
     'Non-Profit Organisation',
-    'Commercial Bank',
+    'Commercial Banks',
     'Investment Bank',
     'Bank',
     'Foundation',
@@ -119,7 +119,6 @@ INVESTOR_TYPES_TO_ADD = [
 
 INVESTOR_BOOLEAN_FLAGS_TO_ADD = [
     'strategic',
-
 ]
 
 
