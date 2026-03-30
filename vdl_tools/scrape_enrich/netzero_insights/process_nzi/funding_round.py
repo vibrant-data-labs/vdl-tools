@@ -1,6 +1,6 @@
 import pandas as pd
 from vdl_tools.shared_tools.tools.text_cleaning import camel_to_snake
-from vdl_tools.scrape_enrich.netzero_insights.process_nzi.investor import process_nzi_investors
+from vdl_tools.scrape_enrich.netzero_insights.process_nzi.investor import INVESTOR_TYPES_TO_ADD, INVESTOR_BOOLEAN_FLAGS_TO_ADD
 
 
 
@@ -56,20 +56,13 @@ def filter_format_columns(
 
 def add_investor_type_flag(
     funding_round_df: pd.DataFrame,
-    investor_df: pd.DataFrame,
+    processed_investor_df: pd.DataFrame,
     keep_suffix: str = '_nzi',
-    process_investors: bool = True,
     investor_type: str = 'Government',
 ) -> pd.DataFrame:
 
     investor_type_lower = investor_type.lower()
-    if process_investors:
-        processed_investor_df = process_nzi_investors(
-            investor_df,
-            keep_suffix=keep_suffix
-        )
-    else:
-        processed_investor_df = investor_df
+
     round_id_to_investor_id = []
     for _, row in funding_round_df.iterrows():
         for investor_id in row['roundInvestorIDs']:
@@ -104,19 +97,64 @@ def add_investor_type_flag(
     return funding_round_df
 
 
+def project_finance_indicators(
+    company_funding_rows,
+    round_type_col: str = 'roundType',
+    round_amount_usd_col: str = 'roundAmountUSD',
+):
+
+    number_of_rounds = company_funding_rows.shape[0]
+    project_finance_mask = company_funding_rows[round_type_col] == 'Project Finance'
+    project_finance_rows = company_funding_rows[project_finance_mask]
+    num_project_finance_deals = project_finance_rows.shape[0]
+    project_finance_raised = project_finance_rows[round_amount_usd_col].sum()
+    had_project_finance = num_project_finance_deals > 0
+    return {
+        "num_project_finance_deals_calced_nzi": num_project_finance_deals,
+        "project_finance_raised_calced_nzi": project_finance_raised,
+        "has_project_finance_calced_nzi": had_project_finance,
+        "ratio_rounds_project_finance_calced_nzi": num_project_finance_deals / number_of_rounds
+    }
+
+
+def add_project_finance_indicators(
+    funding_round_df: pd.DataFrame,
+    id_col: str = 'clientId',
+    round_type_col: str = 'roundType',
+    round_amount_usd_col: str = 'roundAmountUSD',
+) -> pd.DataFrame:
+    project_finance_indicators_values = (
+        funding_round_df.groupby(id_col)
+        .apply(
+            project_finance_indicators,
+            round_type_col=round_type_col,
+            round_amount_usd_col=round_amount_usd_col
+        )
+        .reset_index()
+        .values
+    )
+    project_finance_indicators_df = pd.DataFrame(
+        [
+            {id_col: x[0], **x[1]} for x in
+            project_finance_indicators_values
+        ]
+    )
+    return project_finance_indicators_df
+
+
 def process_nzi_funding_rounds(
     funding_round_df: pd.DataFrame,
-    investor_df: pd.DataFrame,
+    processed_investor_df: pd.DataFrame,
     keep_suffix: str = '_nzi',
-    process_investors: bool = True,
 ) -> pd.DataFrame:
 
-    funding_round_df = add_investor_type_flag(
-        funding_round_df,
-        investor_df,
-        keep_suffix=keep_suffix,
-        process_investors=process_investors,
-        investor_type='Government'
-    )
+    for investor_type in INVESTOR_TYPES_TO_ADD + INVESTOR_BOOLEAN_FLAGS_TO_ADD:
+        funding_round_df = add_investor_type_flag(
+            funding_round_df,
+            processed_investor_df,
+            keep_suffix=keep_suffix,
+            investor_type=investor_type
+        )
+
     funding_round_df = filter_format_columns(funding_round_df, keep_suffix=keep_suffix)
     return funding_round_df
