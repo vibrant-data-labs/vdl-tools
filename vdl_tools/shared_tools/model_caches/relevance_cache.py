@@ -1,5 +1,4 @@
 import math
-import logging
 from typing import Optional, Tuple, List, Dict, Any
 import json
 from pathlib import Path
@@ -77,15 +76,15 @@ class RelevanceCache(PromptResponseCacheSQL):
         formatted_text = self.prompt_format.format(text=text)
 
         # Use the updated get_completion function with logprobs support
-        return get_completion(
+        completion = get_completion(
             prompt=self.system_prompt,
             text=formatted_text,
             model=self.model,
-            logprobs=True,
-            top_logprobs=1,
+            top_logprobs=0,
+            include=["message.output_text.logprobs"],
             **kwargs
         )
-
+        return completion
     def _parse_prediction_and_probability(
         self,
         pred_text: str,
@@ -147,9 +146,17 @@ class RelevanceCache(PromptResponseCacheSQL):
         logprob = None
         if result.get('response_full'):
             try:
-                import json
                 response_full = json.loads(result['response_full'])
-                if (response_full.get('choices') and 
+                # New Responses API shape: output[].content[].logprobs[]
+                if (response_full.get('output') and
+                    len(response_full['output']) > 0 and
+                    response_full['output'][0].get('content') and
+                    len(response_full['output'][0]['content']) > 0 and
+                    response_full['output'][0]['content'][0].get('logprobs') and
+                    len(response_full['output'][0]['content'][0]['logprobs']) > 0):
+                    logprob = response_full['output'][0]['content'][0]['logprobs'][0]['logprob']
+                # Legacy Chat Completions shape: choices[].logprobs.content[]
+                elif (response_full.get('choices') and
                     len(response_full['choices']) > 0 and
                     response_full['choices'][0].get('logprobs') and
                     response_full['choices'][0]['logprobs'].get('content') and
@@ -161,9 +168,9 @@ class RelevanceCache(PromptResponseCacheSQL):
         return self._parse_prediction_and_probability(result['response_text'], logprob)
 
     def get_relevance(
-        self, 
-        given_id: str, 
-        text: str, 
+        self,
+        given_id: str,
+        text: str,
         use_cached_result: bool = True
     ) -> Tuple[Optional[int], Optional[float]]:
         """Get climate relevance prediction for a single text.
@@ -227,7 +234,7 @@ class RelevanceCache(PromptResponseCacheSQL):
             max_errors=max_errors,
         )
 
-        return {given_id: self._parse_stored_response(result) 
+        return {given_id: self._parse_stored_response(result)
                 for given_id, result in results.items()}
 
 
@@ -288,14 +295,14 @@ def generate_predictions(
 
     Examples
     --------
-    >>> import pandas as pd
-    >>> df = pd.DataFrame({
-    ...     'uuid': ['org_1', 'org_2'],
-    ...     'description': ['Solar panel manufacturer', 'Restaurant chain']
-    ... })
-    >>> predictions = generate_predictions(df, 'description', 'uuid')
-    >>> print(predictions)
-    {'org_1': (1, 0.95), 'org_2': (0, 0.98)}
+    import pandas as pd
+    df = pd.DataFrame({
+        "uuid": ["org_1", "org_2"],
+        "description": ["Solar panel manufacturer", "Restaurant chain"]
+    })
+    predictions = generate_predictions(df, 'description', 'uuid')
+    print(predictions)
+    # {'org_1': (1, 0.95), 'org_2': (0, 0.98)}
     """
 
     if 'prediction' in df.columns or 'probability' in df.columns:
@@ -346,3 +353,23 @@ def generate_predictions(
         df['probability'] = df[idn].map(lambda x: results.get(x, (None, None))[1])
 
         return df
+
+
+if __name__ == "__main__":
+    import pandas as pd
+    from vdl_tools.shared_tools.model_caches.climate_relevance_cache import CB_CD_MODEL_4OMINI, DEFAULT_CLIMATE_SYSTEM_PROMPT, DEFAULT_CLIMATE_PROMPT_FORMAT
+    df = pd.DataFrame({
+        "uuid": ["org_1", "org_2"],
+        "description": ["Solar panel manufacturer", "Restaurant chain"]
+    })
+    predictions = generate_predictions(
+        df, 'description', 'uuid',
+        model=CB_CD_MODEL_4OMINI,
+        system_prompt=DEFAULT_CLIMATE_SYSTEM_PROMPT,
+        prompt_format=DEFAULT_CLIMATE_PROMPT_FORMAT,
+        prompt_name="climate_relevance_classification",
+        max_workers=1,
+        n_per_commit=50,
+        use_cached_results=False,
+    )
+    print(predictions)

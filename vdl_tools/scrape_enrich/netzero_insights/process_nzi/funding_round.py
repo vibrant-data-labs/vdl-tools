@@ -35,6 +35,14 @@ FUNDING_ROUND_COLUMNS = [
     "roundNews",
 ]
 
+
+ACQUISITION_ROUND_TYPES = {
+    'Merger',
+    "Acquisition",
+    "Buyout",
+}
+
+
 def filter_format_columns(
   funding_round_df,
   keep_suffix="_nzi",
@@ -140,6 +148,35 @@ def add_project_finance_indicators(
         ]
     )
     return project_finance_indicators_df
+
+
+def was_acquired_merged(
+    company_funding_rows,
+    round_type_col: str = 'roundType',
+):
+    company_round_types = company_funding_rows[round_type_col].values
+    company_acquisition_events = ACQUISITION_ROUND_TYPES.intersection(company_round_types)
+    return len(company_acquisition_events) > 0
+
+def add_acquisition_indicators(
+    funding_round_df: pd.DataFrame,
+    id_col: str = 'clientId',
+    round_type_col: str = 'roundType',
+) -> pd.DataFrame:
+    acquisition_indicators_values = (
+        funding_round_df.groupby(id_col)
+        .apply(
+            was_acquired_merged,
+            round_type_col=round_type_col,
+        )
+        .reset_index()
+        .values
+    )
+    acquisition_indicators_df = pd.DataFrame(
+        {id_col: x[0], 'was_acquired_merged_calced_nzi': x[1]} for x in
+        acquisition_indicators_values
+    )
+    return acquisition_indicators_df
 
 
 def process_nzi_funding_rounds(

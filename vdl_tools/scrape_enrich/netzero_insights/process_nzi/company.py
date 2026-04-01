@@ -5,7 +5,11 @@ import pandas as pd
 from vdl_tools.shared_tools.tools.text_cleaning import camel_to_snake
 from vdl_tools.shared_tools.tools.falsey_checks import coerced_bool
 from vdl_tools.scrape_enrich.netzero_insights.process_nzi.investor import INVESTOR_TYPES_TO_ADD, INVESTOR_BOOLEAN_FLAGS_TO_ADD
-from vdl_tools.scrape_enrich.netzero_insights.process_nzi.funding_round import add_project_finance_indicators
+from vdl_tools.scrape_enrich.netzero_insights.process_nzi.funding_round import (
+    add_acquisition_indicators,
+    add_project_finance_indicators,
+)
+
 
 BANNED_LINKEDIN_URLS = [
     'https://www.linkedin.com/company/pitchbook'
@@ -231,6 +235,50 @@ def add_investor_type_flag(
 
     return companies_df
 
+
+def add_company_project_finance_indicators(
+    companies_df: pd.DataFrame,
+    processed_funding_round_df: pd.DataFrame,
+) -> pd.DataFrame:
+    project_finance_indicators_df = add_project_finance_indicators(
+        processed_funding_round_df,
+        id_col='client_id_nzi',
+        round_type_col='round_type_nzi',
+        round_amount_usd_col='round_amount_usd_nzi',
+    )
+    companies_df = companies_df.merge(
+        project_finance_indicators_df,
+        left_on='clientID',
+        right_on='client_id_nzi',
+        how='left'
+    )
+    companies_df['has_project_finance_calced_nzi'] = companies_df['has_project_finance_calced_nzi'].fillna(False)
+    companies_df.drop(columns=['client_id_nzi'], inplace=True)
+
+    return companies_df
+
+
+def add_company_acquisition_indicators(
+    companies_df: pd.DataFrame,
+    processed_funding_round_df: pd.DataFrame,
+) -> pd.DataFrame:
+    acquisition_indicators_df = add_acquisition_indicators(
+        processed_funding_round_df,
+        id_col='client_id_nzi',
+        round_type_col='round_type_nzi',
+    )
+    companies_df = companies_df.merge(
+        acquisition_indicators_df,
+        left_on='clientID',
+        right_on='client_id_nzi',
+        how='left'
+    )
+    companies_df['was_acquired_merged_calced_nzi'] = companies_df['was_acquired_merged_calced_nzi'].fillna(False)
+    companies_df.drop(columns=['client_id_nzi'], inplace=True)
+
+    return companies_df
+
+
 def process_nzi_companies_details(
     companies_df: pd.DataFrame,
     processed_funding_round_df: pd.DataFrame,
@@ -252,20 +300,15 @@ def process_nzi_companies_details(
             keep_suffix=keep_suffix,
             investor_type=investor_type
         )
-    project_finance_indicators_df = add_project_finance_indicators(
+
+    companies_df = add_company_project_finance_indicators(
+        companies_df,
         processed_funding_round_df,
-        id_col='client_id_nzi',
-        round_type_col='round_type_nzi',
-        round_amount_usd_col='round_amount_usd_nzi',
     )
-    companies_df = companies_df.merge(
-        project_finance_indicators_df,
-        left_on='clientID',
-        right_on='client_id_nzi',
-        how='left'
+    companies_df = add_company_acquisition_indicators(
+        companies_df,
+        processed_funding_round_df,
     )
-    companies_df['has_project_finance_calced_nzi'] = companies_df['has_project_finance_calced_nzi'].fillna(False)
-    companies_df.drop(columns=['client_id_nzi'], inplace=True)
 
     companies_df['trl_parsed_nzi'] = companies_df['trl'].apply(lambda x: x.get('label') if coerced_bool(x) else None)
     companies_df = filter_format_columns(companies_df, keep_suffix=keep_suffix)

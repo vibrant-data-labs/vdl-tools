@@ -690,6 +690,7 @@ class PromptResponseCacheSQL():
 
         def _get_completion_store(given_id_text):
             given_id, text = given_id_text
+
             response, error = self.get_completion_catch_error(
                 prompt_str=self.prompt.prompt_str,
                 text=text,
