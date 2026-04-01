@@ -391,12 +391,17 @@ def load_ed_taxonomy(
     sols_df = pd.read_excel(taxonomy_path, sheet_name="level2")
     subsols_df = pd.read_excel(taxonomy_path, sheet_name="level3")
 
+    # Split out exclusionary rules so retrieval uses only positive descriptions
+    for df in [pillar_df, sub_df, sols_df, subsols_df]:
+        df['retrieval_definition'] = df['expanded_definition'].apply(
+            lambda x: x.split('Exclusionary Rule:')[0].strip() if isinstance(x, str) else x
+        )
 
     taxonomy = [
-        {'level': 0, 'name': 'level0', 'data': pillar_df, 'textattr': 'expanded_definition'},
-        {'level': 1, 'name': 'level1', 'data': sub_df, 'textattr': 'expanded_definition'},
-        {'level': 2, 'name': 'level2', 'data': sols_df, 'textattr': 'expanded_definition'},
-        {'level': 3, 'name': 'level3', 'data': subsols_df, 'textattr': 'expanded_definition'}
+        {'level': 0, 'name': 'level0', 'data': pillar_df, 'textattr': 'expanded_definition', 'retrieval_textattr': 'retrieval_definition'},
+        {'level': 1, 'name': 'level1', 'data': sub_df, 'textattr': 'expanded_definition', 'retrieval_textattr': 'retrieval_definition'},
+        {'level': 2, 'name': 'level2', 'data': sols_df, 'textattr': 'expanded_definition', 'retrieval_textattr': 'retrieval_definition'},
+        {'level': 3, 'name': 'level3', 'data': subsols_df, 'textattr': 'expanded_definition', 'retrieval_textattr': 'retrieval_definition'},
     ]
     return taxonomy
 
