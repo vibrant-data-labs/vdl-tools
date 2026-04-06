@@ -231,9 +231,14 @@ def _split_on_first_late_round(company_funding_rows, stages):
     # Determine post-equity bucket
     exit = _slice_or_none(company_funding_rows, exit_start, last_idx) if exit_start is not None else None
 
-    # If nothing was classified into any bucket, put everything in the appropriate
-    # "remainder" — but only if there are equity/grant rounds
+    # If no boundary-defining round types were found but the company passed
+    # the equity gate, treat all rows as early stage — these companies have
+    # equity/grant funding through non-standard types (e.g. Equity crowdfunding,
+    # Accelerator) and never reached a named venture round.
     if early is None and middle is None and late is None and exit is None:
+        has_any_boundary = stages.notna().any()
+        if not has_any_boundary:
+            return company_funding_rows, None, None, None
         return None, None, None, None
 
     return early, middle, late, exit
@@ -289,6 +294,9 @@ def _split_after_last_early_round(company_funding_rows, stages):
     exit = _slice_or_none(company_funding_rows, exit_start, last_idx) if exit_start is not None else None
 
     if early is None and middle is None and late is None and exit is None:
+        has_any_boundary = stages.notna().any()
+        if not has_any_boundary:
+            return company_funding_rows, None, None, None
         return None, None, None, None
 
     return early, middle, late, exit

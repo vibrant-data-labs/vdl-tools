@@ -982,3 +982,80 @@ def test_middle_stage_buyout_after_series_b_and_c():
     assert middle["round_type_nzi"].tolist() == ["Series B"]
     assert late["round_type_nzi"].tolist() == ["Series C", "Series C"]
     assert exit_rows["round_type_nzi"].tolist() == ["Buyout"]
+
+
+def test_no_boundary_rounds_defaults_to_early():
+    """Based on Company 15: Equity crowdfunding, Grants, Accelerators, Awards only.
+    No standard venture round types, but has equity financing.
+    All rounds should default to the early bucket."""
+    company_funding_rows = make_company_funding_rows([
+        {
+            "round_date_nzi": pd.Timestamp("2012-12-01"),
+            "round_type_nzi": "Accelerator/Incubator",
+            "financing_type_nzi": "Other",
+        },
+        {
+            "round_date_nzi": pd.Timestamp("2018-05-20"),
+            "round_type_nzi": "Product crowdfunding",
+            "financing_type_nzi": "Other",
+        },
+        {
+            "round_date_nzi": pd.Timestamp("2021-05-11"),
+            "round_type_nzi": "Grant",
+            "financing_type_nzi": "Grant",
+        },
+        {
+            "round_date_nzi": pd.Timestamp("2022-05-06"),
+            "round_type_nzi": "Equity crowdfunding",
+            "financing_type_nzi": "Equity",
+        },
+        {
+            "round_date_nzi": pd.Timestamp("2022-12-01"),
+            "round_type_nzi": "Award/Prize",
+            "financing_type_nzi": "Grant",
+        },
+        {
+            "round_date_nzi": pd.Timestamp("2024-07-03"),
+            "round_type_nzi": "Grant",
+            "financing_type_nzi": "Grant",
+        },
+    ])
+
+    early, middle, late, exit_rows = divide_funding_rows(
+        company_funding_rows,
+        split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
+    )
+
+    assert early["round_type_nzi"].tolist() == [
+        "Accelerator/Incubator", "Product crowdfunding", "Grant",
+        "Equity crowdfunding", "Award/Prize", "Grant",
+    ]
+    assert middle is None
+    assert late is None
+    assert exit_rows is None
+
+
+def test_no_boundary_rounds_defaults_to_early_with_split_after_last():
+    """Same as above but with SPLIT_AFTER_LAST_EARLY_ROUND strategy."""
+    company_funding_rows = make_company_funding_rows([
+        {
+            "round_date_nzi": pd.Timestamp("2021-05-11"),
+            "round_type_nzi": "Grant",
+            "financing_type_nzi": "Grant",
+        },
+        {
+            "round_date_nzi": pd.Timestamp("2022-05-06"),
+            "round_type_nzi": "Equity crowdfunding",
+            "financing_type_nzi": "Equity",
+        },
+    ])
+
+    early, middle, late, exit_rows = divide_funding_rows(
+        company_funding_rows,
+        split_strategy=SPLIT_AFTER_LAST_EARLY_ROUND,
+    )
+
+    assert early["round_type_nzi"].tolist() == ["Grant", "Equity crowdfunding"]
+    assert middle is None
+    assert late is None
+    assert exit_rows is None
