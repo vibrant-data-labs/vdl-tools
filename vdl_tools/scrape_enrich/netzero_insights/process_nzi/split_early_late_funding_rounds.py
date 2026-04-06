@@ -20,8 +20,10 @@ LATE_VC_CUTOFF = "Series B"
 DISCLOSED_STAGES_ORDERED = [
     "Pre-Seed",
     "Seed",
+    "Early VC",
     "Series A",
     "Series B",
+    "Late VC",
     "Series C",
     "Series D",
     "Series E",
@@ -48,113 +50,256 @@ SPLIT_AFTER_LAST_EARLY_ROUND = "after_last_early_round"
 
 TWO_YEARS_IN_DAYS = 365 * 2
 
+# Stage classification sets — only equity venture rounds define boundaries
+EARLY_STAGE_TYPES = {
+    "Pre-Seed",
+    "Seed",
+    "Early VC",
+    "Series A",
+}
+
+MIDDLE_STAGE_TYPES = {
+    "Series B",
+    "Late VC",
+}
+
+LATE_STAGE_TYPES = {
+    "Series C",
+    "Series D",
+    "Series E",
+    "Series F",
+    "Series G",
+    "Series H",
+    "Series I",
+    "Series J",
+    "Growth equity",
+}
+
+EXIT_TYPES = {
+    "IPO",
+    "SPAC",
+    "Post IPO",
+    "Post IPO - Equity",
+    "Merger",
+    "Acquisition",
+    "Buyout",
+}
+
+
+def _get_effective_stage(round_type):
+    """Returns 'early', 'middle', 'late', 'exit', or None for non-boundary types."""
+    if round_type in EARLY_STAGE_TYPES:
+        return "early"
+    if round_type in MIDDLE_STAGE_TYPES:
+        return "middle"
+    if round_type in LATE_STAGE_TYPES:
+        return "late"
+    if round_type in EXIT_TYPES:
+        return "exit"
+    return None
+
+
+STAGE_ORDER = {"early": 0, "middle": 1, "late": 2, "exit": 3}
+
+
 def raised_equity_round(company_funding_rows):
     financing_types = company_funding_rows['financing_type_nzi'].values
-    if"Equity" in financing_types:
+    if "Equity" in financing_types:
         return True
     if "Grant" in financing_types:
         return True
     return False
 
 
-def _get_late_stage_end_index(company_funding_rows, max_late_vc_stage):
-    after_max_late_vc_types = DISCLOSED_STAGES_ORDERED[
-        DISCLOSED_STAGES_ORDERED.index(max_late_vc_stage) + 1:
-    ]
-    after_max_late_vc = company_funding_rows[
-        company_funding_rows['round_type_nzi'].isin(after_max_late_vc_types)
-    ]
-    if after_max_late_vc.shape[0] > 0:
-        return after_max_late_vc.index[0] - 1
-
-    return len(company_funding_rows) - 1
-
-
-
 def divide_funding_rows(
     company_funding_rows,
-    early_vc_cutoff="Series A",
-    max_late_vc_stage="Series B",
     split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
 ):
+    """Split a company's funding rounds into Early, Middle, Late, and Exit buckets.
 
+    Returns (early, middle, late, exit) where each is a DataFrame or None.
+    Exit includes both IPO/SPAC/Post-IPO and M&A events (Acquisition, Merger, Buyout).
+    Only equity venture round types define stage boundaries; all other round types
+    are absorbed into whichever bucket they fall into chronologically.
+    """
     if not raised_equity_round(company_funding_rows):
-        return None, None, None
+        return None, None, None, None
 
     company_funding_rows = company_funding_rows.copy()
-
     company_funding_rows = company_funding_rows[company_funding_rows['round_date_nzi'].notna()]
     company_funding_rows = company_funding_rows.sort_values(by='round_date_nzi', ascending=True)
-
     company_funding_rows = company_funding_rows.reset_index(drop=True)
 
+    if len(company_funding_rows) == 0:
+        return None, None, None, None
+
+    stages = company_funding_rows['round_type_nzi'].map(_get_effective_stage)
+
     if split_strategy == SPLIT_ON_FIRST_LATE_ROUND:
-        late_vc_types = DISCLOSED_STAGES_ORDERED[
-            DISCLOSED_STAGES_ORDERED.index(early_vc_cutoff) + 1:
-        ]
-        early_vc_types = DISCLOSED_STAGES_ORDERED[
-            :DISCLOSED_STAGES_ORDERED.index(early_vc_cutoff) + 1
-        ] + ["Early VC"]
-
-        # Early stage continues until the first late venture round appears.
-        late_stage_start_rows = company_funding_rows[
-            company_funding_rows['round_type_nzi'].isin(late_vc_types + ["Late VC"])
-        ]
-        if late_stage_start_rows.shape[0] == 0:
-            if company_funding_rows['round_type_nzi'].isin(early_vc_types).any():
-                return company_funding_rows, None, None
-            return None, None, company_funding_rows
-
-        late_stage_start_index = late_stage_start_rows.index[0]
-        early_stage_end_index = late_stage_start_index - 1
-
-        if early_stage_end_index < 0:
-            return None, None, company_funding_rows
-
-        early_candidate_rows = company_funding_rows.loc[:early_stage_end_index]
-        if not early_candidate_rows['round_type_nzi'].isin(early_vc_types).any():
-            return None, None, company_funding_rows
+        return _split_on_first_late_round(company_funding_rows, stages)
     elif split_strategy == SPLIT_AFTER_LAST_EARLY_ROUND:
-        raise NotImplementedError("Split after last early round is not implemented")
-        # early_stage_anchor_types = [early_vc_cutoff]
-        # if early_vc_cutoff == "Series A":
-        #     early_stage_anchor_types.append("Early VC")
-
-        # early_stage_anchor_rows = company_funding_rows[
-        #     company_funding_rows['round_type_nzi'].isin(early_stage_anchor_types)
-        # ]
-        # # No early stage anchor rows found meaning no early stage funding
-        # if early_stage_anchor_rows.shape[0] == 0:
-        #     return None, None
-
-        # early_stage_end_index = early_stage_anchor_rows.index[-1]
-        # late_stage_start_index = early_stage_end_index + 1
-        # # No late stage anchor rows found meaning no late stage funding
-        # if late_stage_start_index >= len(company_funding_rows):
-        #     early_stage_funding_rows = company_funding_rows.iloc[:early_stage_end_index]
-        #     return early_stage_funding_rows, None
+        return _split_after_last_early_round(company_funding_rows, stages)
     else:
         raise ValueError(
             "split_strategy must be "
             f"'{SPLIT_ON_FIRST_LATE_ROUND}' or '{SPLIT_AFTER_LAST_EARLY_ROUND}'"
         )
 
-    late_stage_end_index = _get_late_stage_end_index(
-        company_funding_rows=company_funding_rows,
-        max_late_vc_stage=max_late_vc_stage,
-    )
-    if late_stage_end_index < late_stage_start_index:
-        early_stage_funding_rows = company_funding_rows.loc[:early_stage_end_index]
-        after_late_stage_funding_rows = company_funding_rows.loc[late_stage_start_index:]
-        return early_stage_funding_rows, None, after_late_stage_funding_rows
 
-    early_stage_funding_rows = company_funding_rows.loc[:early_stage_end_index]
-    after_max_late_vc_funding_rows = company_funding_rows.loc[
-        late_stage_start_index:late_stage_end_index
-    ]
-    after_late_stage_end_index_funding_rows = company_funding_rows.loc[late_stage_end_index + 1:]
+def _find_first_index_at_or_above(stages, min_stage):
+    """Find the first index where the effective stage is >= min_stage."""
+    min_order = STAGE_ORDER[min_stage]
+    for idx, stage in stages.items():
+        if stage is not None and STAGE_ORDER.get(stage, -1) >= min_order:
+            return idx
+    return None
 
-    return early_stage_funding_rows, after_max_late_vc_funding_rows, after_late_stage_end_index_funding_rows
+
+def _find_last_index_at_stage(stages, target_stage):
+    """Find the last index where the effective stage equals target_stage."""
+    last = None
+    for idx, stage in stages.items():
+        if stage == target_stage:
+            last = idx
+    return last
+
+
+def _has_stage_in_range(stages, target_stage, start_idx, end_idx):
+    """Check if any row in [start_idx, end_idx] has the given effective stage."""
+    for idx in range(start_idx, end_idx + 1):
+        if idx in stages.index and stages[idx] == target_stage:
+            return True
+    return False
+
+
+def _slice_or_none(df, start_idx, end_idx):
+    """Return df.loc[start:end] or None if the slice would be empty."""
+    if start_idx is None or end_idx is None or start_idx > end_idx:
+        return None
+    result = df.loc[start_idx:end_idx]
+    if len(result) == 0:
+        return None
+    return result
+
+
+def _split_on_first_late_round(company_funding_rows, stages):
+    """Split where each stage begins at the first occurrence of that stage's round type."""
+    n = len(company_funding_rows)
+    last_idx = n - 1
+
+    # Find boundary indices (first occurrence of each stage or higher)
+    middle_start = _find_first_index_at_or_above(stages, "middle")
+    late_start = _find_first_index_at_or_above(stages, "late")
+    exit_start = _find_first_index_at_or_above(stages, "exit")
+
+    # Determine early bucket
+    early_end = None
+    if middle_start is not None:
+        early_end = middle_start - 1
+    elif late_start is not None:
+        early_end = late_start - 1
+    elif exit_start is not None:
+        early_end = exit_start - 1
+    else:
+        # No middle/late/exit found — everything is potentially early
+        early_end = last_idx
+
+    # Only emit early if there's at least one early-stage round in the range
+    has_early = early_end >= 0 and _has_stage_in_range(stages, "early", 0, early_end)
+    early = _slice_or_none(company_funding_rows, 0, early_end) if has_early else None
+
+    # Determine middle bucket
+    if middle_start is not None:
+        middle_end = last_idx
+        if late_start is not None:
+            middle_end = late_start - 1
+        elif exit_start is not None:
+            middle_end = exit_start - 1
+        middle = _slice_or_none(company_funding_rows, middle_start, middle_end)
+    else:
+        middle = None
+
+    # Determine late bucket
+    if late_start is not None:
+        late_end = last_idx
+        if exit_start is not None:
+            late_end = exit_start - 1
+        late = _slice_or_none(company_funding_rows, late_start, late_end)
+    else:
+        late = None
+
+    # Determine post-equity bucket
+    exit = _slice_or_none(company_funding_rows, exit_start, last_idx) if exit_start is not None else None
+
+    # If no boundary-defining round types were found but the company passed
+    # the equity gate, treat all rows as early stage — these companies have
+    # equity/grant funding through non-standard types (e.g. Equity crowdfunding,
+    # Accelerator) and never reached a named venture round.
+    if early is None and middle is None and late is None and exit is None:
+        has_any_boundary = stages.notna().any()
+        if not has_any_boundary:
+            return company_funding_rows, None, None, None
+        return None, None, None, None
+
+    return early, middle, late, exit
+
+
+def _split_after_last_early_round(company_funding_rows, stages):
+    """Split where early stage extends through the last early-stage round."""
+    n = len(company_funding_rows)
+    last_idx = n - 1
+
+    last_early = _find_last_index_at_stage(stages, "early")
+
+    # Find boundary for late and post-equity using first occurrence
+    late_start = _find_first_index_at_or_above(stages, "late")
+    exit_start = _find_first_index_at_or_above(stages, "exit")
+
+    # Early bucket: everything up to and including the last early-stage round
+    if last_early is not None:
+        early = _slice_or_none(company_funding_rows, 0, last_early)
+        middle_start = last_early + 1
+    else:
+        early = None
+        # No early rounds — check if there are middle rounds
+        first_middle = _find_first_index_at_or_above(stages, "middle")
+        if first_middle is not None:
+            middle_start = first_middle
+        elif late_start is not None:
+            middle_start = None  # skip middle
+        else:
+            middle_start = None
+
+    # Middle bucket
+    if middle_start is not None and middle_start <= last_idx:
+        middle_end = last_idx
+        if late_start is not None and late_start > middle_start:
+            middle_end = late_start - 1
+        elif exit_start is not None and exit_start > middle_start:
+            middle_end = exit_start - 1
+        middle = _slice_or_none(company_funding_rows, middle_start, middle_end)
+    else:
+        middle = None
+
+    # Late bucket
+    if late_start is not None:
+        late_end = last_idx
+        if exit_start is not None:
+            late_end = exit_start - 1
+        late = _slice_or_none(company_funding_rows, late_start, late_end)
+    else:
+        late = None
+
+    # Post-equity bucket
+    exit = _slice_or_none(company_funding_rows, exit_start, last_idx) if exit_start is not None else None
+
+    if early is None and middle is None and late is None and exit is None:
+        has_any_boundary = stages.notna().any()
+        if not has_any_boundary:
+            return company_funding_rows, None, None, None
+        return None, None, None, None
+
+    return early, middle, late, exit
 
 
 def project_finance_indicators(company_funding_rows):
