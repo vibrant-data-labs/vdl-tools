@@ -46,15 +46,15 @@ from vdl_tools.scrape_enrich.netzero_insights.process_nzi.split_early_late_fundi
 
 STAGE_FAILURE_MAP = {
     "Grant": {
-        "at_stage_round_types": ["Grant", "Pre-Seed", "Seed"],
+        "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed", "Seed"],
         "graduation_stages": ["Series A", "Early VC"],
     },
     "Pre-Seed": {
-        "at_stage_round_types": ["Grant", "Pre-Seed", "Seed"],
+        "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed", "Seed"],
         "graduation_stages": ["Series A", "Early VC"],
     },
     "Seed": {
-        "at_stage_round_types": ["Grant", "Pre-Seed", "Seed"],
+        "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed", "Seed"],
         "graduation_stages": ["Series A", "Early VC"],
     },
     "Series A": {
@@ -62,7 +62,7 @@ STAGE_FAILURE_MAP = {
         "graduation_stages": ["Series B"],
     },
     "Early VC": {
-        "at_stage_round_types": ["Series A", "Early VC", "Grant", "Pre-Seed", "Seed"],
+        "at_stage_round_types": ["Series A", "Early VC", "Accelerator/incubator", "Grant", "Pre-Seed", "Seed"],
         "graduation_stages": ["Series B"],
     },
     "Series B": {

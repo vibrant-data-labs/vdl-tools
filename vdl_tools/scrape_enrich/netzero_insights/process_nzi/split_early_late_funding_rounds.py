@@ -6,7 +6,6 @@ def did_raise_venture(company_funding_rows):
 
 M_AND_A_SUCCESS_STAGE = "Series A"
 
-# Leaving out Grant because it's not a venture round
 EARLY_VC_STAGES = [
     "Early VC",
     "Pre-Seed",
@@ -18,6 +17,8 @@ EARLY_VC_STAGES = [
 LATE_VC_CUTOFF = "Series B"
 
 DISCLOSED_STAGES_ORDERED = [
+    "Accelerator/incubator",
+    "Grant",
     "Pre-Seed",
     "Seed",
     "Early VC",
@@ -107,6 +108,9 @@ def raised_equity_round(company_funding_rows):
     if "Equity" in financing_types:
         return True
     if "Grant" in financing_types:
+        return True
+    round_types = company_funding_rows['round_type_nzi'].values
+    if "Accelerator/incubator" in round_types:
         return True
     return False
 
