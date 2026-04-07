@@ -346,7 +346,7 @@ class TestCompareSurvivalRates:
         companies_with_flag = ALL_COMPANIES.copy()
         companies_with_flag["is_treated"] = [True, False, True, False, True, False, True, False]
 
-        observed_diff, random_diffs = compare_survival_rates(
+        observed_diff, random_diffs, obs_true, obs_false = compare_survival_rates(
             ALL_FUNDING_ROUNDS,
             companies_with_flag,
             comparison_column="is_treated",
@@ -355,6 +355,8 @@ class TestCompareSurvivalRates:
         assert isinstance(observed_diff, float)
         assert len(random_diffs) == 5
         assert all(isinstance(d, float) for d in random_diffs)
+        assert "overall_expected_survival_rate" in obs_true
+        assert "overall_expected_survival_rate" in obs_false
 
     @patch(DATETIME_PATCH_TARGET)
     def test_ratio_mode(self, mock_dt):
@@ -362,7 +364,7 @@ class TestCompareSurvivalRates:
         companies_with_flag = ALL_COMPANIES.copy()
         companies_with_flag["is_treated"] = [True, False, True, False, True, False, True, False]
 
-        observed_diff, random_diffs = compare_survival_rates(
+        observed_diff, random_diffs, _, _ = compare_survival_rates(
             ALL_FUNDING_ROUNDS,
             companies_with_flag,
             comparison_column="is_treated",
@@ -380,7 +382,7 @@ class TestCompareSurvivalRates:
         companies_with_flag["is_treated"] = [True, True, True, True, False, False, False, False]
 
         np.random.seed(42)
-        obs1, rand1 = compare_survival_rates(
+        obs1, rand1, _, _ = compare_survival_rates(
             ALL_FUNDING_ROUNDS,
             companies_with_flag,
             comparison_column="is_treated",
@@ -388,7 +390,7 @@ class TestCompareSurvivalRates:
         )
 
         np.random.seed(42)
-        obs2, rand2 = compare_survival_rates(
+        obs2, rand2, _, _ = compare_survival_rates(
             ALL_FUNDING_ROUNDS,
             companies_with_flag,
             comparison_column="is_treated",

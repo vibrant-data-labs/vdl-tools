@@ -439,6 +439,11 @@ def compare_survival_rates(
         ]
 
     title = title or f"Survival Rates vs Random {comparison_column}"
+    if annotation_title is None:
+        annotation_title = f"Observed Difference: {observed_difference:.4f}"
+    else:
+        annotation_title = f"{annotation_title} ({observed_difference:.4f})"
+
     if plot:
         fig = create_plot_get_metrics(
             differences=random_differences,
