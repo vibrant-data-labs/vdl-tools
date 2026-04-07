@@ -132,6 +132,26 @@ GRANT_ONLY = make_rows([
     {"round_date_nzi": pd.Timestamp("2021-01-01"), "round_type_nzi": "Grant", "financing_type_nzi": "Grant"},
 ])
 
+GRANT_ONLY_RECENT = make_rows([
+    {"round_date_nzi": pd.Timestamp("2025-06-01"), "round_type_nzi": "Grant", "financing_type_nzi": "Grant"},
+])
+
+ACCELERATOR_ONLY_STALE = make_rows([
+    {"round_date_nzi": pd.Timestamp("2020-01-01"), "round_type_nzi": "Accelerator/incubator", "financing_type_nzi": "Other"},
+])
+
+ACCELERATOR_PLUS_GRANT_STALE = make_rows([
+    {"round_date_nzi": pd.Timestamp("2020-01-01"), "round_type_nzi": "Accelerator/incubator", "financing_type_nzi": "Other"},
+    {"round_date_nzi": pd.Timestamp("2021-08-01"), "round_type_nzi": "Grant", "financing_type_nzi": "Grant"},
+    {"round_date_nzi": pd.Timestamp("2022-01-18"), "round_type_nzi": "Grant", "financing_type_nzi": "Grant"},
+])
+
+ACCELERATOR_TO_SERIES_B = make_rows([
+    {"round_date_nzi": pd.Timestamp("2018-01-01"), "round_type_nzi": "Accelerator/incubator", "financing_type_nzi": "Other"},
+    {"round_date_nzi": pd.Timestamp("2019-01-01"), "round_type_nzi": "Seed", "financing_type_nzi": "Equity"},
+    {"round_date_nzi": pd.Timestamp("2021-01-01"), "round_type_nzi": "Series B", "financing_type_nzi": "Equity"},
+])
+
 
 # ---------------------------------------------------------------------------
 # Company row fixtures (mimic company details records)
@@ -153,6 +173,9 @@ class TestRaisedEquityRound:
 
     def test_grant_returns_true(self):
         assert raised_equity_round(GRANT_ONLY) is True
+
+    def test_accelerator_returns_true(self):
+        assert raised_equity_round(ACCELERATOR_ONLY_STALE) is True
 
     def test_debt_only_returns_false(self):
         assert raised_equity_round(DEBT_ONLY) is False
@@ -176,6 +199,12 @@ class TestRaisedStageOrEarlier:
             {"round_date_nzi": pd.Timestamp("2020-01-01"), "round_type_nzi": "Series D", "financing_type_nzi": "Equity"},
         ])
         assert raised_stage_or_earlier(rows, stages=["Series A"]) is False
+
+    def test_grant_matches_early_vc(self):
+        assert raised_stage_or_earlier(GRANT_ONLY, stages=["Early VC"]) is True
+
+    def test_accelerator_matches_early_vc(self):
+        assert raised_stage_or_earlier(ACCELERATOR_ONLY_STALE, stages=["Early VC"]) is True
 
     def test_no_disclosed_stages(self):
         assert raised_stage_or_earlier(DEBT_ONLY, stages=["Series A"]) is False
@@ -275,9 +304,17 @@ class TestDidCompanyFail:
         """Equity gate: debt-only company cannot fail."""
         assert did_company_fail(DEBT_ONLY, COMPANY_OPERATING) is False
 
-    def test_never_reached_focal_stage_returns_false(self):
-        """Stage gate: company with only grants can't fail at Early VC threshold."""
-        assert did_company_fail(GRANT_ONLY, COMPANY_OPERATING) is False
+    def test_grant_only_stale_is_failure(self):
+        """Grant-only company, stale for 2+ years → failure at Early VC threshold."""
+        with self._patch_now() as mock_dt:
+            mock_dt.now.return_value = FIXED_NOW
+            assert did_company_fail(GRANT_ONLY, COMPANY_OPERATING) is True
+
+    def test_grant_only_recent_not_failure(self):
+        """Grant-only company with recent funding → not yet classifiable."""
+        with self._patch_now() as mock_dt:
+            mock_dt.now.return_value = FIXED_NOW
+            assert did_company_fail(GRANT_ONLY_RECENT, COMPANY_OPERATING) is False
 
     def test_already_succeeded_returns_false(self):
         """Success override: Bowery succeeded past Series B."""
@@ -308,6 +345,24 @@ class TestDidCompanyFail:
         with self._patch_now() as mock_dt:
             mock_dt.now.return_value = FIXED_NOW
             assert did_company_fail(IPO_COMPANY, COMPANY_OPERATING) is False
+
+    def test_accelerator_only_stale_is_failure(self):
+        """Accelerator-only company, stale for 2+ years → failure."""
+        with self._patch_now() as mock_dt:
+            mock_dt.now.return_value = FIXED_NOW
+            assert did_company_fail(ACCELERATOR_ONLY_STALE, COMPANY_OPERATING) is True
+
+    def test_accelerator_plus_grant_stale_is_failure(self):
+        """Accelerator + Grant company, stale → failure (like client 65539)."""
+        with self._patch_now() as mock_dt:
+            mock_dt.now.return_value = FIXED_NOW
+            assert did_company_fail(ACCELERATOR_PLUS_GRANT_STALE, COMPANY_OPERATING) is True
+
+    def test_accelerator_to_series_b_succeeds(self):
+        """Company starting at accelerator that reached Series B → not failure."""
+        with self._patch_now() as mock_dt:
+            mock_dt.now.return_value = FIXED_NOW
+            assert did_company_fail(ACCELERATOR_TO_SERIES_B, COMPANY_OPERATING) is False
 
 
 class TestDidCompanyFailThresholds:
