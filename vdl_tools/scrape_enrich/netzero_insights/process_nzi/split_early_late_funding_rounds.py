@@ -1,8 +1,23 @@
 import datetime as dt
+import pandas as pd
 
 
 def did_raise_venture(company_funding_rows):
+    """Check whether a company has raised venture (equity) funding.
+
+    Parameters
+    ----------
+    company_funding_rows : pandas.DataFrame
+        Funding rounds for a single company. Must contain a
+        ``financing_type_nzi`` column.
+
+    Returns
+    -------
+    bool
+        True if any row has ``financing_type_nzi == "Equity"``.
+    """
     return "Equity" in company_funding_rows['financing_type_nzi'].values
+
 
 M_AND_A_SUCCESS_STAGE = "Series A"
 
@@ -88,7 +103,20 @@ EXIT_TYPES = {
 
 
 def _get_effective_stage(round_type):
-    """Returns 'early', 'middle', 'late', 'exit', or None for non-boundary types."""
+    """Map a NZI round type to its effective stage category.
+
+    Parameters
+    ----------
+    round_type : str
+        The ``round_type_nzi`` value for a single funding round (e.g.
+        ``"Series A"``, ``"IPO"``).
+
+    Returns
+    -------
+    str or None
+        One of ``"early"``, ``"middle"``, ``"late"``, ``"exit"``, or ``None``
+        if the round type does not define a stage boundary.
+    """
     if round_type in EARLY_STAGE_TYPES:
         return "early"
     if round_type in MIDDLE_STAGE_TYPES:
@@ -104,6 +132,23 @@ STAGE_ORDER = {"early": 0, "middle": 1, "late": 2, "exit": 3}
 
 
 def raised_equity_round(company_funding_rows):
+    """Check whether a company has raised equity, grant, or accelerator funding.
+
+    This is a broader gate than ``did_raise_venture``; it also counts grants
+    and accelerator/incubator rounds as qualifying equity-like funding.
+
+    Parameters
+    ----------
+    company_funding_rows : pandas.DataFrame
+        Funding rounds for a single company. Must contain
+        ``financing_type_nzi`` and ``round_type_nzi`` columns.
+
+    Returns
+    -------
+    bool
+        True if any row has ``financing_type_nzi`` of ``"Equity"`` or
+        ``"Grant"``, or ``round_type_nzi`` of ``"Accelerator/incubator"``.
+    """
     financing_types = company_funding_rows['financing_type_nzi'].values
     if "Equity" in financing_types:
         return True
@@ -119,15 +164,43 @@ def divide_funding_rows(
     company_funding_rows,
     split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
 ):
-    """Split a company's funding rounds into Early, Middle, Late, and Exit buckets.
+    """Split a company's funding rounds into early, middle, late, and exit buckets.
 
-    Returns (early, middle, late, exit) where each is a DataFrame or None.
-    Exit includes both IPO/SPAC/Post-IPO and M&A events (Acquisition, Merger, Buyout).
-    Only equity venture round types define stage boundaries; all other round types
-    are absorbed into whichever bucket they fall into chronologically.
+    Rounds are sorted chronologically and then partitioned using equity
+    venture round types as stage boundaries. Non-boundary round types
+    (e.g. debt, convertible notes) are absorbed into whichever bucket they
+    fall into chronologically. Companies that never raised equity-like
+    funding are skipped entirely.
+
+    Parameters
+    ----------
+    company_funding_rows : pandas.DataFrame
+        Funding rounds for a single company. Expected columns include
+        ``round_type_nzi``, ``round_date_nzi``, ``financing_type_nzi``,
+        and ``round_amount_usd_nzi``.
+    split_strategy : str, optional
+        How to determine bucket boundaries. One of:
+
+        - ``SPLIT_ON_FIRST_LATE_ROUND`` (default) — each stage begins at
+          the first occurrence of that stage's round type.
+        - ``SPLIT_AFTER_LAST_EARLY_ROUND`` — the early bucket extends
+          through the last early-stage round.
+
+    Returns
+    -------
+    dict of {str: pandas.DataFrame or None}
+        Keys are ``"early"``, ``"middle"``, ``"late"``, and ``"exit"``.
+        Values are the corresponding DataFrames, or ``None`` if the bucket
+        has no rounds. Exit includes IPO/SPAC/Post-IPO as well as M&A events
+        (Acquisition, Merger, Buyout).
+
+    Raises
+    ------
+    ValueError
+        If ``split_strategy`` is not a recognised value.
     """
     if not raised_equity_round(company_funding_rows):
-        return None, None, None, None
+        split = [None, None, None, None]
 
     company_funding_rows = company_funding_rows.copy()
     company_funding_rows = company_funding_rows[company_funding_rows['round_date_nzi'].notna()]
@@ -135,23 +208,124 @@ def divide_funding_rows(
     company_funding_rows = company_funding_rows.reset_index(drop=True)
 
     if len(company_funding_rows) == 0:
-        return None, None, None, None
+        split = [None, None, None, None]
 
     stages = company_funding_rows['round_type_nzi'].map(_get_effective_stage)
 
     if split_strategy == SPLIT_ON_FIRST_LATE_ROUND:
-        return _split_on_first_late_round(company_funding_rows, stages)
+        split = _split_on_first_late_round(company_funding_rows, stages)
     elif split_strategy == SPLIT_AFTER_LAST_EARLY_ROUND:
-        return _split_after_last_early_round(company_funding_rows, stages)
+        split = _split_after_last_early_round(company_funding_rows, stages)
     else:
         raise ValueError(
             "split_strategy must be "
             f"'{SPLIT_ON_FIRST_LATE_ROUND}' or '{SPLIT_AFTER_LAST_EARLY_ROUND}'"
         )
 
+    return {
+        "early": split[0],
+        "middle": split[1],
+        "late": split[2],
+        "exit": split[3],
+    }
+
+def divided_funding_rows_and_flatten(
+    processed_funding_rounds,
+    id_col="client_id_nzi"
+):
+    """Divide every company's funding rounds into stage buckets and flatten.
+
+    Groups ``processed_funding_rounds`` by company, calls
+    ``divide_funding_rows`` on each group, then summarises each stage
+    bucket into one row per company with aggregated metrics (date range,
+    total amount raised, round count, and early-stage investor type counts).
+
+    Parameters
+    ----------
+    processed_funding_rounds : pandas.DataFrame
+        All funding rounds across companies. Must include the columns
+        required by ``divide_funding_rows`` plus any ``has_*_investor_calced_nzi``
+        columns for investor type counting.
+    id_col : str, optional
+        Column name used to group rows by company. Defaults to
+        ``"client_id_nzi"``.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per company with columns prefixed by stage name (e.g.
+        ``early_first_round_date``, ``middle_amount_raised``,
+        ``late_num_rounds``, ``exit_last_round_date``). Early-stage rows
+        also include ``*_investor_calced_nzi_count`` columns.
+    """
+    divided_rounds = processed_funding_rounds.groupby(id_col).apply(
+        divide_funding_rows,
+        include_groups=False
+    )
+
+    investor_type_columns = [
+        x for x in processed_funding_rounds.columns
+        if x.startswith('has_') and x.endswith('_investor_calced_nzi')
+    ]
+
+    all_rows = []
+    for company_id, company_divided_rounds in divided_rounds.items():
+        company_round_groups_parsed = []
+        company_round_groups_parsed_dict = {}
+        for round_name, round_group_rounds in company_divided_rounds.items():
+            round_group_dict = {
+                "name": round_name,
+                "first_round_date": None,
+                "last_round_date": None,
+                "amount_raised": None,
+                "num_rounds": None,
+            }
+            if round_name == 'early':
+                round_group_dict.update({f"{col}_count": None for col in investor_type_columns})
+
+            if round_group_rounds is None:
+                company_round_groups_parsed.append(round_group_dict)
+                continue
+            round_group_dict["first_round_date"] = round_group_rounds['round_date_nzi'].min()
+            round_group_dict["last_round_date"] = round_group_rounds['round_date_nzi'].max()
+            round_group_dict["amount_raised"] = round_group_rounds['round_amount_usd_nzi'].sum()
+            round_group_dict["num_rounds"] = round_group_rounds['round_type_nzi'].count()
+            if round_name == 'early':
+                for investor_type_col in investor_type_columns:
+                    round_group_dict[f"{investor_type_col}_count"] = round_group_rounds[investor_type_col].sum()
+            company_round_groups_parsed.append(round_group_dict)
+
+        company_round_groups_parsed_dict = {
+            "client_id_nzi": company_id
+        }
+        for round_group_dict in company_round_groups_parsed:
+            for col, v in round_group_dict.items():
+                if col == 'name':
+                    continue
+                company_round_groups_parsed_dict[f"{round_group_dict['name']}_{col}"] = v
+        all_rows.append(company_round_groups_parsed_dict)
+    return pd.DataFrame(all_rows)
+
+
 
 def _find_first_index_at_or_above(stages, min_stage):
-    """Find the first index where the effective stage is >= min_stage."""
+    """Find the first index whose effective stage is at or above a threshold.
+
+    Parameters
+    ----------
+    stages : pandas.Series
+        Effective stage labels (values from ``_get_effective_stage``) indexed
+        to match the funding-rows DataFrame.
+    min_stage : str
+        Minimum stage to match, one of ``"early"``, ``"middle"``, ``"late"``,
+        ``"exit"``.
+
+    Returns
+    -------
+    int or None
+        The first DataFrame index where the stage order is >= ``min_stage``,
+        or ``None`` if no such index exists.
+    """
     min_order = STAGE_ORDER[min_stage]
     for idx, stage in stages.items():
         if stage is not None and STAGE_ORDER.get(stage, -1) >= min_order:
@@ -160,7 +334,21 @@ def _find_first_index_at_or_above(stages, min_stage):
 
 
 def _find_last_index_at_stage(stages, target_stage):
-    """Find the last index where the effective stage equals target_stage."""
+    """Find the last index whose effective stage matches exactly.
+
+    Parameters
+    ----------
+    stages : pandas.Series
+        Effective stage labels indexed to match the funding-rows DataFrame.
+    target_stage : str
+        Stage to match (e.g. ``"early"``).
+
+    Returns
+    -------
+    int or None
+        The last DataFrame index with ``stages[idx] == target_stage``, or
+        ``None`` if not found.
+    """
     last = None
     for idx, stage in stages.items():
         if stage == target_stage:
@@ -169,7 +357,24 @@ def _find_last_index_at_stage(stages, target_stage):
 
 
 def _has_stage_in_range(stages, target_stage, start_idx, end_idx):
-    """Check if any row in [start_idx, end_idx] has the given effective stage."""
+    """Check whether a stage appears within a contiguous index range.
+
+    Parameters
+    ----------
+    stages : pandas.Series
+        Effective stage labels indexed to match the funding-rows DataFrame.
+    target_stage : str
+        Stage to look for (e.g. ``"early"``).
+    start_idx : int
+        Inclusive start of the index range.
+    end_idx : int
+        Inclusive end of the index range.
+
+    Returns
+    -------
+    bool
+        True if any index in ``[start_idx, end_idx]`` has the target stage.
+    """
     for idx in range(start_idx, end_idx + 1):
         if idx in stages.index and stages[idx] == target_stage:
             return True
@@ -177,7 +382,23 @@ def _has_stage_in_range(stages, target_stage, start_idx, end_idx):
 
 
 def _slice_or_none(df, start_idx, end_idx):
-    """Return df.loc[start:end] or None if the slice would be empty."""
+    """Slice a DataFrame by label range, returning None for empty results.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The DataFrame to slice.
+    start_idx : int or None
+        Inclusive start label for ``df.loc``.
+    end_idx : int or None
+        Inclusive end label for ``df.loc``.
+
+    Returns
+    -------
+    pandas.DataFrame or None
+        The sliced DataFrame, or ``None`` if the inputs are ``None``,
+        ``start_idx > end_idx``, or the resulting slice is empty.
+    """
     if start_idx is None or end_idx is None or start_idx > end_idx:
         return None
     result = df.loc[start_idx:end_idx]
@@ -187,7 +408,30 @@ def _slice_or_none(df, start_idx, end_idx):
 
 
 def _split_on_first_late_round(company_funding_rows, stages):
-    """Split where each stage begins at the first occurrence of that stage's round type."""
+    """Split funding rounds so each bucket starts at the first occurrence of its stage.
+
+    Boundaries are drawn at the first round whose effective stage is
+    ``"middle"``, ``"late"``, or ``"exit"`` respectively. Everything before
+    the first middle-stage round is early, everything between middle and late
+    is middle, and so on. Non-boundary round types are absorbed into
+    whichever bucket they fall into chronologically.
+
+    Parameters
+    ----------
+    company_funding_rows : pandas.DataFrame
+        Chronologically sorted funding rounds for one company (already
+        filtered to rows with valid dates).
+    stages : pandas.Series
+        Effective stage label for each row, aligned with
+        ``company_funding_rows``.
+
+    Returns
+    -------
+    tuple of (pandas.DataFrame or None)
+        ``(early, middle, late, exit)``. If no boundary-defining rounds
+        exist but the company passed the equity gate, all rows are returned
+        as the early bucket.
+    """
     n = len(company_funding_rows)
     last_idx = n - 1
 
@@ -249,7 +493,30 @@ def _split_on_first_late_round(company_funding_rows, stages):
 
 
 def _split_after_last_early_round(company_funding_rows, stages):
-    """Split where early stage extends through the last early-stage round."""
+    """Split funding rounds so the early bucket extends through the last early-stage round.
+
+    Unlike ``_split_on_first_late_round``, the early bucket here includes
+    everything up to and including the **last** early-stage round (even if
+    middle or late rounds are interleaved). The middle bucket begins
+    immediately after, and late/exit boundaries are still drawn at the first
+    occurrence of those stage types.
+
+    Parameters
+    ----------
+    company_funding_rows : pandas.DataFrame
+        Chronologically sorted funding rounds for one company (already
+        filtered to rows with valid dates).
+    stages : pandas.Series
+        Effective stage label for each row, aligned with
+        ``company_funding_rows``.
+
+    Returns
+    -------
+    tuple of (pandas.DataFrame or None)
+        ``(early, middle, late, exit)``. If no boundary-defining rounds
+        exist but the company passed the equity gate, all rows are returned
+        as the early bucket.
+    """
     n = len(company_funding_rows)
     last_idx = n - 1
 
@@ -304,18 +571,3 @@ def _split_after_last_early_round(company_funding_rows, stages):
         return None, None, None, None
 
     return early, middle, late, exit
-
-
-def project_finance_indicators(company_funding_rows):
-    number_of_rounds = company_funding_rows.shape[0]
-    project_finance_mask = company_funding_rows['round_type_nzi'] == 'Project Finance'
-    project_finance_rows = company_funding_rows[project_finance_mask]
-    num_project_finance_deals = project_finance_rows.shape[0]
-    project_finance_raised = project_finance_rows['round_amount_usd_nzi'].sum()
-    had_project_finance = num_project_finance_deals > 0
-    return {
-        "num_project_finance_deals": num_project_finance_deals,
-        "project_finance_raised": project_finance_raised,
-        "had_project_finance": had_project_finance,
-        "ratio_rounds_project_finance": num_project_finance_deals / number_of_rounds
-    }
