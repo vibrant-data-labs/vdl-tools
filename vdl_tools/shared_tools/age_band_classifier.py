@@ -7,17 +7,20 @@ from vdl_tools.shared_tools.database_cache.database_utils import get_session
 from vdl_tools.shared_tools.openai.prompt_response_cache_instructor import InstructorPRC
 
 
-class AgeBandClassification(BaseModel):
-    age_bands: list[Literal["prek", "elementary", "middle_school", "high_school", "college_prep"]] = Field(
+class LearningJourneyStageClassification(BaseModel):
+    learning_journey_stages: list[Literal[
+        "early_childhood", "lower_grades", "upper_grades", "big_blur"
+    ]] = Field(
         description=(
-            "List of applicable age bands. "
+            "List of applicable learning journey stages from "
+            "['early_childhood', 'lower_grades', 'upper_grades', 'big_blur']. "
             "May be empty if unclassifiable is True."
         )
     )
     evidence: str = Field(
         description=(
-            "1-3 sentences quoting or paraphrasing the text that most clearly "
-            "indicates the learner age or stage. If unclassifiable, explain why."
+            "1 short sentence quoting or paraphrasing the text that most clearly "
+            "indicates the learner stage. If unclassifiable, explain why."
         )
     )
     confidence: Literal["high", "medium", "low"] = Field(
@@ -27,60 +30,55 @@ class AgeBandClassification(BaseModel):
         )
     )
     unclassifiable: bool = Field(
-        description="True if the text has no detectable signal about learner age or stage."
-    )
-    serves_educators: bool = Field(
-        description=(
-            "True if the org's PRIMARY mission is serving teachers, administrators, "
-            "curriculum designers, or instructional coaches rather than learners directly."
-        )
+        description="True if the text has no detectable signal about learner stage."
     )
 
 
-AGE_BAND_PROMPT = dedent(
+LEARNING_JOURNEY_STAGE_PROMPT = dedent(
     """
     You are an education sector analyst. Given the description of an education-related
-    organization, classify which learner age bands the organization primarily serves.
+    organization, classify which learning journey stages the organization primarily serves.
 
-    ## Age Band Definitions
+    This framework is informed by the JFF "Big Blur" vision, which argues that the
+    line between high school, college, and careers should dissolve for learners ages 16-20.
 
-    Use ONLY these exact token values in the age_bands list:
+    ## Stage Definitions
 
-    - "prek": Children in pre-kindergarten programs (ages 3-5).
-      Includes preschool and pre-K programs only. Does NOT include birth-to-3,
-      infant/toddler care, or early intervention programs for children under age 3.
+    Use ONLY these exact token values in the learning_journey_stages list:
 
-    - "elementary": Learners in kindergarten through 5th grade (~ages 5-11).
-      K-5 schools, lower school programs.
+    - "early_childhood": Learners in preschool programs — PK-3 and PK-4 (~ages 3-5).
+      Does NOT include Kindergarten, birth-to-3, or infant/toddler programs.
 
-    - "middle_school": Learners in 6th through 8th grade (~ages 11-14).
-      Middle school, junior high programs.
+    - "lower_grades": Learners in Kindergarten through 5th grade (~ages 5-11).
+      Foundational literacy and numeracy. Starts at Kindergarten.
 
-    - "high_school": Learners in 9th through 12th grade (~ages 14-18).
-      High school, secondary education programs.
+    - "upper_grades": Learners in 6th through 12th grade (~ages 11-18).
+      Covers middle school and high school as a unified stage.
 
-    - "college_prep": Pre-college preparation or dual enrollment for K-12 students.
-      SAT/ACT prep, college access, dual enrollment, early college high school.
-      Do NOT include standard colleges/universities unless they have an explicit
-      pre-college program for K-12 students.
+    - "big_blur": Learners ages 16-20 in the integrated zone where secondary,
+      postsecondary, and career pathways converge (grades 11-14 per JFF framework).
+      Includes: dual enrollment, early college high schools, CTE programs bridging
+      HS and postsecondary, apprenticeships for young adults, career-focused associate
+      degrees, college access programs for first-generation students, and workforce
+      preparation for 16-to-20-year-olds.
 
-    ## Multiple Bands
+    ## Multiple Stages
 
-    Select ALL bands that apply. A program serving K-12 broadly should receive
-    ["elementary", "middle_school", "high_school"]. Only select bands with clear
-    evidence in the text.
+    Select ALL stages that apply. Stages may overlap where age ranges intersect:
+    - K-12 broadly → ["lower_grades", "upper_grades"]
+    - Preschool through elementary → ["early_childhood", "lower_grades"]
+    - Grades 9-12 with dual enrollment or postsecondary bridge → ["upper_grades", "big_blur"]
+    - PreK through high school → ["early_childhood", "lower_grades", "upper_grades"]
 
-    ## Special Cases
+    ### Implicit ranges
+    When the text describes a span, assign ALL stages within that range:
+    - "PreK through high school" → ["early_childhood", "lower_grades", "upper_grades"]
+    - "K-12 and beyond" → ["lower_grades", "upper_grades", "big_blur"]
+    - "middle school through college" → ["upper_grades", "big_blur"]
 
-    ### serves_educators
-    Set serves_educators=True if the PRIMARY mission is supporting teachers, admins,
-    curriculum designers, or instructional coaches rather than delivering learning
-    to students directly. An org may BOTH serve educators AND imply an age stage
-    (e.g. pre-K teacher PD -> serves_educators=True, age_bands=["prek"]).
-
-    ### unclassifiable
-    Set unclassifiable=True if the text has NO detectable signal about learner age
-    or stage. When unclassifiable=True, age_bands must be an empty list [].
+    ## Unclassifiable
+    Set unclassifiable=True if the text has NO detectable signal about learner stage.
+    When unclassifiable=True, learning_journey_stages must be an empty list [].
 
     ## Output
     Respond with a JSON object matching the required schema.
@@ -88,20 +86,20 @@ AGE_BAND_PROMPT = dedent(
 ).strip()
 
 
-def get_bulk_age_bands(
+def get_bulk_learning_journey_stages(
     ids_texts: list[tuple],
     use_cached_results: bool = True,
-    prompt_string: str = AGE_BAND_PROMPT,
+    prompt_string: str = LEARNING_JOURNEY_STAGE_PROMPT,
     n_per_commit: int = 50,
     max_workers: int = 10,
     max_errors: int = 1,
-    prompt_name: str = "age_band_classification",
+    prompt_name: str = "learning_journey_stage_classification",
 ):
     with get_session() as session:
         prompt_response = InstructorPRC(
             session=session,
             prompt_str=prompt_string,
-            response_model=AgeBandClassification,
+            response_model=LearningJourneyStageClassification,
             prompt_name=prompt_name,
         )
         ids_to_response = prompt_response.bulk_get_cache_or_run(
@@ -114,14 +112,14 @@ def get_bulk_age_bands(
     return {k: v["response_text"] for k, v in ids_to_response.items()}
 
 
-def add_age_band_classification(
+def add_learning_journey_stage_classification(
         df,
         text_col="text_for_one_earth",
         id_col="id",
         use_cached_results=False,
 ):
     ids_text_lists = df[[id_col, text_col]].values.tolist()
-    ids_to_response_text = get_bulk_age_bands(
+    ids_to_response_text = get_bulk_learning_journey_stages(
         ids_text_lists,
         use_cached_results=use_cached_results,
     )
@@ -138,10 +136,9 @@ def add_age_band_classification(
         lambda id_: safe_json(ids_to_response_text.get(str(id_)))
     )
 
-    df["age_bands"]                 = parsed.apply(lambda x: x.get("age_bands"))
-    df["age_band_evidence"]         = parsed.apply(lambda x: x.get("evidence"))
-    df["age_band_confidence"]       = parsed.apply(lambda x: x.get("confidence"))
-    df["age_band_unclassifiable"]   = parsed.apply(lambda x: x.get("unclassifiable"))
-    df["age_band_serves_educators"] = parsed.apply(lambda x: x.get("serves_educators"))
+    df["learning_journey_stages"] = parsed.apply(lambda x: x.get("learning_journey_stages"))
+    df["ljs_evidence"]            = parsed.apply(lambda x: x.get("evidence"))
+    df["ljs_confidence"]          = parsed.apply(lambda x: x.get("confidence"))
+    df["ljs_unclassifiable"]      = parsed.apply(lambda x: x.get("unclassifiable"))
 
     return df
