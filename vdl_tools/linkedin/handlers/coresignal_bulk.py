@@ -95,12 +95,15 @@ def retrieve_bulk_results(request_id, filepart_names, api_key):
         gzipped_bytes = file_part.content
         decompressed_bytes = gzip.decompress(gzipped_bytes)
         decompressed_string = decompressed_bytes.decode('utf-8').strip()
+        if not decompressed_string:
+            logger.warning("No decompressed string for %s", filename)
+            continue
 
         # It's set up as JSONL data (jsons split by new line)
         for json_string in decompressed_string.split('\n'):
             results.append(json.loads(json_string))
         if i % 100 == 0:
-            logger.info("Processed %s / %s filenames", i, len(filepart_names))    
+            logger.info("Processed %s / %s filenames", i, len(filepart_names))
     return results
 
 
@@ -113,7 +116,7 @@ def get_bulk_organization_results(
 ):
     if not (config and config.get('linkedin', {}).get('coresignal_api_key') or api_key):
         raise Exception("Must provide api_key or config")
-    
+
     if not api_key:
         api_key = config['coresignal_api_key']
 
