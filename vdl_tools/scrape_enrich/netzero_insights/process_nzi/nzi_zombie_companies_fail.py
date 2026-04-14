@@ -142,7 +142,7 @@ def _has_successful_manda(round_types, m_and_a_success_stage):
 
 def did_company_succeed(
     company_funding_rows,
-    company_row,
+    company_classifier_status,
     graduation_stages=("Series B",),
     late_venture_cutoff=LATE_VC_CUTOFF,
     m_and_a_success_stage=M_AND_A_SUCCESS_STAGE,
@@ -185,7 +185,7 @@ def did_company_succeed(
 
     # Some companies were acquired but have no M&A round type in their funding data.
     # If they passed the stage gate above, treat the acquisition as success.
-    if company_row.get("ensemble_operating_status_classification") == "Acquired / Merger":
+    if company_classifier_status == "Acquired / Merger":
         return True
 
     return False
@@ -197,7 +197,7 @@ def time_since_last_funding(company_funding_rows):
 
 def did_company_fail(
     company_funding_rows,
-    company_row,
+    company_classifier_status,
     at_stage="Early VC",
     outlier_time=TWO_YEARS_IN_DAYS,
     late_venture_cutoff=LATE_VC_CUTOFF,
@@ -246,7 +246,7 @@ def did_company_fail(
     # Can't be a failure if they succeeded
     if did_company_succeed(
         company_funding_rows,
-        company_row,
+        company_classifier_status,
         graduation_stages=graduation_stages,
         late_venture_cutoff=late_venture_cutoff,
         m_and_a_success_stage=m_and_a_success_stage,
@@ -255,7 +255,7 @@ def did_company_fail(
 
     # --- Failure signals (company didn't succeed, check why) ---
 
-    if company_row.get("ensemble_operating_status_classification") == "Shut Down":
+    if company_classifier_status == "Shut Down":
         return True
 
     # Early M&A = failure (acquired before reaching a mature stage)

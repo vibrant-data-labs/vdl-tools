@@ -59,12 +59,12 @@ def _classify_company_current_stage(company_funding_rows):
     return None
 
 
-def _build_company_lookup(companies_df, company_id_col, company_status_col):
+def _build_company_status_lookup(companies_df, company_id_col, company_status_col):
     """Build a dict mapping company_id → company_row dict."""
     lookup = {}
     for _, row in companies_df.iterrows():
         cid = row[company_id_col]
-        lookup[cid] = {company_status_col: row[company_status_col]}
+        lookup[cid] = row[company_status_col]
     return lookup
 
 
@@ -90,7 +90,7 @@ def _precompute_company_classifications(
     if stages is None:
         stages = NZI_SURVIVAL_STAGES
 
-    company_lookup = _build_company_lookup(
+    company_lookup = _build_company_status_lookup(
         companies_df, company_id_col, company_status_col,
     )
     grouped = funding_rounds_df.groupby(company_id_col)
@@ -99,7 +99,7 @@ def _precompute_company_classifications(
     current_stages = {}
 
     for company_id, company_funding_rows in grouped:
-        company_row = company_lookup.get(company_id, {company_status_col: None})
+        company_status = company_lookup.get(company_id, None)
         current_stages[company_id] = _classify_company_current_stage(company_funding_rows)
 
         per_stage = {}
@@ -107,14 +107,14 @@ def _precompute_company_classifications(
             mapping = STAGE_FAILURE_MAP[stage]
             succeeded = did_company_succeed(
                 company_funding_rows,
-                company_row,
+                company_status,
                 graduation_stages=mapping["graduation_stages"],
                 late_venture_cutoff=late_venture_cutoff,
                 m_and_a_success_stage=m_and_a_success_stage,
             )
             failed = did_company_fail(
                 company_funding_rows,
-                company_row,
+                company_status,
                 at_stage=stage,
                 outlier_time=outlier_time,
                 late_venture_cutoff=late_venture_cutoff,
@@ -150,7 +150,7 @@ def calculate_failure_rate(
         raise ValueError(f"at_stage must be one of {list(STAGE_FAILURE_MAP)}")
 
     mapping = STAGE_FAILURE_MAP[at_stage]
-    company_lookup = _build_company_lookup(
+    company_lookup = _build_company_status_lookup(
         companies_df, company_id_col, company_status_col,
     )
     grouped = funding_rounds_df.groupby(company_id_col)
@@ -159,11 +159,11 @@ def calculate_failure_rate(
     failed_ids = []
 
     for company_id, company_funding_rows in grouped:
-        company_row = company_lookup.get(company_id, {company_status_col: None})
+        company_status = company_lookup.get(company_id, None)
 
         if did_company_succeed(
             company_funding_rows,
-            company_row,
+            company_status,
             graduation_stages=mapping["graduation_stages"],
             late_venture_cutoff=late_venture_cutoff,
             m_and_a_success_stage=m_and_a_success_stage,
@@ -171,7 +171,7 @@ def calculate_failure_rate(
             succeeded_ids.append(company_id)
         elif did_company_fail(
             company_funding_rows,
-            company_row,
+            company_status,
             at_stage=at_stage,
             outlier_time=outlier_time,
             late_venture_cutoff=late_venture_cutoff,
