@@ -370,7 +370,8 @@ def query_companies_extended(
     force_query=False,
     use_cache=True,
     save_to_cache=True,
-    schema_for_saving=None,
+    s3_prefix=None,
+    storage_options=None,
 ) -> QueryCompaniesExtendedResult | None:
     """Query Crunchbase organizations and related entities with Postgres DB caching.
 
@@ -401,9 +402,15 @@ def query_companies_extended(
         When True, upsert newly fetched records into the Postgres cache for
         future reuse. Independent of ``use_cache`` and ``force_query``.
 
-    schema_for_saving : str, optional
-        When provided, save the results to the given schema. Any data currently saved to that
-        schema will be overwritten. If not provided, the specific results will not be saved to the database.
+    s3_prefix : str, optional
+        When provided, write the 5 result tables as Parquet under this prefix,
+        one file per table (``{s3_prefix}/{table_name}.parquet``). Accepts
+        a local path, ``file://`` URI, or ``s3://`` URI. Any files currently at
+        that prefix will be overwritten. If not provided, results are returned
+        in memory only.
+    storage_options : dict, optional
+        Extra fsspec storage options, passed to the Parquet writer. Only used
+        when ``s3_prefix`` is set.
 
     Notes
     -----
@@ -571,42 +578,91 @@ def query_companies_extended(
             "org_investors": org_investors,
             "founders": founders,
         }
-        if schema_for_saving:
-            search_results_to_db(results, schema_for_saving)
+        if s3_prefix:
+            search_results_to_parquet(
+                results,
+                s3_prefix,
+                search_metadata={
+                    "search_condition": search_condition,
+                    "items_list": list(items_list),
+                    "extra_filters": [str(f) for f in (extra_filters or [])],
+                },
+                storage_options=storage_options,
+            )
 
         return results
 
 
-def search_results_to_db(
+def search_results_to_parquet(
     search_results: QueryCompaniesExtendedResult,
-    schema: str,
-    session: sa.orm.Session=None,
-):
-    with get_session(session=session) as session:
-        session.execute(sa.text(f"CREATE SCHEMA IF NOT EXISTS {schema};"))
-        session.commit()
-        for table_name, df in search_results.items():
-            logger.info(f"Writing {table_name} to {schema}")
-            df.to_sql(
-                table_name,
-                con=session.connection(),
-                schema=schema,
-                if_exists="replace",
-                index=False,
-            )
-        session.commit()
-        return True
+    prefix: str,
+    search_metadata: dict | None = None,
+    storage_options: dict | None = None,
+) -> dict[str, str]:
+    """Persist the 5 CB result DataFrames as Parquet under ``prefix``.
+
+    Parameters
+    ----------
+    search_results
+        The dict returned from :func:`query_companies_extended`.
+    prefix
+        Destination prefix (local path, ``file://``, or ``s3://``). Files are
+        written as ``{prefix}/{table_name}.parquet`` and overwrite any
+        existing file at those paths.
+    search_metadata
+        Query context (search terms, filters, etc.) embedded in each Parquet
+        file's footer for lineage.
+    storage_options
+        Extra fsspec options.
+
+    Returns
+    -------
+    dict[str, str]
+        ``{table_name: written_uri}``.
+    """
+    # Local import to avoid pulling pyarrow/fsspec at module import time.
+    from vdl_tools.shared_tools.parquet_cache import write_dataframes
+
+    lineage = {
+        "source": "crunchbase.organizations_api_db.query_companies_extended",
+        **(search_metadata or {}),
+    }
+    return write_dataframes(
+        {k: v for k, v in search_results.items() if v is not None},
+        prefix=prefix,
+        lineage=lineage,
+        storage_options=storage_options,
+    )
 
 
-def load_search_results_from_db(
-    schema: str,
-    table_name: str,
-    session: sa.orm.Session=None,
-):
-    with get_session(session=session) as session:
-        df = pd.read_sql_table(
-            table_name,
-            con=session.connection(),
-            schema=schema,
-        )
-        return df
+def load_search_results_from_parquet(
+    prefix: str,
+    names: list[str] | None = None,
+    storage_options: dict | None = None,
+) -> dict[str, pd.DataFrame]:
+    """Load the 5 CB result DataFrames previously written by
+    :func:`search_results_to_parquet`.
+
+    Uses a local filecache (``~/.cache/vdl-tools/parquet``) so each user
+    downloads each file once, with an ETag HEAD check on every read so
+    concurrent writers don't cause silent stale reads.
+
+    Parameters
+    ----------
+    prefix
+        Source prefix (local path, ``file://``, or ``s3://``).
+    names
+        Subset of tables to load. Defaults to all 5.
+    storage_options
+        Extra fsspec options.
+    """
+    from vdl_tools.shared_tools.parquet_cache import read_dataframes
+
+    names = names or [
+        "organizations",
+        "funding_rounds",
+        "people_investors",
+        "org_investors",
+        "founders",
+    ]
+    return read_dataframes(prefix=prefix, names=names, storage_options=storage_options)

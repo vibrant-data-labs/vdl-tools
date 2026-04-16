@@ -1,5 +1,4 @@
 from datetime import datetime
-import sqlalchemy as sa
 from pathlib import Path
 import pandas as pd
 
@@ -9,8 +8,8 @@ import vdl_tools.shared_tools.cb_funding_calculations as fcalc
 import vdl_tools.shared_tools.common_functions as cf  # from common directory: commonly used functions
 import vdl_tools.shared_tools.project_config as pc
 
-from vdl_tools.shared_tools.database_cache.database_utils import get_session
-from vdl_tools.scrape_enrich.crunchbase.organizations_api_db import load_search_results_from_db
+from vdl_tools.scrape_enrich.crunchbase.organizations_api_db import load_search_results_from_parquet
+from vdl_tools.shared_tools.parquet_cache import write_dataframe
 
 
 def __validate_crunchbase_args(
@@ -496,58 +495,90 @@ def _process_crunchbase_data(
     return df_cb
 
 
-def process_crunchbase_raw_data_from_db(
-    schema_for_saving: str,
-    filter_yr=2016,
-    filter_to_companies=True,
-    session: sa.orm.Session=None,
-):
-    if not schema_for_saving:
-        raise ValueError("Must provide schema_for_saving")
-    with get_session(session=session) as session:
-        df_orgs = load_search_results_from_db(
-            schema=schema_for_saving,
-            table_name='organizations',
-            session=session,
+def process_crunchbase_raw_data_from_parquet(
+    prefix: str,
+    filter_yr: int = 2016,
+    filter_to_companies: bool = True,
+    save_cleaned: bool = True,
+    cleaned_filename: str = "cb_companies_cleaned",
+    storage_options: dict | None = None,
+) -> pd.DataFrame:
+    """Load the 5 raw CB tables from a Parquet prefix, clean them, and
+    (by default) persist the cleaned DataFrame back to the same prefix.
+
+    Parameters
+    ----------
+    prefix
+        Prefix previously passed to ``query_companies_extended(save_to_prefix=...)``.
+        Accepts a local path, ``file://`` URI, or ``s3://`` URI. Remote reads
+        are locally cached with ETag validation so concurrent writers can't
+        cause silent stale reads.
+    filter_yr
+        Earliest year of founding to keep.
+    filter_to_companies
+        If True, restrict to companies (drop investors etc.).
+    save_cleaned
+        If True (default), write the cleaned DataFrame to
+        ``{prefix}/{cleaned_filename}.parquet``. Pass False to skip the write
+        and only return in memory.
+    cleaned_filename
+        Base filename (without extension) for the cleaned output. Override
+        this to namespace per-user or per-run variants so different cleaning
+        conventions don't clobber each other (e.g. ``"cb_companies_cleaned__zein"``).
+    storage_options
+        Extra fsspec options.
+
+    Notes
+    -----
+    ``cb_companies_cleaned.parquet`` is a **mutable shared artifact** — the
+    last writer wins. Parquet handles column/type drift between writers
+    gracefully (schema is stored per-file, not enforced across writers), so
+    different cleaning conventions will not error; they will simply overwrite
+    each other. If your team's cleaning diverges materially, use
+    ``cleaned_filename`` to namespace your output.
+    """
+    if not prefix:
+        raise ValueError("Must provide prefix (local path or s3:// URI)")
+
+    tables = load_search_results_from_parquet(
+        prefix=prefix,
+        names=[
+            "organizations",
+            "funding_rounds",
+            "founders",
+            "investor_orgs",
+            "investor_person",
+        ],
+        storage_options=storage_options,
+    )
+
+    cleaned_df = _process_crunchbase_data(
+        df_orgs=tables["organizations"],
+        df_funding_rounds=tables["funding_rounds"],
+        df_founders=tables["founders"],
+        df_investor_orgs=tables["investor_orgs"],
+        df_investor_person=tables["investor_person"],
+        filter_yr=filter_yr,
+        filter_to_companies=filter_to_companies,
+    )
+
+    if save_cleaned:
+        # Local import to avoid pulling pyarrow/fsspec at module import time.
+        uri = f"{str(prefix).rstrip('/')}/{cleaned_filename}.parquet"
+        write_dataframe(
+            cleaned_df,
+            uri,
+            lineage={
+                "source": "prepare_crunchbase.process_crunchbase_raw_data_from_parquet",
+                "filter_yr": filter_yr,
+                "filter_to_companies": filter_to_companies,
+                "input_prefix": str(prefix),
+                "n_rows": len(cleaned_df),
+            },
+            storage_options=storage_options,
         )
-        df_funding_rounds = load_search_results_from_db(
-            schema=schema_for_saving,
-            table_name='funding_rounds',
-            session=session,
-        )
-        df_founders = load_search_results_from_db(
-            schema=schema_for_saving,
-            table_name='founders',
-            session=session,
-        )
-        df_investor_orgs = load_search_results_from_db(
-            schema=schema_for_saving,
-            table_name='investor_orgs',
-            session=session,
-        )
-        df_investor_person = load_search_results_from_db(
-            schema=schema_for_saving,
-            table_name='investor_person',
-            session=session,
-        )
-        cleaned_df = _process_crunchbase_data(
-            df_orgs=df_orgs,
-            df_funding_rounds=df_funding_rounds,
-            df_founders=df_founders,
-            df_investor_orgs=df_investor_orgs,
-            df_investor_person=df_investor_person,
-            filter_yr=filter_yr,
-            filter_to_companies=filter_to_companies
-        )
-        cleaned_df.to_sql(
-            table_name='cb_companies_cleaned',
-            schema=schema_for_saving,
-            session=session.connection(),
-            if_exists='replace',
-            index=False,
-        )
-        session.commit()
-        return cleaned_df
+
+    return cleaned_df
 
 
 def process_crunchbase_raw_data(
