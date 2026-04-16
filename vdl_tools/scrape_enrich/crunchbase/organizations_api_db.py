@@ -583,13 +583,13 @@ def search_results_to_db(
     session: sa.orm.Session=None,
 ):
     with get_session(session=session) as session:
-        session.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema};"))
+        session.execute(sa.text(f"CREATE SCHEMA IF NOT EXISTS {schema};"))
         session.commit()
         for table_name, df in search_results.items():
             logger.info(f"Writing {table_name} to {schema}")
             df.to_sql(
                 table_name,
-                session.connection(),
+                con=session.connection(),
                 schema=schema,
                 if_exists="replace",
                 index=False,
@@ -604,5 +604,9 @@ def load_search_results_from_db(
     session: sa.orm.Session=None,
 ):
     with get_session(session=session) as session:
-        df = pd.read_sql_table(table_name, session.connection(), schema=schema)
+        df = pd.read_sql_table(
+            table_name,
+            con=session.connection(),
+            schema=schema,
+        )
         return df
