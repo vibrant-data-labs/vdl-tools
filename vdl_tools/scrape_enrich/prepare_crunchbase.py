@@ -1,12 +1,16 @@
 from datetime import datetime
+import sqlalchemy as sa
 from pathlib import Path
 import pandas as pd
-from pandas.io.xml import Any
+
 from vdl_tools.shared_tools.tools.logger import logger
 import vdl_tools.scrape_enrich.crunchbase.organizations_api_extended as orgs_api
 import vdl_tools.shared_tools.cb_funding_calculations as fcalc
 import vdl_tools.shared_tools.common_functions as cf  # from common directory: commonly used functions
 import vdl_tools.shared_tools.project_config as pc
+
+from vdl_tools.shared_tools.database_cache.database_utils import get_session
+from vdl_tools.scrape_enrich.crunchbase.organizations_api_db import load_search_results_from_db
 
 
 def __validate_crunchbase_args(
@@ -102,7 +106,7 @@ def query_crunchbase_raw_data(
 
     if search_terms:
         orgs_api.query_companies_extended(
-            items_list=search_terms, 
+            items_list=search_terms,
             output_files=output_files,
             force_query=True,
             search_condition='search_terms'
@@ -299,52 +303,18 @@ def __add_funding_by_year(funding_rounds_df: pd.DataFrame, orgs_df: pd.DataFrame
     return orgs_df  # orgs with funding by year
 
 
-def process_crunchbase_raw_data(
-    filter_yr=2016,
-    organizations_file_path=None,
-    funding_rounds_file_path=None,
-    founders_file_path=None,
-    investor_orgs_file_path=None,
-    investor_person_file_path=None,
-    clean_file_path=None,
-    filter_to_companies=True,
+def _process_crunchbase_data(
+    df_orgs: pd.DataFrame,
+    df_funding_rounds: pd.DataFrame,
+    df_founders: pd.DataFrame,
+    df_investor_orgs: pd.DataFrame,
+    df_investor_person: pd.DataFrame,
+    filter_yr: int,
+    filter_to_companies: bool,
 ):
-
-    if not all([
-        organizations_file_path,
-        funding_rounds_file_path,
-        founders_file_path,
-        investor_orgs_file_path,
-        investor_person_file_path,
-        clean_file_path,
-    ]):
-        paths = pc.get_paths()
-    if not organizations_file_path:
-        organizations_file_path=paths.get('expanded_orgs_data')
-    if not funding_rounds_file_path:
-        funding_rounds_file_path=paths.get('expanded_orgs_funding_rounds')
-    if not founders_file_path:
-        founders_file_path=paths.get('expanded_orgs_founders')
-    if not investor_orgs_file_path:
-        investor_orgs_file_path=paths.get('expanded_orgs_investor_orgs')
-    if not investor_person_file_path:
-        investor_person_file_path=paths.get('expanded_orgs_investor_person')
-    if not clean_file_path:
-        clean_file_path=paths.get('cb_companies_cleaned')
-
-    logger.info('loading raw crunchbase data')
-    df_orgs = pd.read_json(organizations_file_path)
-    logger.info('loading orgs')
-    df_funding_rounds = pd.read_json(funding_rounds_file_path)
-    logger.info('loading fr')
-    df_founders = pd.read_json(founders_file_path)
-    logger.info('loading founders')
-    df_investor_orgs = pd.read_json(investor_orgs_file_path)
-    logger.info('loading investor orgs')
-    df_investor_person = pd.read_json(investor_person_file_path)
-    logger.info('loading investor persons')
-
-
+    """
+    Process Crunchbase raw data
+    """
     # print('filtering crunchbase data to keep only active organizations')
     # keep all organizations despite of funding amount
     # df_orgs = df_orgs[df_orgs['operating_status'] == 'active']
@@ -523,6 +493,117 @@ def process_crunchbase_raw_data(
         # remove any empty elements of the list
         df_cb[col] = df_cb[col].apply(lambda l: [x for x in l if str(x) != 'nan'])
 
+    return df_cb
+
+
+def process_crunchbase_raw_data_from_db(
+    schema_for_saving: str,
+    filter_yr=2016,
+    filter_to_companies=True,
+    session: sa.orm.Session=None,
+):
+    if not schema_for_saving:
+        raise ValueError("Must provide schema_for_saving")
+    with get_session(session=session) as session:
+        df_orgs = load_search_results_from_db(
+            schema=schema_for_saving,
+            table_name='organizations',
+            session=session,
+        )
+        df_funding_rounds = load_search_results_from_db(
+            schema=schema_for_saving,
+            table_name='funding_rounds',
+            session=session,
+        )
+        df_founders = load_search_results_from_db(
+            schema=schema_for_saving,
+            table_name='founders',
+            session=session,
+        )
+        df_investor_orgs = load_search_results_from_db(
+            schema=schema_for_saving,
+            table_name='investor_orgs',
+            session=session,
+        )
+        df_investor_person = load_search_results_from_db(
+            schema=schema_for_saving,
+            table_name='investor_person',
+            session=session,
+        )
+        cleaned_df = _process_crunchbase_data(
+            df_orgs=df_orgs,
+            df_funding_rounds=df_funding_rounds,
+            df_founders=df_founders,
+            df_investor_orgs=df_investor_orgs,
+            df_investor_person=df_investor_person,
+            filter_yr=filter_yr,
+            filter_to_companies=filter_to_companies
+        )
+        cleaned_df.to_sql(
+            table_name='cb_companies_cleaned',
+            schema=schema_for_saving,
+            session=session.connection(),
+            if_exists='replace',
+            index=False,
+        )
+        session.commit()
+        return cleaned_df
+
+
+def process_crunchbase_raw_data(
+    filter_yr=2016,
+    organizations_file_path=None,
+    funding_rounds_file_path=None,
+    founders_file_path=None,
+    investor_orgs_file_path=None,
+    investor_person_file_path=None,
+    clean_file_path=None,
+    filter_to_companies=True,
+):
+
+    if not all([
+        organizations_file_path,
+        funding_rounds_file_path,
+        founders_file_path,
+        investor_orgs_file_path,
+        investor_person_file_path,
+        clean_file_path,
+    ]):
+        paths = pc.get_paths()
+    if not organizations_file_path:
+        organizations_file_path=paths.get('expanded_orgs_data')
+    if not funding_rounds_file_path:
+        funding_rounds_file_path=paths.get('expanded_orgs_funding_rounds')
+    if not founders_file_path:
+        founders_file_path=paths.get('expanded_orgs_founders')
+    if not investor_orgs_file_path:
+        investor_orgs_file_path=paths.get('expanded_orgs_investor_orgs')
+    if not investor_person_file_path:
+        investor_person_file_path=paths.get('expanded_orgs_investor_person')
+    if not clean_file_path:
+        clean_file_path=paths.get('cb_companies_cleaned')
+
+    logger.info('loading raw crunchbase data')
+    df_orgs = pd.read_json(organizations_file_path)
+    logger.info('loading orgs')
+    df_funding_rounds = pd.read_json(funding_rounds_file_path)
+    logger.info('loading fr')
+    df_founders = pd.read_json(founders_file_path)
+    logger.info('loading founders')
+    df_investor_orgs = pd.read_json(investor_orgs_file_path)
+    logger.info('loading investor orgs')
+    df_investor_person = pd.read_json(investor_person_file_path)
+    logger.info('loading investor persons')
+
+    df_cb = _process_crunchbase_data(
+        df_orgs=df_orgs,
+        df_funding_rounds=df_funding_rounds,
+        df_founders=df_founders,
+        df_investor_orgs=df_investor_orgs,
+        df_investor_person=df_investor_person,
+        filter_yr=filter_yr,
+        filter_to_companies=filter_to_companies
+    )
     logger.info(f'Writing cleaned Crunchbase data to {clean_file_path}')
     # add directory if it does not exist
     if not isinstance(clean_file_path, Path):

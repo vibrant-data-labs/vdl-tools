@@ -370,6 +370,7 @@ def query_companies_extended(
     force_query=False,
     use_cache=True,
     save_to_cache=True,
+    schema_for_saving=None,
 ) -> QueryCompaniesExtendedResult | None:
     """Query Crunchbase organizations and related entities with Postgres DB caching.
 
@@ -399,6 +400,10 @@ def query_companies_extended(
     save_to_cache : bool, default True
         When True, upsert newly fetched records into the Postgres cache for
         future reuse. Independent of ``use_cache`` and ``force_query``.
+
+    schema_for_saving : str, optional
+        When provided, save the results to the given schema. Any data currently saved to that
+        schema will be overwritten. If not provided, the specific results will not be saved to the database.
 
     Notes
     -----
@@ -559,23 +564,45 @@ def query_companies_extended(
                 founders = pd.merge(founders_temp_data[['uuid', 'org_permalink']], founders, how="left", on="uuid")
                 founders = __dedup_df(founders)
 
-        return {
+        results = {
             "organizations": organizations,
             "funding_rounds": companies_funding_rounds,
             "people_investors": people_investors,
             "org_investors": org_investors,
             "founders": founders,
         }
+        if schema_for_saving:
+            search_results_to_db(results, schema_for_saving)
+
+        return results
 
 
-if __name__ == '__main__':
-    query_companies_extended([
-         "local farms",
-         "fisheries"
-     ],
-     extra_filters=[
-         api.eq("status", "operating")
-     ],
-     search_condition='search_terms',
-     force_query=True,
-     )
+def search_results_to_db(
+    search_results: QueryCompaniesExtendedResult,
+    schema: str,
+    session: sa.orm.Session=None,
+):
+    with get_session(session=session) as session:
+        session.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema};"))
+        session.commit()
+        for table_name, df in search_results.items():
+            logger.info(f"Writing {table_name} to {schema}")
+            df.to_sql(
+                table_name,
+                session.connection(),
+                schema=schema,
+                if_exists="replace",
+                index=False,
+            )
+        session.commit()
+        return True
+
+
+def load_search_results_from_db(
+    schema: str,
+    table_name: str,
+    session: sa.orm.Session=None,
+):
+    with get_session(session=session) as session:
+        df = pd.read_sql_table(table_name, session.connection(), schema=schema)
+        return df
