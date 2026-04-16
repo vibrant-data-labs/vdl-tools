@@ -517,6 +517,115 @@ def calculate_expected_survivals(
 
 
 # ---------------------------------------------------------------------------
+# Public precomputation
+# ---------------------------------------------------------------------------
+
+def precompute_survival_classifications(
+    funding_rounds_df,
+    companies_df,
+    outlier_time=TWO_YEARS_IN_DAYS,
+    late_venture_cutoff=LATE_VC_CUTOFF,
+    m_and_a_success_stage=M_AND_A_SUCCESS_STAGE,
+    company_id_col="client_id_nzi",
+    company_status_col="ensemble_operating_status_classification",
+    stages=None,
+):
+    """Pre-compute company classifications for reuse across multiple comparisons.
+
+    This is the expensive step — it iterates every company × every stage
+    and calls ``did_company_succeed`` / ``did_company_fail``.  Call it once,
+    then pass the result as ``precomputed`` to ``compare_survival_rates`` or
+    ``run_compare_survival_rates_rounds`` to avoid redundant work.
+
+    Parameters
+    ----------
+    funding_rounds_df : pandas.DataFrame
+        All funding rounds.
+    companies_df : pandas.DataFrame
+        Company-level data.
+    outlier_time : int, default TWO_YEARS_IN_DAYS
+        Days since last funding to classify a company as zombie/stale.
+    late_venture_cutoff : str, default LATE_VC_CUTOFF
+        Stage threshold for early vs. late venture.
+    m_and_a_success_stage : str, default M_AND_A_SUCCESS_STAGE
+        Earliest stage at which M&A counts as success.
+    company_id_col : str, default "client_id_nzi"
+        Column name for the company identifier.
+    company_status_col : str, default "ensemble_operating_status_classification"
+        Column name for the operating status classification.
+    stages : list[str] or None, default None
+        Stages to evaluate (defaults to ``NZI_SURVIVAL_STAGES``).
+
+    Returns
+    -------
+    tuple
+        A ``(classifications, current_stages)`` tuple suitable for passing
+        as the ``precomputed`` argument to ``compare_survival_rates`` and
+        ``run_compare_survival_rates_rounds``.
+
+    Examples
+    --------
+    >>> precomputed = precompute_survival_classifications(
+    ...     funding_rounds_df, companies_df
+    ... )
+    >>> for col in comparison_columns:
+    ...     result = compare_survival_rates(
+    ...         funding_rounds_df, companies_df,
+    ...         comparison_column=col,
+    ...         precomputed=precomputed,
+    ...     )
+    """
+    if stages is None:
+        stages = NZI_SURVIVAL_STAGES
+
+    return _precompute_company_classifications(
+        funding_rounds_df,
+        companies_df,
+        stages=stages,
+        outlier_time=outlier_time,
+        late_venture_cutoff=late_venture_cutoff,
+        m_and_a_success_stage=m_and_a_success_stage,
+        company_id_col=company_id_col,
+        company_status_col=company_status_col,
+    )
+
+
+def _build_vectorized_arrays(classifications, company_ids, stages):
+    """Convert precomputed classifications dict to numpy arrays for fast aggregation.
+
+    Parameters
+    ----------
+    classifications : dict[str, dict[str, dict[str, bool]]]
+        Precomputed classifications from ``_precompute_company_classifications``.
+    company_ids : numpy.ndarray
+        Array of company IDs in the same order as ``companies_df``.
+    stages : list[str]
+        Stages to build arrays for.
+
+    Returns
+    -------
+    succeeded : numpy.ndarray, shape (n_companies, n_stages), dtype bool
+        ``succeeded[i, j]`` is True if company ``i`` succeeded at stage ``j``.
+    failed : numpy.ndarray, shape (n_companies, n_stages), dtype bool
+        ``failed[i, j]`` is True if company ``i`` failed at stage ``j``.
+    """
+    n = len(company_ids)
+    n_stages = len(stages)
+    succeeded = np.zeros((n, n_stages), dtype=bool)
+    failed = np.zeros((n, n_stages), dtype=bool)
+
+    for i, cid in enumerate(company_ids):
+        if cid not in classifications:
+            continue
+        for j, stage in enumerate(stages):
+            cls = classifications[cid][stage]
+            succeeded[i, j] = cls["succeeded"]
+            failed[i, j] = cls["failed"]
+
+    return succeeded, failed
+
+
+# ---------------------------------------------------------------------------
 # Permutation test
 # ---------------------------------------------------------------------------
 
@@ -531,6 +640,7 @@ def run_compare_survival_rates_rounds(
     company_status_col="ensemble_operating_status_classification",
     stages=None,
     n_rounds=1000,
+    precomputed=None,
 ):
     """Run a permutation test comparing survival rates for two groups.
 
@@ -540,9 +650,7 @@ def run_compare_survival_rates_rounds(
     a null distribution of survival-rate differences (or ratios) against
     which the observed difference can be compared.
 
-    Internally calls ``_precompute_company_classifications`` **once** to
-    avoid redundant per-company succeed/fail logic, then uses
-    ``_aggregate_from_precomputed`` for fast aggregation in each round.
+    Uses vectorized numpy aggregation for fast permutation rounds.
 
     Parameters
     ----------
@@ -568,6 +676,11 @@ def run_compare_survival_rates_rounds(
         Stages to evaluate (defaults to ``NZI_SURVIVAL_STAGES``).
     n_rounds : int, default 1000
         Number of random permutation rounds.
+    precomputed : tuple or None, default None
+        If provided, a ``(classifications, current_stages)`` tuple from
+        ``precompute_survival_classifications``.  Skips the expensive
+        per-company classification step.  If None, classifications are
+        computed from scratch.
 
     Returns
     -------
@@ -582,33 +695,102 @@ def run_compare_survival_rates_rounds(
     if stages is None:
         stages = NZI_SURVIVAL_STAGES
 
-    # Pre-compute all classifications once
-    classifications, current_stages = _precompute_company_classifications(
-        funding_rounds_df,
-        companies_df,
-        stages=stages,
-        outlier_time=outlier_time,
-        late_venture_cutoff=late_venture_cutoff,
-        m_and_a_success_stage=m_and_a_success_stage,
-        company_id_col=company_id_col,
-        company_status_col=company_status_col,
-    )
+    # Use precomputed classifications if provided, otherwise compute them
+    if precomputed is not None:
+        classifications, current_stages = precomputed
+    else:
+        classifications, current_stages = _precompute_company_classifications(
+            funding_rounds_df,
+            companies_df,
+            stages=stages,
+            outlier_time=outlier_time,
+            late_venture_cutoff=late_venture_cutoff,
+            m_and_a_success_stage=m_and_a_success_stage,
+            company_id_col=company_id_col,
+            company_status_col=company_status_col,
+        )
 
     company_ids = companies_df[company_id_col].values
     comparison_values = companies_df[comparison_column].values
 
+    # Convert the classifications dict into two boolean numpy arrays:
+    #   succeeded_arr: shape (n_companies, n_stages) — True where company succeeded
+    #   failed_arr:    shape (n_companies, n_stages) — True where company failed
+    #
+    # Row i corresponds to company_ids[i].
+    # Column j corresponds to stages[j] (e.g. j=0 → "Seed", j=1 → "Early VC", j=2 → "Series B").
+    #
+    # This lets us replace the old Python loop (iterating dicts per company)
+    # with numpy boolean indexing + sum, which is ~10-50x faster per round.
+    succeeded_arr, failed_arr = _build_vectorized_arrays(
+        classifications, company_ids, stages,
+    )
+
+    # Cohort sizes: how many companies are currently at seed vs early VC.
+    # These stay constant across all permutations (we only shuffle the
+    # True/False group labels, not the companies' actual stage positions).
+    n_seed_all, n_early_vc_all = _count_cohorts(current_stages)
+
     def _survival_for_split(mask):
-        true_ids = [cid for cid, m in zip(company_ids, mask) if m]
-        false_ids = [cid for cid, m in zip(company_ids, mask) if not m]
+        """Compute survival results for the True and False groups.
 
-        true_agg = _aggregate_from_precomputed(classifications, true_ids, stages)
-        false_agg = _aggregate_from_precomputed(classifications, false_ids, stages)
+        Parameters
+        ----------
+        mask : numpy.ndarray of bool, shape (n_companies,)
+            True for companies in the "treatment" group, False for the
+            "control" group.  In the observed split this comes from the
+            actual comparison column; in permutation rounds it's a
+            random shuffle of those labels.
 
-        true_rates = _failure_rates_from_aggregated(true_agg, stages)
-        false_rates = _failure_rates_from_aggregated(false_agg, stages)
+        Returns
+        -------
+        true_result : dict
+            Survival funnel results for the True group
+            (see ``_compute_expected_survivals``).
+        false_result : dict
+            Survival funnel results for the False group.
 
-        n_seed_all, n_early_vc_all = _count_cohorts(current_stages)
+        Notes
+        -----
+        The key trick is numpy boolean indexing:
 
+            succeeded_arr[mask]   → subarray of only the True-group rows
+            .sum(axis=0)          → count of successes per stage (one int per stage)
+
+        This replaces the old approach of building a Python list of company
+        IDs, then looping through a dict to count successes/failures one by
+        one.  The numpy version does the same counting but in C, not Python.
+
+        After counting, we compute failure_rate = n_failed / (n_failed + n_succeeded)
+        per stage, then feed those rates into ``_compute_expected_survivals``
+        which chains them through the Seed → Early VC → Series B funnel.
+        """
+        # Count successes and failures per stage for each group.
+        # Each .sum(axis=0) returns an array of length n_stages.
+        # e.g. true_succ = [120, 85, 40] meaning 120 succeeded at Seed,
+        #      85 at Early VC, 40 at Series B within the True group.
+        true_succ = succeeded_arr[mask].sum(axis=0)
+        true_fail = failed_arr[mask].sum(axis=0)
+        false_succ = succeeded_arr[~mask].sum(axis=0)
+        false_fail = failed_arr[~mask].sum(axis=0)
+
+        # Total classifiable companies per stage (excludes "in progress"
+        # companies that are neither succeeded nor failed)
+        true_total = true_succ + true_fail
+        false_total = false_succ + false_fail
+
+        # Convert counts → failure rates per stage
+        # e.g. {"Seed": 0.35, "Early VC": 0.28, "Series B": 0.22}
+        true_rates = {
+            stage: (int(true_fail[j]) / int(true_total[j]) if true_total[j] > 0 else 0.0)
+            for j, stage in enumerate(stages)
+        }
+        false_rates = {
+            stage: (int(false_fail[j]) / int(false_total[j]) if false_total[j] > 0 else 0.0)
+            for j, stage in enumerate(stages)
+        }
+
+        # Chain per-stage failure rates through the survival funnel
         true_result = _compute_expected_survivals(true_rates, n_seed_all, n_early_vc_all, stages)
         false_result = _compute_expected_survivals(false_rates, n_seed_all, n_early_vc_all, stages)
         return true_result, false_result
@@ -622,8 +804,6 @@ def run_compare_survival_rates_rounds(
         shuffled = np.random.permutation(comparison_values)
         true_result, false_result = _survival_for_split(shuffled)
         random_results.append((true_result, false_result))
-        if i % 100 == 0 and i > 0:
-            print(f"Round {i} complete")
 
     return observed_true, observed_false, random_results
 
@@ -643,6 +823,7 @@ def compare_survival_rates(
     title=None,
     annotation_title=None,
     absolute_difference=True,
+    precomputed=None,
 ):
     """Compare survival rates between two groups via a permutation test.
 
@@ -684,6 +865,11 @@ def compare_survival_rates(
     absolute_difference : bool, default True
         If True, compute ``true_rate - false_rate`` (absolute difference).
         If False, compute ``true_rate / false_rate`` (ratio).
+    precomputed : tuple or None, default None
+        If provided, a ``(classifications, current_stages)`` tuple from
+        ``precompute_survival_classifications``.  Skips the expensive
+        per-company classification step.  If None, classifications are
+        computed from scratch.
 
     Returns
     -------
@@ -709,6 +895,7 @@ def compare_survival_rates(
         company_status_col=company_status_col,
         stages=stages,
         n_rounds=n_rounds,
+        precomputed=precomputed,
     )
 
     if absolute_difference:
