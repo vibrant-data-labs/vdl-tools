@@ -33,6 +33,15 @@ class QueryCompaniesExtendedResult(TypedDict, total=False):
     founders: pd.DataFrame | None
 
 
+CB_TABLE_NAMES: tuple[str, ...] = (
+    "organizations",
+    "funding_rounds",
+    "founders",
+    "org_investors",
+    "people_investors",
+)
+
+
 # ---------------------------------------------------------------------------
 # DB helpers
 # ---------------------------------------------------------------------------
@@ -665,13 +674,7 @@ def load_search_results_from_parquet(
     """
     from vdl_tools.shared_tools.parquet_cache import read_dataframes
 
-    names = names or [
-        "organizations",
-        "funding_rounds",
-        "people_investors",
-        "org_investors",
-        "founders",
-    ]
+    names = names or list(CB_TABLE_NAMES)
     return read_dataframes(
         dir_uri=dir_uri,
         names=names,

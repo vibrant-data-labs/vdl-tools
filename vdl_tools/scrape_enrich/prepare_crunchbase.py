@@ -8,7 +8,10 @@ import vdl_tools.shared_tools.cb_funding_calculations as fcalc
 import vdl_tools.shared_tools.common_functions as cf  # from common directory: commonly used functions
 import vdl_tools.shared_tools.project_config as pc
 
-from vdl_tools.scrape_enrich.crunchbase.organizations_api_db import load_search_results_from_parquet
+from vdl_tools.scrape_enrich.crunchbase.organizations_api_db import (
+    CB_TABLE_NAMES,
+    load_search_results_from_parquet,
+)
 from vdl_tools.shared_tools.parquet_cache import write_dataframe
 
 
@@ -567,19 +570,10 @@ def process_crunchbase_raw_data_from_parquet(
     if save_cleaned and not dir_uri:
         raise ValueError("save_cleaned=True requires dir_uri= as the write destination.")
 
-    # Table keys match the dict returned by ``query_companies_extended`` and
-    # therefore the filenames written by ``search_results_to_parquet``:
-    #   organizations, funding_rounds, people_investors, org_investors, founders
     if tables is None:
         tables = load_search_results_from_parquet(
             dir_uri=dir_uri,
-            names=[
-                "organizations",
-                "funding_rounds",
-                "founders",
-                "org_investors",
-                "people_investors",
-            ],
+            names=list(CB_TABLE_NAMES),
             use_cache=use_cache,
             cache_dir=cache_dir,
             check_remote=check_remote,

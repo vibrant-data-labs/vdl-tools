@@ -83,7 +83,7 @@ def _read_target(
             "cache_storage": str(cache_dir),
             "check_files": check_remote,  # ETag HEAD on every open
             "expiry_time": None,          # no TTL — rely on ETag check
-            "same_names": False,          # cache by URL hash
+            "same_names": False,
         },
         "s3": _s3_creds(),
     }
