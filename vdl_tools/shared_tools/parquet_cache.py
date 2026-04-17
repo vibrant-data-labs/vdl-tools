@@ -30,6 +30,7 @@ import pyarrow.parquet as pq
 
 from vdl_tools.shared_tools.tools.logger import logger
 from vdl_tools.shared_tools.tools.config_utils import get_configuration
+from vdl_tools.shared_tools.s3_tools import get_s3_client, create_bucket, bucket_exists
 
 
 DEFAULT_CACHE_DIR = Path(
@@ -133,6 +134,10 @@ def _to_string(v):
     return None if _is_null(v) else str(v)
 
 
+def _is_s3_bucket_exists(uri: str) -> bool:
+    return _is_s3(uri) and bucket_exists(uri.split("/")[2])
+
+
 # ---------------------------------------------------------------------------
 # Public API — single file
 # ---------------------------------------------------------------------------
@@ -192,6 +197,9 @@ def write_dataframe(
 
     if _is_s3(uri):
         opts = {"s3": _s3_creds()}
+        # Check if the bucket exists and create it if it doesn't
+        if not _is_s3_bucket_exists(uri):
+            create_bucket(get_s3_client(), uri.split("/")[2])
     else:
         Path(uri).parent.mkdir(parents=True, exist_ok=True)
         opts = {}
