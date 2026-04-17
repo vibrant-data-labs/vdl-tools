@@ -88,10 +88,10 @@ def combine_funding_data(
     return funding_df
 
 
-def load_cb_round_data(funding_rounds_path, investor_orgs_path):
+def load_cb_round_data(funding_rounds_uri, investor_orgs_uri):
     full_round_df = load_process_funding_rounds(
-        funding_rounds_path,
-        investor_orgs_path
+        fr_uri=funding_rounds_uri,
+        investor_orgs_uri=investor_orgs_uri
     )
 
     full_round_df["organization_uuid"] = full_round_df[

@@ -682,14 +682,14 @@ def __get_org_country_from_fr(entries):
 
 
 def load_process_funding_rounds(
-    fr_path,
-    investor_orgs_path,
+    fr_uri,
+    investor_orgs_uri,
     filter_yr=2010,
 ):
     logger.info('loading funding rounds')
-    df_fr = pd.read_json(fr_path)
+    df_fr = pq_cache.read_dataframe(uri=fr_uri)
     logger.info('loading investor orgs')
-    orgs_investors_df = pd.read_json(investor_orgs_path)
+    orgs_investors_df = pq_cache.read_dataframe(uri=investor_orgs_uri)
     logger.info('processing funding rounds')
     return process_funding_rounds(df_fr, orgs_investors_df, filter_yr)
 
