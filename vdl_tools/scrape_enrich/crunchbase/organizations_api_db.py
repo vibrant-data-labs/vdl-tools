@@ -1,8 +1,10 @@
+from pathlib import Path
 from typing import TypedDict
 from more_itertools import chunked
 import pandas as pd
 import hashlib
 import json
+import math
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert
 
@@ -90,9 +92,8 @@ def __upsert_dataframe(
     ]
 
     logger.info("Upserting %s records into %s", len(safe_records), model.__tablename__)
-    chunks = chunked(safe_records, chunk_size)
-    num_chunks = len(chunks)
-    for i, chunk in enumerate(chunks):
+    num_chunks = math.ceil(len(safe_records) / chunk_size)
+    for i, chunk in enumerate(chunked(safe_records, chunk_size)):
         logger.info("Upserting chunk %s of %s", i + 1, num_chunks)
         stmt = insert(table).values(chunk)
         set_ = {col: stmt.excluded[col] for col in non_pk_cols}
@@ -371,7 +372,6 @@ def query_companies_extended(
     use_cache=True,
     save_to_cache=True,
     save_to_uri=None,
-    storage_options=None,
 ) -> QueryCompaniesExtendedResult | None:
     """Query Crunchbase organizations and related entities with Postgres DB caching.
 
@@ -409,9 +409,6 @@ def query_companies_extended(
         URI including bucket, e.g. ``s3://shared-data-clone/cb_raw/fisheries``).
         Any files currently at that location will be overwritten. If not
         provided, results are returned in memory only.
-    storage_options : dict, optional
-        Extra fsspec storage options, passed to the Parquet writer. Only used
-        when ``save_to_uri`` is set.
 
     Notes
     -----
@@ -588,7 +585,6 @@ def query_companies_extended(
                     "items_list": list(items_list),
                     "extra_filters": [str(f) for f in (extra_filters or [])],
                 },
-                storage_options=storage_options,
             )
 
         return results
@@ -598,7 +594,6 @@ def search_results_to_parquet(
     search_results: QueryCompaniesExtendedResult,
     dir_uri: str,
     search_metadata: dict | None = None,
-    storage_options: dict | None = None,
 ) -> dict[str, str]:
     """Persist the 5 CB result DataFrames as Parquet under ``dir_uri``.
 
@@ -615,8 +610,6 @@ def search_results_to_parquet(
     search_metadata
         Query context (search terms, filters, etc.) embedded in each Parquet
         file's footer for lineage.
-    storage_options
-        Extra fsspec options.
 
     Returns
     -------
@@ -634,21 +627,24 @@ def search_results_to_parquet(
         {k: v for k, v in search_results.items() if v is not None},
         dir_uri=dir_uri,
         lineage=lineage,
-        storage_options=storage_options,
     )
 
 
 def load_search_results_from_parquet(
     dir_uri: str,
     names: list[str] | None = None,
-    storage_options: dict | None = None,
+    *,
+    use_cache: bool = True,
+    cache_dir: Path | None = None,
+    check_remote: bool = True,
 ) -> dict[str, pd.DataFrame]:
     """Load the 5 CB result DataFrames previously written by
     :func:`search_results_to_parquet`.
 
-    Uses a local filecache (``~/.cache/vdl-tools/parquet``) so each user
-    downloads each file once, with an ETag HEAD check on every read so
-    concurrent writers don't cause silent stale reads.
+    For ``s3://`` sources, reads go through a local filecache
+    (``~/.cache/vdl-tools/parquet``) so each user downloads each file once,
+    with an ETag HEAD check on every read to avoid silent stale reads when
+    someone else pushes a new version.
 
     Parameters
     ----------
@@ -657,8 +653,15 @@ def load_search_results_from_parquet(
         ``file://`` URI, or full ``s3://`` URI including bucket).
     names
         Subset of tables to load. Defaults to all 5.
-    storage_options
-        Extra fsspec options.
+    use_cache
+        If False, bypass the local cache and read straight from S3 every
+        time. Mostly useful for debugging or confirming remote contents.
+    cache_dir
+        Override the default cache directory (``~/.cache/vdl-tools/parquet``).
+    check_remote
+        If True (default), HEAD-check the remote ETag on every open. Set to
+        False for offline / airplane use — you'll serve whatever is in the
+        local cache without validating against the remote.
     """
     from vdl_tools.shared_tools.parquet_cache import read_dataframes
 
@@ -669,4 +672,10 @@ def load_search_results_from_parquet(
         "org_investors",
         "founders",
     ]
-    return read_dataframes(dir_uri=dir_uri, names=names, storage_options=storage_options)
+    return read_dataframes(
+        dir_uri=dir_uri,
+        names=names,
+        use_cache=use_cache,
+        cache_dir=cache_dir,
+        check_remote=check_remote,
+    )

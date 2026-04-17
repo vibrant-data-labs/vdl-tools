@@ -1,62 +1,17 @@
-"""Parquet-backed DataFrame I/O with transparent local caching for remote stores.
+"""Parquet-backed DataFrame I/O with transparent local caching for S3 reads.
 
-Purpose
--------
-A drop-in replacement for ``pd.read_json`` / ``DataFrame.to_json`` that:
+Drop-in replacement for ``pd.read_json`` / ``DataFrame.to_json`` that:
 
-1. Writes compressed, schema-bearing Parquet instead of JSON.
-2. Works transparently with local paths, ``file://`` URIs, and ``s3://`` URIs.
-3. For remote reads, uses fsspec's ``filecache`` with ETag validation so that
-   (a) each user only downloads a given file once, and (b) if someone pushes
-   a new version, the ETag HEAD check on the next read invalidates the local
-   cache automatically — no silent stale reads.
-4. Handles dict/list columns by JSON-encoding them to strings; the list of
-   JSON-encoded columns is recorded in the Parquet footer metadata so reads
-   round-trip cleanly back to Python dicts/lists.
-5. Stores caller-supplied lineage metadata (search terms, source, timestamp,
-   vdl-tools version, etc.) in the footer for later audit.
+- writes typed, ZSTD-compressed Parquet,
+- works with local paths, ``file://`` URIs, and ``s3://`` URIs,
+- for ``s3://`` reads, caches locally with ETag validation on every open
+  (no silent stale reads when someone else pushes a new version),
+- serializes dict/list columns as JSON (round-trips via footer metadata),
+- coerces mixed-scalar-type object columns to string (with a warning),
+- stores caller-supplied ``lineage`` in the footer; retrieve via :func:`get_lineage`.
 
-Usage
------
-Single file::
-
-    from vdl_tools.shared_tools.parquet_cache import write_dataframe, read_dataframe
-
-    # anywhere pd.to_json / pd.read_json were used
-    write_dataframe(df, "s3://shared-data-clone/cb_raw/fisheries/organizations.parquet")
-    df = read_dataframe("s3://shared-data-clone/cb_raw/fisheries/organizations.parquet")
-
-Multiple files under a shared directory URI::
-
-    from vdl_tools.shared_tools.parquet_cache import write_dataframes, read_dataframes
-
-    write_dataframes(
-        {"organizations": df_orgs, "funding_rounds": df_fr, ...},
-        dir_uri="s3://shared-data-clone/cb_raw/fisheries",
-        lineage={"source": "crunchbase", "search_terms": [...]},
-    )
-    tables = read_dataframes(
-        dir_uri="s3://shared-data-clone/cb_raw/fisheries",
-        names=["organizations", "funding_rounds", "founders"],
-    )
-
-Caching behaviour
------------------
-Local paths are passed through as-is — no caching layer.
-
-``s3://`` paths are read through fsspec's ``filecache`` with
-``check_files=True``. Every read issues an S3 HEAD against the object and
-compares ETags; matching ETag → serve from local cache, differing ETag →
-re-download. This costs one ~10ms HEAD per read in exchange for correctness
-against concurrent writers.
-
-Cache location is ``~/.cache/vdl-tools/parquet`` by default; override by
-setting ``VDL_PARQUET_CACHE_DIR`` or passing ``cache_dir=``.
-
-Dependencies
-------------
-Requires ``pyarrow`` (already in our stack) and, for S3, ``s3fs``. Install
-``s3fs`` if not already present: ``pip install s3fs``.
+Cache dir defaults to ``~/.cache/vdl-tools/parquet``; override with
+``VDL_PARQUET_CACHE_DIR`` or by passing ``cache_dir=``.
 """
 
 from __future__ import annotations
@@ -64,10 +19,9 @@ from __future__ import annotations
 import json
 import math
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
-from urllib.parse import urlparse
 
 import fsspec
 import pandas as pd
@@ -78,180 +32,105 @@ from vdl_tools.shared_tools.tools.logger import logger
 from vdl_tools.shared_tools.tools.config_utils import get_configuration
 
 
-# ---------------------------------------------------------------------------
-# Constants & config
-# ---------------------------------------------------------------------------
-
 DEFAULT_CACHE_DIR = Path(
     os.environ.get("VDL_PARQUET_CACHE_DIR", Path.home() / ".cache" / "vdl-tools" / "parquet")
 )
 
-# Metadata keys we write into the Parquet footer. pyarrow requires bytes.
-_META_JSON_COLS = b"vdl_json_columns"
-_META_LINEAGE = b"vdl_lineage"
-
-# Remote protocols that should be routed through filecache.
-_REMOTE_PROTOCOLS = {"s3", "gs", "gcs", "az", "abfs", "http", "https"}
-
-# Compression for Parquet writes. ZSTD level 3 is ~2-3x smaller than the pandas
-# default (Snappy) at comparable decode speed. Fixed because no caller tunes it.
-_COMPRESSION = "zstd"
-_COMPRESSION_LEVEL = 3
-
-# How many non-null values to sample when auto-detecting JSON columns. Cheap
-# insurance against the "first value is a string, rest are dicts" footgun.
-_JSON_DETECT_SAMPLE = 100
+_JSON_COLS_KEY = b"vdl_json_columns"
+_LINEAGE_KEY = b"vdl_lineage"
+_SAMPLE_SIZE = 100  # non-null values per column to check when scanning
 
 
 # ---------------------------------------------------------------------------
-# URI / path handling
+# URIs & S3 credentials
 # ---------------------------------------------------------------------------
 
-def _normalize_uri(uri: str | Path) -> str:
-    """Return a string URI. Pathlib paths become plain local paths."""
-    if isinstance(uri, Path):
-        return str(uri)
-    return uri
+def _is_s3(uri: str) -> bool:
+    return uri.startswith("s3://")
 
 
-def _protocol(uri: str) -> str:
-    """Return fsspec protocol for a URI ('' for local paths)."""
-    parsed = urlparse(uri)
-    # Windows drive letters (C:\) parse as scheme='c'; treat single-letter as local.
-    if len(parsed.scheme) <= 1:
-        return ""
-    return parsed.scheme
-
-
-def _is_remote(uri: str) -> bool:
-    return _protocol(uri) in _REMOTE_PROTOCOLS
-
-
-def _s3_storage_options() -> dict[str, Any]:
-    """Pull S3 credentials from the standard vdl-tools config.ini.
-
-    Returns an empty dict if config is missing — in that case s3fs falls
-    back to the normal boto3 credential chain (env vars, ~/.aws/credentials, etc.).
-    """
+def _s3_creds() -> dict:
+    """Read AWS creds from config.ini ``[aws]``. Empty dict → boto3 default chain."""
     try:
-        config = get_configuration()
-        aws = config.get("aws", {}) if config else {}
-        opts: dict[str, Any] = {}
-        # s3fs expects 'key' and 'secret' (not 'aws_access_key_id' etc.)
-        if aws.get("access_key_id"):
-            opts["key"] = aws["access_key_id"]
-        if aws.get("secret_access_key"):
-            opts["secret"] = aws["secret_access_key"]
-        if aws.get("region"):
-            opts["client_kwargs"] = {"region_name": aws["region"]}
-        return opts
-    except Exception as exc:  # pragma: no cover — defensive
-        logger.debug("Could not load S3 config (%s); relying on default credential chain.", exc)
+        aws = get_configuration()["aws"]
+    except Exception:
         return {}
-
-
-def _read_storage_options(
-    uri: str,
-    cache_dir: Path | None,
-    check_remote: bool,
-    extra: dict[str, Any] | None,
-) -> tuple[str, dict[str, Any]]:
-    """Build (possibly-wrapped) URI and storage_options for a read.
-
-    For remote URIs, wraps with ``filecache::`` so downloads are cached locally
-    and validated against remote ETag on each open.
-    """
-    if not _is_remote(uri):
-        return uri, extra or {}
-
-    cache_dir = Path(cache_dir) if cache_dir else DEFAULT_CACHE_DIR
-    cache_dir.mkdir(parents=True, exist_ok=True)
-
-    protocol = _protocol(uri)
-    wrapped_uri = f"filecache::{uri}"
-
-    storage_options: dict[str, Any] = {
-        "filecache": {
-            "cache_storage": str(cache_dir),
-            "check_files": check_remote,  # HEAD-check ETag on every open
-            "expiry_time": None,          # no TTL; rely on ETag check
-            "same_names": False,          # cache by URL hash, not filename
-        },
-    }
-
-    if protocol == "s3":
-        storage_options["s3"] = {**_s3_storage_options(), **((extra or {}).get("s3", {}))}
-    # Merge any caller-supplied options for other protocols verbatim.
-    for k, v in (extra or {}).items():
-        if k not in storage_options:
-            storage_options[k] = v
-
-    return wrapped_uri, storage_options
-
-
-def _write_storage_options(
-    uri: str,
-    extra: dict[str, Any] | None,
-) -> dict[str, Any]:
-    """Build storage_options for a write — no cache layer, just creds."""
-    if not _is_remote(uri):
-        return extra or {}
-    opts: dict[str, Any] = {}
-    if _protocol(uri) == "s3":
-        opts.update(_s3_storage_options())
-    opts.update(extra or {})
+    opts: dict = {}
+    if aws.get("access_key_id"):
+        opts["key"] = aws["access_key_id"]
+    if aws.get("secret_access_key"):
+        opts["secret"] = aws["secret_access_key"]
+    if aws.get("region"):
+        opts["client_kwargs"] = {"region_name": aws["region"]}
     return opts
 
 
+def _read_target(
+    uri: str,
+    use_cache: bool,
+    cache_dir: Path | None,
+    check_remote: bool,
+) -> tuple[str, dict]:
+    """Return (effective_uri, fsspec_opts) for reading from ``uri``."""
+    if not _is_s3(uri):
+        return uri, {}
+    if not use_cache:
+        return uri, {"s3": _s3_creds()}
+    cache_dir = Path(cache_dir) if cache_dir else DEFAULT_CACHE_DIR
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return f"filecache::{uri}", {
+        "filecache": {
+            "cache_storage": str(cache_dir),
+            "check_files": check_remote,  # ETag HEAD on every open
+            "expiry_time": None,          # no TTL — rely on ETag check
+            "same_names": False,          # cache by URL hash
+        },
+        "s3": _s3_creds(),
+    }
+
+
 # ---------------------------------------------------------------------------
-# JSON column handling (for dict/list columns)
+# Column scanning & value coercion
 # ---------------------------------------------------------------------------
 
-def _is_json_scalar(v: Any) -> bool:
-    """True iff ``v`` is a dict/list/tuple that needs JSON-encoding for Parquet."""
-    return isinstance(v, (dict, list, tuple))
+def _scan_columns(df: pd.DataFrame) -> tuple[list[str], list[str]]:
+    """Classify object columns by sampling up to ``_SAMPLE_SIZE`` non-null values.
 
+    Returns ``(json_cols, mixed_cols)``:
+    - ``json_cols``: any sampled value is a dict/list/tuple → JSON-encode
+    - ``mixed_cols``: >1 scalar type seen (no dict/list) → coerce to string
 
-def _detect_json_columns(df: pd.DataFrame) -> list[str]:
-    """Find columns containing dict/list values (ignoring nulls).
-
-    Samples up to ``_JSON_DETECT_SAMPLE`` non-null values per column. A column
-    is marked JSON if **any** sampled value is a dict/list. This is more robust
-    than checking only the first value — columns with mixed string/dict
-    content (rare but real) would otherwise lose the dict entries on write.
+    Non-object columns are skipped (pandas already has one type for them).
     """
-    json_cols: list[str] = []
+    json_cols, mixed_cols = [], []
     for col in df.columns:
-        s = df[col]
-        if s.dtype != object:
+        if df[col].dtype != object:
             continue
-        non_null = s.dropna()
-        if non_null.empty:
+        sample = df[col].dropna().head(_SAMPLE_SIZE)
+        if sample.empty:
             continue
-        sample = non_null.iloc[:_JSON_DETECT_SAMPLE]
-        if sample.map(_is_json_scalar).any():
+        types = {type(v) for v in sample}
+        if types & {dict, list, tuple}:
             json_cols.append(col)
-    return json_cols
+        elif len(types) > 1:
+            mixed_cols.append(col)
+    return json_cols, mixed_cols
 
 
-def _encode_json_column(series: pd.Series) -> pd.Series:
-    def enc(v: Any) -> Any:
-        if v is None:
-            return None
-        if isinstance(v, float) and math.isnan(v):
-            return None
-        return json.dumps(v, default=str, ensure_ascii=False)
-    return series.map(enc)
+def _is_null(v) -> bool:
+    return v is None or (isinstance(v, float) and math.isnan(v))
 
 
-def _decode_json_column(series: pd.Series) -> pd.Series:
-    def dec(v: Any) -> Any:
-        if v is None:
-            return None
-        if isinstance(v, float) and math.isnan(v):
-            return None
-        return json.loads(v)
-    return series.map(dec)
+def _encode_json(v):
+    return None if _is_null(v) else json.dumps(v, default=str, ensure_ascii=False)
+
+
+def _decode_json(v):
+    return None if _is_null(v) else json.loads(v)
+
+
+def _to_string(v):
+    return None if _is_null(v) else str(v)
 
 
 # ---------------------------------------------------------------------------
@@ -262,276 +141,250 @@ def write_dataframe(
     df: pd.DataFrame,
     uri: str | Path,
     *,
-    json_columns: Iterable[str] | None = None,
-    lineage: dict[str, Any] | None = None,
-    storage_options: dict[str, Any] | None = None,
+    lineage: dict | None = None,
 ) -> str:
-    """Write ``df`` to ``uri`` as Parquet (ZSTD-compressed).
+    """Write ``df`` to ``uri`` as Parquet (ZSTD level 3).
+
+    - Dict/list columns are JSON-encoded; they round-trip via :func:`read_dataframe`.
+    - Object columns with mixed scalar types are coerced to string (with a
+      warning) so pyarrow has a single type per column.
+    - ``lineage`` is stored in the file footer under ``vdl_lineage``; a
+      ``created_at`` timestamp is added automatically.
 
     Parameters
     ----------
     df
         DataFrame to write.
     uri
-        Destination. Local path, ``file://`` URI, or ``s3://`` URI.
-    json_columns
-        Columns whose values are Python dicts/lists. If ``None``, auto-detected
-        by sampling non-null values in each object column. Pass an empty list
-        to disable auto-detection. These columns are serialized as JSON strings
-        in Parquet; ``read_dataframe`` will decode them back.
+        Destination. Local path (``str`` or ``Path``), ``file://`` URI, or
+        full ``s3://`` URI including bucket.
     lineage
-        Arbitrary JSON-serializable dict stored in the Parquet footer under
+        Optional JSON-serializable dict stored in the file footer under
         ``vdl_lineage``. Recommended keys: ``source``, ``created_by``,
-        ``vdl_tools_version``, plus anything domain-specific (search terms,
-        filters, row counts, etc.). ``created_at`` is added automatically.
-    storage_options
-        Passed through to the fsspec filesystem (e.g. custom S3 endpoint).
+        plus any domain-specific metadata (search terms, filters, row
+        counts, etc.). Retrieve via :func:`get_lineage`.
 
     Returns
     -------
     str
-        The URI that was written (useful for chaining / logging).
+        The URI written (useful for chaining / logging).
     """
-    uri_str = _normalize_uri(uri)
+    uri = str(uri)
+    json_cols, mixed_cols = _scan_columns(df)
 
-    if json_columns is None:
-        json_cols = _detect_json_columns(df)
-    else:
-        json_cols = list(json_columns)
-
-    # Encode JSON columns to strings before handing to pyarrow.
-    if json_cols:
+    if json_cols or mixed_cols:
         df = df.copy()
-        for col in json_cols:
-            df[col] = _encode_json_column(df[col])
+    for col in json_cols:
+        df[col] = df[col].map(_encode_json)
+    if mixed_cols:
+        logger.warning("Coercing mixed-type columns to string: %s", mixed_cols)
+        for col in mixed_cols:
+            df[col] = df[col].map(_to_string)
 
     table = pa.Table.from_pandas(df, preserve_index=False)
+    meta = dict(table.schema.metadata or {})
+    meta[_JSON_COLS_KEY] = json.dumps(json_cols).encode()
+    meta[_LINEAGE_KEY] = json.dumps(
+        {"created_at": datetime.now(timezone.utc).isoformat(), **(lineage or {})},
+        default=str,
+    ).encode()
+    table = table.replace_schema_metadata(meta)
 
-    # Attach metadata to the schema (preserving pandas's own schema metadata).
-    existing_meta = dict(table.schema.metadata or {})
-    full_lineage = {
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        **(lineage or {}),
-    }
-    existing_meta[_META_JSON_COLS] = json.dumps(json_cols).encode()
-    existing_meta[_META_LINEAGE] = json.dumps(full_lineage, default=str).encode()
-    table = table.replace_schema_metadata(existing_meta)
+    if _is_s3(uri):
+        opts = {"s3": _s3_creds()}
+    else:
+        Path(uri).parent.mkdir(parents=True, exist_ok=True)
+        opts = {}
 
-    write_opts = _write_storage_options(uri_str, storage_options)
+    with fsspec.open(uri, "wb", **opts) as f:
+        pq.write_table(table, f, compression="zstd", compression_level=3)
 
-    # Ensure parent directory exists for local writes.
-    if not _is_remote(uri_str):
-        Path(uri_str).parent.mkdir(parents=True, exist_ok=True)
-
-    with fsspec.open(uri_str, "wb", **write_opts) as f:
-        pq.write_table(
-            table,
-            f,
-            compression=_COMPRESSION,
-            compression_level=_COMPRESSION_LEVEL,
-        )
-
-    logger.info("Wrote %d rows → %s (%d json cols)", len(df), uri_str, len(json_cols))
-    return uri_str
+    logger.info("Wrote %d rows → %s (%d json cols)", len(df), uri, len(json_cols))
+    return uri
 
 
 def read_dataframe(
     uri: str | Path,
     *,
-    columns: Iterable[str] | None = None,
+    columns: list[str] | None = None,
     use_cache: bool = True,
     cache_dir: Path | None = None,
     check_remote: bool = True,
-    storage_options: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
-    """Read a Parquet file written by :func:`write_dataframe` back into a DataFrame.
+    """Read a Parquet file into a DataFrame.
+
+    For ``s3://`` sources with ``use_cache=True`` (default), reads go through
+    a local filecache with an ETag HEAD on every open. Local paths read
+    directly — cache params are ignored.
 
     Parameters
     ----------
     uri
-        Source. Local path, ``file://`` URI, or ``s3://`` URI.
+        Source. Local path (``str`` or ``Path``), ``file://`` URI, or full
+        ``s3://`` URI including bucket.
     columns
-        If set, only these columns are read (column pruning — much faster for
-        wide tables on remote storage).
+        If set, only these columns are read (column pruning). Much faster
+        for wide tables on remote storage.
     use_cache
-        If False, bypass the local cache and read straight from remote. Useful
-        for debugging or when you want to confirm remote contents.
+        If False, skip the local cache and read straight from S3 every time.
+        Useful for debugging or confirming remote contents.
     cache_dir
-        Override the default cache directory (``~/.cache/vdl-tools/parquet``).
+        Override the default cache directory (``~/.cache/vdl-tools/parquet``,
+        or whatever ``VDL_PARQUET_CACHE_DIR`` is set to).
     check_remote
-        If True (default), HEAD-check the remote ETag on every open. Set to
-        False for offline / airplane use — you'll serve whatever's in the
-        cache without validating.
-    storage_options
-        Extra fsspec options.
+        If True (default), HEAD-check the remote ETag on every open so a
+        concurrent writer's new version invalidates the local cache. Set to
+        False for offline / airplane use — the local cache is served without
+        validating against the remote.
     """
-    uri_str = _normalize_uri(uri)
-
-    if not use_cache or not _is_remote(uri_str):
-        effective_uri = uri_str
-        opts = _write_storage_options(uri_str, storage_options)  # write opts = creds only, no cache
-    else:
-        effective_uri, opts = _read_storage_options(
-            uri_str,
-            cache_dir=cache_dir,
-            check_remote=check_remote,
-            extra=storage_options,
-        )
+    uri = str(uri)
+    effective_uri, opts = _read_target(uri, use_cache, cache_dir, check_remote)
 
     with fsspec.open(effective_uri, "rb", **opts) as f:
-        table = pq.read_table(f, columns=list(columns) if columns else None)
+        table = pq.read_table(f, columns=columns)
 
     meta = table.schema.metadata or {}
-    json_cols_raw = meta.get(_META_JSON_COLS)
-    json_cols = set(json.loads(json_cols_raw)) if json_cols_raw else set()
+    json_cols = set(json.loads(meta.get(_JSON_COLS_KEY) or b"[]"))
 
     df = table.to_pandas()
-
-    # Decode JSON columns back to Python objects. Skip any pruned columns.
-    for col in json_cols:
-        if col in df.columns:
-            df[col] = _decode_json_column(df[col])
-
+    for col in json_cols & set(df.columns):
+        df[col] = df[col].map(_decode_json)
     return df
 
 
 def get_lineage(
     uri: str | Path,
     *,
+    use_cache: bool = True,
     cache_dir: Path | None = None,
     check_remote: bool = True,
-    storage_options: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Return the ``vdl_lineage`` dict embedded in a Parquet file's footer."""
-    uri_str = _normalize_uri(uri)
+) -> dict:
+    """Return the ``vdl_lineage`` dict from a Parquet file's footer.
 
-    if _is_remote(uri_str):
-        effective_uri, opts = _read_storage_options(
-            uri_str, cache_dir=cache_dir, check_remote=check_remote, extra=storage_options,
-        )
-    else:
-        effective_uri, opts = uri_str, (storage_options or {})
+    Metadata-only read — does not load row groups. Returns an empty dict if
+    the file has no ``vdl_lineage`` metadata (e.g. it wasn't written by
+    :func:`write_dataframe`).
 
+    Parameters
+    ----------
+    uri
+        Source. Local path, ``file://`` URI, or full ``s3://`` URI.
+    use_cache, cache_dir, check_remote
+        See :func:`read_dataframe` — same cache semantics apply.
+    """
+    uri = str(uri)
+    effective_uri, opts = _read_target(uri, use_cache, cache_dir, check_remote)
     with fsspec.open(effective_uri, "rb", **opts) as f:
-        # metadata-only read — pyarrow reads the footer without loading row groups
-        pqfile = pq.ParquetFile(f)
-        meta = pqfile.schema_arrow.metadata or {}
-
-    raw = meta.get(_META_LINEAGE)
-    return json.loads(raw) if raw else {}
+        meta = pq.ParquetFile(f).schema_arrow.metadata or {}
+    return json.loads(meta.get(_LINEAGE_KEY) or b"{}")
 
 
 # ---------------------------------------------------------------------------
-# Public API — multi-table convenience
+# Public API — multi-table
 # ---------------------------------------------------------------------------
 
 def write_dataframes(
     tables: dict[str, pd.DataFrame],
     dir_uri: str | Path,
     *,
-    lineage: dict[str, Any] | None = None,
-    storage_options: dict[str, Any] | None = None,
+    lineage: dict | None = None,
 ) -> dict[str, str]:
-    """Write ``{name: df}`` pairs as ``{dir_uri}/{name}.parquet``.
+    """Write each non-None DataFrame as ``{dir_uri}/{name}.parquet``.
+
+    Each file's footer gets the same ``lineage`` dict plus a ``table_name``
+    field so individual files are self-describing.
 
     Parameters
     ----------
     tables
-        Mapping of table name → DataFrame. ``None`` values are skipped.
+        Mapping of table name → DataFrame. Entries with a ``None`` value
+        are skipped (so callers can pass an optional table slot).
     dir_uri
-        URI of the directory-like container where files will be written.
-        Accepts a local directory path, ``file://`` URI, or ``s3://`` URI —
-        always the **full** location (for S3, include bucket: ``s3://bucket/key/...``).
+        URI of the directory-like container. Local path, ``file://`` URI,
+        or full ``s3://`` URI including bucket.
     lineage
-        Arbitrary JSON-serializable dict attached to each Parquet file's
-        footer. A ``table_name`` field is added automatically, so you can
-        reconstruct where any one file came from without the container URI.
-    storage_options
-        Passed through to the fsspec filesystem.
+        Optional dict applied to every written file. ``table_name`` is
+        added automatically per file.
 
     Returns
     -------
     dict[str, str]
         ``{table_name: uri_written}``.
     """
-    base = _normalize_uri(dir_uri).rstrip("/")
-
-    written: dict[str, str] = {}
-    for name, df in tables.items():
-        if df is None:
-            logger.debug("Skipping %s (None)", name)
-            continue
-        uri = f"{base}/{name}.parquet"
-        written[name] = write_dataframe(
+    base = str(dir_uri).rstrip("/")
+    return {
+        name: write_dataframe(
             df,
-            uri,
+            f"{base}/{name}.parquet",
             lineage={**(lineage or {}), "table_name": name},
-            storage_options=storage_options,
         )
-    return written
+        for name, df in tables.items()
+        if df is not None
+    }
 
 
 def read_dataframes(
     dir_uri: str | Path,
-    names: Iterable[str],
+    names: list[str],
     *,
-    columns_per_table: dict[str, Iterable[str]] | None = None,
     use_cache: bool = True,
     cache_dir: Path | None = None,
     check_remote: bool = True,
-    storage_options: dict[str, Any] | None = None,
 ) -> dict[str, pd.DataFrame]:
-    """Read ``{dir_uri}/{name}.parquet`` for each name into a dict of DataFrames.
+    """Read ``{dir_uri}/{name}.parquet`` for each name.
 
     Parameters
     ----------
     dir_uri
-        URI of the directory-like container to read from. Same semantics as
-        ``write_dataframes`` — local path, ``file://`` URI, or full ``s3://``
-        URI including bucket.
+        URI of the directory-like container. Local path, ``file://`` URI,
+        or full ``s3://`` URI including bucket.
     names
-        Table base names (without ``.parquet`` extension) to load.
-    columns_per_table
-        Optional per-table column subset, for column pruning.
-    use_cache, cache_dir, check_remote, storage_options
+        Base filenames to load (without the ``.parquet`` extension).
+    use_cache, cache_dir, check_remote
         See :func:`read_dataframe`.
-    """
-    base = _normalize_uri(dir_uri).rstrip("/")
-    columns_per_table = columns_per_table or {}
 
-    out: dict[str, pd.DataFrame] = {}
-    for name in names:
-        uri = f"{base}/{name}.parquet"
-        out[name] = read_dataframe(
-            uri,
-            columns=columns_per_table.get(name),
+    Returns
+    -------
+    dict[str, pd.DataFrame]
+        ``{name: df}``. Missing files raise ``FileNotFoundError``.
+    """
+    base = str(dir_uri).rstrip("/")
+    return {
+        name: read_dataframe(
+            f"{base}/{name}.parquet",
             use_cache=use_cache,
             cache_dir=cache_dir,
             check_remote=check_remote,
-            storage_options=storage_options,
         )
-    return out
+        for name in names
+    }
 
 
 # ---------------------------------------------------------------------------
 # Cache maintenance
 # ---------------------------------------------------------------------------
 
-def prune_cache(
-    cache_dir: Path | None = None,
-    keep_recent_days: int = 30,
-) -> int:
+def prune_cache(cache_dir: Path | None = None, keep_recent_days: int = 30) -> int:
     """Delete cached files not accessed in the last ``keep_recent_days`` days.
 
-    Returns the number of files removed. Safe to run anytime — cache is
-    transparently rebuilt on next read.
-    """
-    import time
+    Safe to run anytime — cache is transparently rebuilt on next read.
 
+    Parameters
+    ----------
+    cache_dir
+        Cache directory to prune. Defaults to ``DEFAULT_CACHE_DIR`` (i.e.
+        ``~/.cache/vdl-tools/parquet``, or ``VDL_PARQUET_CACHE_DIR`` if set).
+    keep_recent_days
+        Files with atime newer than this are kept. Defaults to 30 days.
+
+    Returns
+    -------
+    int
+        Number of files removed (0 if ``cache_dir`` does not exist).
+    """
     cache_dir = Path(cache_dir) if cache_dir else DEFAULT_CACHE_DIR
     if not cache_dir.exists():
         return 0
-
     cutoff = time.time() - keep_recent_days * 86400
     removed = 0
     for p in cache_dir.rglob("*"):
@@ -539,8 +392,7 @@ def prune_cache(
             try:
                 p.unlink()
                 removed += 1
-            except OSError as exc:
-                logger.warning("Could not remove cache file %s: %s", p, exc)
-    logger.info("Pruned %d cached files older than %d days from %s",
-                removed, keep_recent_days, cache_dir)
+            except OSError:
+                pass
+    logger.info("Pruned %d cached files from %s", removed, cache_dir)
     return removed

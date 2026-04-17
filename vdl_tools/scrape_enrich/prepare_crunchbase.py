@@ -381,6 +381,7 @@ def _process_crunchbase_data(
     logger.info('Extracted funding types from funding rounds')
 
     logger.info('Extracting year last funded')
+    df_cb['last_funding_at'] = pd.to_datetime(df_cb['last_funding_at'])
     df_cb['Year_Last_Funded'] = df_cb['last_funding_at'].apply(lambda lf: lf.year if len(str(lf)) >= 10 else None)
 
     logger.info('Getting total funding by year for each organization')
@@ -496,25 +497,47 @@ def _process_crunchbase_data(
 
 
 def process_crunchbase_raw_data_from_parquet(
-    dir_uri: str,
+    dir_uri: str | None = None,
     filter_yr: int = 2016,
     filter_to_companies: bool = True,
     save_cleaned: bool = True,
     cleaned_filename: str = "cb_companies_cleaned",
-    storage_options: dict | None = None,
+    *,
+    tables: dict[str, pd.DataFrame] | None = None,
+    use_cache: bool = True,
+    cache_dir: Path | None = None,
+    check_remote: bool = True,
 ) -> pd.DataFrame:
-    """Load the 5 raw CB tables from a Parquet directory, clean them, and
-    (by default) persist the cleaned DataFrame back to the same directory.
+    """Clean the 5 raw CB tables and (by default) persist the cleaned DataFrame.
+
+    Supply **either** the raw tables in-memory (``tables=``) **or** a directory
+    URI to read them from (``dir_uri=``). Passing ``tables=`` skips the
+    round-trip through storage entirely — the natural pairing with
+    ``query_companies_extended``, which already returns the 5 DataFrames::
+
+        # zero-round-trip pipeline
+        raw = query_companies_extended(items_list=..., save_to_uri="s3://X")
+        cleaned = process_crunchbase_raw_data_from_parquet(
+            dir_uri="s3://X",   # still needed as the save destination
+            tables=raw,         # read from memory, not S3
+        )
+
+        # pure reader (no prior query in this process)
+        cleaned = process_crunchbase_raw_data_from_parquet(dir_uri="s3://X")
 
     Parameters
     ----------
     dir_uri
-        URI of the directory-like container previously passed to
-        ``query_companies_extended(save_to_uri=...)``. Accepts a local
-        directory path, ``file://`` URI, or full ``s3://`` URI (include
-        bucket, e.g. ``s3://shared-data-clone/cb_raw/fisheries``). Remote
-        reads are locally cached with ETag validation so concurrent writers
-        can't cause silent stale reads.
+        URI of the directory-like container. Required when ``tables`` is not
+        provided (used as the read source) OR when ``save_cleaned=True``
+        (used as the write destination). Accepts a local directory path,
+        ``file://`` URI, or full ``s3://`` URI including bucket
+        (e.g. ``s3://shared-data-clone/cb_raw/fisheries``).
+    tables
+        Pre-loaded raw tables keyed by table name
+        (``organizations``, ``funding_rounds``, ``founders``, ``org_investors``,
+        ``people_investors``). Typically the return value from
+        :func:`query_companies_extended`. When provided, skips all S3 reads.
     filter_yr
         Earliest year of founding to keep.
     filter_to_companies
@@ -525,41 +548,52 @@ def process_crunchbase_raw_data_from_parquet(
         write and only return in memory.
     cleaned_filename
         Base filename (without extension) for the cleaned output. Override
-        this to namespace per-user or per-run variants so different cleaning
+        to namespace per-user or per-run variants so different cleaning
         conventions don't clobber each other (e.g. ``"cb_companies_cleaned__zein"``).
-    storage_options
-        Extra fsspec options.
+    use_cache, cache_dir, check_remote
+        Read-cache controls, only relevant when ``tables`` is not provided.
+        See :func:`load_search_results_from_parquet`.
 
     Notes
     -----
     ``cb_companies_cleaned.parquet`` is a **mutable shared artifact** — the
     last writer wins. Parquet handles column/type drift between writers
-    gracefully (schema is stored per-file, not enforced across writers), so
-    different cleaning conventions will not error; they will simply overwrite
-    each other. If your team's cleaning diverges materially, use
-    ``cleaned_filename`` to namespace your output.
+    gracefully (schema is per-file), so different cleaning conventions will
+    not error; they will simply overwrite each other. If your team's cleaning
+    diverges materially, use ``cleaned_filename`` to namespace your output.
     """
-    if not dir_uri:
-        raise ValueError("Must provide dir_uri (local path or s3:// URI)")
+    if tables is None and not dir_uri:
+        raise ValueError("Must provide either tables= (in-memory) or dir_uri= (storage).")
+    if save_cleaned and not dir_uri:
+        raise ValueError("save_cleaned=True requires dir_uri= as the write destination.")
 
-    tables = load_search_results_from_parquet(
-        dir_uri=dir_uri,
-        names=[
-            "organizations",
-            "funding_rounds",
-            "founders",
-            "investor_orgs",
-            "investor_person",
-        ],
-        storage_options=storage_options,
-    )
+    # Table keys match the dict returned by ``query_companies_extended`` and
+    # therefore the filenames written by ``search_results_to_parquet``:
+    #   organizations, funding_rounds, people_investors, org_investors, founders
+    if tables is None:
+        tables = load_search_results_from_parquet(
+            dir_uri=dir_uri,
+            names=[
+                "organizations",
+                "funding_rounds",
+                "founders",
+                "org_investors",
+                "people_investors",
+            ],
+            use_cache=use_cache,
+            cache_dir=cache_dir,
+            check_remote=check_remote,
+        )
+        data_source = str(dir_uri)
+    else:
+        data_source = "in-memory (caller-supplied)"
 
     cleaned_df = _process_crunchbase_data(
         df_orgs=tables["organizations"],
         df_funding_rounds=tables["funding_rounds"],
         df_founders=tables["founders"],
-        df_investor_orgs=tables["investor_orgs"],
-        df_investor_person=tables["investor_person"],
+        df_investor_orgs=tables["org_investors"],
+        df_investor_person=tables["people_investors"],
         filter_yr=filter_yr,
         filter_to_companies=filter_to_companies,
     )
@@ -573,10 +607,9 @@ def process_crunchbase_raw_data_from_parquet(
                 "source": "prepare_crunchbase.process_crunchbase_raw_data_from_parquet",
                 "filter_yr": filter_yr,
                 "filter_to_companies": filter_to_companies,
-                "input_dir_uri": str(dir_uri),
+                "input_source": data_source,
                 "n_rows": len(cleaned_df),
             },
-            storage_options=storage_options,
         )
 
     return cleaned_df
