@@ -144,6 +144,7 @@ class PrimaryCategoryCache(InstructorPRC):
         Response
             Full API response (with output_parsed as PrimaryCategory instance).
         """
+        kwargs.pop("return_all", None)  # internal base-class flag, not a Responses API param
         messages = self._format_messages(payload)
         response_kwargs = {
             "model": self.model,
@@ -193,6 +194,7 @@ class PrimaryCategoryCache(InstructorPRC):
             prompt_response_obj = PromptResponse(
                 prompt_id=self.prompt.id,
                 given_id=given_id,
+                model_name=self.model,
                 input_text=json.dumps(text),
                 response_full=response_full,
                 num_errors=1,
