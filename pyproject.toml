@@ -38,8 +38,8 @@ dependencies = [
     "openpyxl",
     "pandas>=2.0.0,<3.0.0",
     "pyarrow>=15.0.0",                # parquet I/O for shared_tools.parquet_cache
-    "fsspec>=2024.0.0",               # local caching layer for remote parquet reads
-    "s3fs>=2024.0.0",                 # S3 backend for fsspec
+    "fsspec>=2024.0.0,<2025.0.0",     # local caching layer for remote parquet reads; capped to match datasets/torch
+    "s3fs>=2024.0.0,<2025.0.0",       # S3 backend for fsspec; must track fsspec version
     "playwright>=1.56.0,<2.0.0",
     "playwright-stealth>=2.0.0,<3.0.0",
     "plotly",
