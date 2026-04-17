@@ -112,6 +112,7 @@ dependencies = [
     "pytest-cov>=4.0.0",
 ]
 post-install-commands = [
+    "playwright install",
     "playwright install chromium",
 ]
 
