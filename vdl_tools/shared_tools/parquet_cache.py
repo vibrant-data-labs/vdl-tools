@@ -89,11 +89,18 @@ DEFAULT_CACHE_DIR = Path(
 # Metadata keys we write into the Parquet footer. pyarrow requires bytes.
 _META_JSON_COLS = b"vdl_json_columns"
 _META_LINEAGE = b"vdl_lineage"
-_META_WRITER_VERSION = b"vdl_writer_version"
-_WRITER_VERSION = "1"
 
 # Remote protocols that should be routed through filecache.
 _REMOTE_PROTOCOLS = {"s3", "gs", "gcs", "az", "abfs", "http", "https"}
+
+# Compression for Parquet writes. ZSTD level 3 is ~2-3x smaller than the pandas
+# default (Snappy) at comparable decode speed. Fixed because no caller tunes it.
+_COMPRESSION = "zstd"
+_COMPRESSION_LEVEL = 3
+
+# How many non-null values to sample when auto-detecting JSON columns. Cheap
+# insurance against the "first value is a string, rest are dicts" footgun.
+_JSON_DETECT_SAMPLE = 100
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +213,13 @@ def _is_json_scalar(v: Any) -> bool:
 
 
 def _detect_json_columns(df: pd.DataFrame) -> list[str]:
-    """Find columns containing dict/list values (ignoring nulls)."""
+    """Find columns containing dict/list values (ignoring nulls).
+
+    Samples up to ``_JSON_DETECT_SAMPLE`` non-null values per column. A column
+    is marked JSON if **any** sampled value is a dict/list. This is more robust
+    than checking only the first value — columns with mixed string/dict
+    content (rare but real) would otherwise lose the dict entries on write.
+    """
     json_cols: list[str] = []
     for col in df.columns:
         s = df[col]
@@ -215,10 +228,8 @@ def _detect_json_columns(df: pd.DataFrame) -> list[str]:
         non_null = s.dropna()
         if non_null.empty:
             continue
-        # Sample the first non-null value; if it's a dict/list, treat column as JSON.
-        # (Mixed-type object columns are rare in our data; if they occur, caller
-        #  should pass ``json_columns=`` explicitly.)
-        if _is_json_scalar(non_null.iloc[0]):
+        sample = non_null.iloc[:_JSON_DETECT_SAMPLE]
+        if sample.map(_is_json_scalar).any():
             json_cols.append(col)
     return json_cols
 
@@ -251,13 +262,11 @@ def write_dataframe(
     df: pd.DataFrame,
     uri: str | Path,
     *,
-    compression: str = "zstd",
-    compression_level: int = 3,
     json_columns: Iterable[str] | None = None,
     lineage: dict[str, Any] | None = None,
     storage_options: dict[str, Any] | None = None,
 ) -> str:
-    """Write ``df`` to ``uri`` as Parquet.
+    """Write ``df`` to ``uri`` as Parquet (ZSTD-compressed).
 
     Parameters
     ----------
@@ -265,19 +274,16 @@ def write_dataframe(
         DataFrame to write.
     uri
         Destination. Local path, ``file://`` URI, or ``s3://`` URI.
-    compression, compression_level
-        Passed to pyarrow. Default ZSTD level 3 — ~2-3x smaller than Snappy
-        at comparable decode speed.
     json_columns
         Columns whose values are Python dicts/lists. If ``None``, auto-detected
-        from the first non-null value in each object column. Pass an empty
-        list to disable auto-detection. These columns are serialized as JSON
-        strings in Parquet; ``read_dataframe`` will decode them back.
+        by sampling non-null values in each object column. Pass an empty list
+        to disable auto-detection. These columns are serialized as JSON strings
+        in Parquet; ``read_dataframe`` will decode them back.
     lineage
         Arbitrary JSON-serializable dict stored in the Parquet footer under
-        ``vdl_lineage``. Recommended keys: ``source``, ``created_at``,
-        ``created_by``, ``vdl_tools_version``, plus anything domain-specific
-        (search terms, filters, row counts, etc.).
+        ``vdl_lineage``. Recommended keys: ``source``, ``created_by``,
+        ``vdl_tools_version``, plus anything domain-specific (search terms,
+        filters, row counts, etc.). ``created_at`` is added automatically.
     storage_options
         Passed through to the fsspec filesystem (e.g. custom S3 endpoint).
 
@@ -309,7 +315,6 @@ def write_dataframe(
     }
     existing_meta[_META_JSON_COLS] = json.dumps(json_cols).encode()
     existing_meta[_META_LINEAGE] = json.dumps(full_lineage, default=str).encode()
-    existing_meta[_META_WRITER_VERSION] = _WRITER_VERSION.encode()
     table = table.replace_schema_metadata(existing_meta)
 
     write_opts = _write_storage_options(uri_str, storage_options)
@@ -322,8 +327,8 @@ def write_dataframe(
         pq.write_table(
             table,
             f,
-            compression=compression,
-            compression_level=compression_level,
+            compression=_COMPRESSION,
+            compression_level=_COMPRESSION_LEVEL,
         )
 
     logger.info("Wrote %d rows → %s (%d json cols)", len(df), uri_str, len(json_cols))
@@ -337,7 +342,6 @@ def read_dataframe(
     use_cache: bool = True,
     cache_dir: Path | None = None,
     check_remote: bool = True,
-    dtype_backend: str = "numpy_nullable",
     storage_options: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
     """Read a Parquet file written by :func:`write_dataframe` back into a DataFrame.
@@ -350,18 +354,14 @@ def read_dataframe(
         If set, only these columns are read (column pruning — much faster for
         wide tables on remote storage).
     use_cache
-        If False, bypass the local cache and read straight from remote. Rarely
-        needed; mostly useful for debugging.
+        If False, bypass the local cache and read straight from remote. Useful
+        for debugging or when you want to confirm remote contents.
     cache_dir
         Override the default cache directory (``~/.cache/vdl-tools/parquet``).
     check_remote
         If True (default), HEAD-check the remote ETag on every open. Set to
         False for offline / airplane use — you'll serve whatever's in the
         cache without validating.
-    dtype_backend
-        Passed to pandas. Default ``"numpy_nullable"`` preserves pandas's
-        nullable dtypes on round-trip. Use ``"pyarrow"`` for the fully-typed
-        Arrow-backed frame.
     storage_options
         Extra fsspec options.
     """
@@ -385,7 +385,7 @@ def read_dataframe(
     json_cols_raw = meta.get(_META_JSON_COLS)
     json_cols = set(json.loads(json_cols_raw)) if json_cols_raw else set()
 
-    df = table.to_pandas(types_mapper=pd.ArrowDtype if dtype_backend == "pyarrow" else None)
+    df = table.to_pandas()
 
     # Decode JSON columns back to Python objects. Skip any pruned columns.
     for col in json_cols:
@@ -429,10 +429,7 @@ def write_dataframes(
     tables: dict[str, pd.DataFrame],
     prefix: str | Path,
     *,
-    compression: str = "zstd",
-    compression_level: int = 3,
     lineage: dict[str, Any] | None = None,
-    json_columns_per_table: dict[str, Iterable[str]] | None = None,
     storage_options: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     """Write ``{name: df}`` pairs as ``{prefix}/{name}.parquet``.
@@ -446,7 +443,6 @@ def write_dataframes(
         ``{table_name: uri_written}``.
     """
     prefix_str = _normalize_uri(prefix).rstrip("/")
-    json_columns_per_table = json_columns_per_table or {}
 
     written: dict[str, str] = {}
     for name, df in tables.items():
@@ -457,9 +453,6 @@ def write_dataframes(
         written[name] = write_dataframe(
             df,
             uri,
-            compression=compression,
-            compression_level=compression_level,
-            json_columns=json_columns_per_table.get(name),
             lineage={**(lineage or {}), "table_name": name},
             storage_options=storage_options,
         )
@@ -474,7 +467,6 @@ def read_dataframes(
     use_cache: bool = True,
     cache_dir: Path | None = None,
     check_remote: bool = True,
-    dtype_backend: str = "numpy_nullable",
     storage_options: dict[str, Any] | None = None,
 ) -> dict[str, pd.DataFrame]:
     """Read ``{prefix}/{name}.parquet`` for each name into a dict of DataFrames."""
@@ -490,7 +482,6 @@ def read_dataframes(
             use_cache=use_cache,
             cache_dir=cache_dir,
             check_remote=check_remote,
-            dtype_backend=dtype_backend,
             storage_options=storage_options,
         )
     return out
