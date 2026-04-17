@@ -5,6 +5,7 @@ import json
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 from vdl_tools.shared_tools.embed_texts_with_cache import embed_texts_with_cache
 from vdl_tools.shared_tools.taxonomy_mapping.few_shot_cache import FewShotCache
+from vdl_tools.shared_tools.taxonomy_mapping.primary_category_selection import run_primary_category_selection  # noqa: F401 – re-exported for backward compat
 from vdl_tools.shared_tools.tools.logger import logger
 
 
@@ -564,15 +565,50 @@ def add_mapping_to_orgs(
     id_attr,
     pct='pct',
     sim='sim',
-    cats=['mapped_category', 'cat_level', 'level0', 'level1', 'level2', 'level3']
+    cats=['mapped_category', 'cat_level', 'level0', 'level1', 'level2', 'level3'],
+    primary_col=None,
 ):
+    """Aggregate per-org-category match rows to one row per org.
+
+    Parameters
+    ----------
+    org_df : pd.DataFrame
+        Original org-level DataFrame.
+    map_df : pd.DataFrame
+        Per-match DataFrame (one row per org-category pair).
+    id_attr : str
+        Column name for the org identifier.
+    pct : str, optional
+        Percentile column name. Used to select the primary row when
+        ``primary_col`` is not provided. Default ``'pct'``.
+    sim : str, optional
+        Similarity column name. Default ``'sim'``.
+    cats : list of str, optional
+        Category columns to include. Level columns are aggregated into sets;
+        others are taken from the primary row.
+    primary_col : str, optional
+        If provided and present in ``map_df``, the row with the highest value
+        in this column is chosen as the primary (intended for a boolean
+        ``is_llm_primary`` column). Falls back to highest ``pct`` when None or
+        the column is absent.
+
+    Returns
+    -------
+    pd.DataFrame
+        ``org_df`` merged with primary-category columns and ``all_level*`` lists.
+    """
     def _set_with_str(series):
         return list(set([x for x in series if x]))
 
-    temp_df = map_df[[id_attr, pct, sim] + cats]
+    # Determine which column drives primary-row selection
+    use_primary_col = primary_col and primary_col in map_df.columns
+    selection_col = primary_col if use_primary_col else pct
+
+    extra_cols = [primary_col] if use_primary_col else []
+    temp_df = map_df[[id_attr, pct, sim] + cats + extra_cols].copy()
 
     agg_dict = {
-        pct: pd.Series.idxmax,
+        selection_col: pd.Series.idxmax,
     }
     for cat in cats:
         if cat.startswith('level'):
@@ -581,10 +617,10 @@ def add_mapping_to_orgs(
     temp_df_agged = temp_df.groupby(id_attr).agg(agg_dict).reset_index()
 
     # get top category and all the columns in `cats`
-    top_catgory = temp_df.loc[temp_df_agged[pct]]
+    top_catgory = temp_df.loc[temp_df_agged[selection_col]]
 
     # Now get the list of the unique matched levels
-    temp_df_agged.pop(pct)
+    temp_df_agged.pop(selection_col)
     # Need to rename the columns to avoid conflicts with the top_category level names
     rename_dict = {cat: f'all_{cat}' for cat in cats if cat.startswith('level')}
     temp_df_agged.rename(
