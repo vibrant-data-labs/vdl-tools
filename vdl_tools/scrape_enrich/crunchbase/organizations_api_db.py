@@ -370,7 +370,7 @@ def query_companies_extended(
     force_query=False,
     use_cache=True,
     save_to_cache=True,
-    s3_prefix=None,
+    save_to_uri=None,
     storage_options=None,
 ) -> QueryCompaniesExtendedResult | None:
     """Query Crunchbase organizations and related entities with Postgres DB caching.
@@ -402,15 +402,16 @@ def query_companies_extended(
         When True, upsert newly fetched records into the Postgres cache for
         future reuse. Independent of ``use_cache`` and ``force_query``.
 
-    s3_prefix : str, optional
-        When provided, write the 5 result tables as Parquet under this prefix,
-        one file per table (``{s3_prefix}/{table_name}.parquet``). Accepts
-        a local path, ``file://`` URI, or ``s3://`` URI. Any files currently at
-        that prefix will be overwritten. If not provided, results are returned
-        in memory only.
+    save_to_uri : str, optional
+        When provided, write the 5 result tables as Parquet under this URI,
+        one file per table (``{save_to_uri}/{table_name}.parquet``). Accepts
+        a local directory path, ``file://`` URI, or ``s3://`` URI (the full
+        URI including bucket, e.g. ``s3://shared-data-clone/cb_raw/fisheries``).
+        Any files currently at that location will be overwritten. If not
+        provided, results are returned in memory only.
     storage_options : dict, optional
         Extra fsspec storage options, passed to the Parquet writer. Only used
-        when ``s3_prefix`` is set.
+        when ``save_to_uri`` is set.
 
     Notes
     -----
@@ -578,10 +579,10 @@ def query_companies_extended(
             "org_investors": org_investors,
             "founders": founders,
         }
-        if s3_prefix:
+        if save_to_uri:
             search_results_to_parquet(
                 results,
-                s3_prefix,
+                save_to_uri,
                 search_metadata={
                     "search_condition": search_condition,
                     "items_list": list(items_list),
@@ -595,20 +596,22 @@ def query_companies_extended(
 
 def search_results_to_parquet(
     search_results: QueryCompaniesExtendedResult,
-    prefix: str,
+    dir_uri: str,
     search_metadata: dict | None = None,
     storage_options: dict | None = None,
 ) -> dict[str, str]:
-    """Persist the 5 CB result DataFrames as Parquet under ``prefix``.
+    """Persist the 5 CB result DataFrames as Parquet under ``dir_uri``.
 
     Parameters
     ----------
     search_results
         The dict returned from :func:`query_companies_extended`.
-    prefix
-        Destination prefix (local path, ``file://``, or ``s3://``). Files are
-        written as ``{prefix}/{table_name}.parquet`` and overwrite any
-        existing file at those paths.
+    dir_uri
+        URI of the directory-like container to write into. Accepts a local
+        directory path, ``file://`` URI, or full ``s3://`` URI (include bucket,
+        e.g. ``s3://shared-data-clone/cb_raw/fisheries``). Files are written
+        as ``{dir_uri}/{table_name}.parquet`` and overwrite any existing
+        file at those paths.
     search_metadata
         Query context (search terms, filters, etc.) embedded in each Parquet
         file's footer for lineage.
@@ -629,14 +632,14 @@ def search_results_to_parquet(
     }
     return write_dataframes(
         {k: v for k, v in search_results.items() if v is not None},
-        prefix=prefix,
+        dir_uri=dir_uri,
         lineage=lineage,
         storage_options=storage_options,
     )
 
 
 def load_search_results_from_parquet(
-    prefix: str,
+    dir_uri: str,
     names: list[str] | None = None,
     storage_options: dict | None = None,
 ) -> dict[str, pd.DataFrame]:
@@ -649,8 +652,9 @@ def load_search_results_from_parquet(
 
     Parameters
     ----------
-    prefix
-        Source prefix (local path, ``file://``, or ``s3://``).
+    dir_uri
+        URI of the directory-like container to read from (local path,
+        ``file://`` URI, or full ``s3://`` URI including bucket).
     names
         Subset of tables to load. Defaults to all 5.
     storage_options
@@ -665,4 +669,4 @@ def load_search_results_from_parquet(
         "org_investors",
         "founders",
     ]
-    return read_dataframes(prefix=prefix, names=names, storage_options=storage_options)
+    return read_dataframes(dir_uri=dir_uri, names=names, storage_options=storage_options)

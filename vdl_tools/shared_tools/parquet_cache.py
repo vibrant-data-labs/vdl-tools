@@ -26,17 +26,17 @@ Single file::
     write_dataframe(df, "s3://shared-data-clone/cb_raw/fisheries/organizations.parquet")
     df = read_dataframe("s3://shared-data-clone/cb_raw/fisheries/organizations.parquet")
 
-Multiple files under a shared prefix::
+Multiple files under a shared directory URI::
 
     from vdl_tools.shared_tools.parquet_cache import write_dataframes, read_dataframes
 
     write_dataframes(
         {"organizations": df_orgs, "funding_rounds": df_fr, ...},
-        prefix="s3://shared-data-clone/cb_raw/fisheries",
+        dir_uri="s3://shared-data-clone/cb_raw/fisheries",
         lineage={"source": "crunchbase", "search_terms": [...]},
     )
     tables = read_dataframes(
-        prefix="s3://shared-data-clone/cb_raw/fisheries",
+        dir_uri="s3://shared-data-clone/cb_raw/fisheries",
         names=["organizations", "funding_rounds", "founders"],
     )
 
@@ -427,29 +427,41 @@ def get_lineage(
 
 def write_dataframes(
     tables: dict[str, pd.DataFrame],
-    prefix: str | Path,
+    dir_uri: str | Path,
     *,
     lineage: dict[str, Any] | None = None,
     storage_options: dict[str, Any] | None = None,
 ) -> dict[str, str]:
-    """Write ``{name: df}`` pairs as ``{prefix}/{name}.parquet``.
+    """Write ``{name: df}`` pairs as ``{dir_uri}/{name}.parquet``.
 
-    Each file carries the same ``lineage`` plus a ``table_name`` field, so
-    you can reconstruct where any one file came from without the prefix.
+    Parameters
+    ----------
+    tables
+        Mapping of table name → DataFrame. ``None`` values are skipped.
+    dir_uri
+        URI of the directory-like container where files will be written.
+        Accepts a local directory path, ``file://`` URI, or ``s3://`` URI —
+        always the **full** location (for S3, include bucket: ``s3://bucket/key/...``).
+    lineage
+        Arbitrary JSON-serializable dict attached to each Parquet file's
+        footer. A ``table_name`` field is added automatically, so you can
+        reconstruct where any one file came from without the container URI.
+    storage_options
+        Passed through to the fsspec filesystem.
 
     Returns
     -------
     dict[str, str]
         ``{table_name: uri_written}``.
     """
-    prefix_str = _normalize_uri(prefix).rstrip("/")
+    base = _normalize_uri(dir_uri).rstrip("/")
 
     written: dict[str, str] = {}
     for name, df in tables.items():
         if df is None:
             logger.debug("Skipping %s (None)", name)
             continue
-        uri = f"{prefix_str}/{name}.parquet"
+        uri = f"{base}/{name}.parquet"
         written[name] = write_dataframe(
             df,
             uri,
@@ -460,7 +472,7 @@ def write_dataframes(
 
 
 def read_dataframes(
-    prefix: str | Path,
+    dir_uri: str | Path,
     names: Iterable[str],
     *,
     columns_per_table: dict[str, Iterable[str]] | None = None,
@@ -469,13 +481,27 @@ def read_dataframes(
     check_remote: bool = True,
     storage_options: dict[str, Any] | None = None,
 ) -> dict[str, pd.DataFrame]:
-    """Read ``{prefix}/{name}.parquet`` for each name into a dict of DataFrames."""
-    prefix_str = _normalize_uri(prefix).rstrip("/")
+    """Read ``{dir_uri}/{name}.parquet`` for each name into a dict of DataFrames.
+
+    Parameters
+    ----------
+    dir_uri
+        URI of the directory-like container to read from. Same semantics as
+        ``write_dataframes`` — local path, ``file://`` URI, or full ``s3://``
+        URI including bucket.
+    names
+        Table base names (without ``.parquet`` extension) to load.
+    columns_per_table
+        Optional per-table column subset, for column pruning.
+    use_cache, cache_dir, check_remote, storage_options
+        See :func:`read_dataframe`.
+    """
+    base = _normalize_uri(dir_uri).rstrip("/")
     columns_per_table = columns_per_table or {}
 
     out: dict[str, pd.DataFrame] = {}
     for name in names:
-        uri = f"{prefix_str}/{name}.parquet"
+        uri = f"{base}/{name}.parquet"
         out[name] = read_dataframe(
             uri,
             columns=columns_per_table.get(name),

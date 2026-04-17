@@ -496,31 +496,33 @@ def _process_crunchbase_data(
 
 
 def process_crunchbase_raw_data_from_parquet(
-    prefix: str,
+    dir_uri: str,
     filter_yr: int = 2016,
     filter_to_companies: bool = True,
     save_cleaned: bool = True,
     cleaned_filename: str = "cb_companies_cleaned",
     storage_options: dict | None = None,
 ) -> pd.DataFrame:
-    """Load the 5 raw CB tables from a Parquet prefix, clean them, and
-    (by default) persist the cleaned DataFrame back to the same prefix.
+    """Load the 5 raw CB tables from a Parquet directory, clean them, and
+    (by default) persist the cleaned DataFrame back to the same directory.
 
     Parameters
     ----------
-    prefix
-        Prefix previously passed to ``query_companies_extended(save_to_prefix=...)``.
-        Accepts a local path, ``file://`` URI, or ``s3://`` URI. Remote reads
-        are locally cached with ETag validation so concurrent writers can't
-        cause silent stale reads.
+    dir_uri
+        URI of the directory-like container previously passed to
+        ``query_companies_extended(save_to_uri=...)``. Accepts a local
+        directory path, ``file://`` URI, or full ``s3://`` URI (include
+        bucket, e.g. ``s3://shared-data-clone/cb_raw/fisheries``). Remote
+        reads are locally cached with ETag validation so concurrent writers
+        can't cause silent stale reads.
     filter_yr
         Earliest year of founding to keep.
     filter_to_companies
         If True, restrict to companies (drop investors etc.).
     save_cleaned
         If True (default), write the cleaned DataFrame to
-        ``{prefix}/{cleaned_filename}.parquet``. Pass False to skip the write
-        and only return in memory.
+        ``{dir_uri}/{cleaned_filename}.parquet``. Pass False to skip the
+        write and only return in memory.
     cleaned_filename
         Base filename (without extension) for the cleaned output. Override
         this to namespace per-user or per-run variants so different cleaning
@@ -537,11 +539,11 @@ def process_crunchbase_raw_data_from_parquet(
     each other. If your team's cleaning diverges materially, use
     ``cleaned_filename`` to namespace your output.
     """
-    if not prefix:
-        raise ValueError("Must provide prefix (local path or s3:// URI)")
+    if not dir_uri:
+        raise ValueError("Must provide dir_uri (local path or s3:// URI)")
 
     tables = load_search_results_from_parquet(
-        prefix=prefix,
+        dir_uri=dir_uri,
         names=[
             "organizations",
             "funding_rounds",
@@ -563,8 +565,7 @@ def process_crunchbase_raw_data_from_parquet(
     )
 
     if save_cleaned:
-        # Local import to avoid pulling pyarrow/fsspec at module import time.
-        uri = f"{str(prefix).rstrip('/')}/{cleaned_filename}.parquet"
+        uri = f"{str(dir_uri).rstrip('/')}/{cleaned_filename}.parquet"
         write_dataframe(
             cleaned_df,
             uri,
@@ -572,7 +573,7 @@ def process_crunchbase_raw_data_from_parquet(
                 "source": "prepare_crunchbase.process_crunchbase_raw_data_from_parquet",
                 "filter_yr": filter_yr,
                 "filter_to_companies": filter_to_companies,
-                "input_prefix": str(prefix),
+                "input_dir_uri": str(dir_uri),
                 "n_rows": len(cleaned_df),
             },
             storage_options=storage_options,
