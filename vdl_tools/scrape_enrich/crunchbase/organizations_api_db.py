@@ -1,8 +1,10 @@
+from pathlib import Path
 from typing import TypedDict
 from more_itertools import chunked
 import pandas as pd
 import hashlib
 import json
+import math
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert
 
@@ -29,6 +31,15 @@ class QueryCompaniesExtendedResult(TypedDict, total=False):
     people_investors: pd.DataFrame | None
     org_investors: pd.DataFrame | None
     founders: pd.DataFrame | None
+
+
+CB_TABLE_NAMES: tuple[str, ...] = (
+    "organizations",
+    "funding_rounds",
+    "founders",
+    "org_investors",
+    "people_investors",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -90,9 +101,8 @@ def __upsert_dataframe(
     ]
 
     logger.info("Upserting %s records into %s", len(safe_records), model.__tablename__)
-    chunks = chunked(safe_records, chunk_size)
-    num_chunks = len(chunks)
-    for i, chunk in enumerate(chunks):
+    num_chunks = math.ceil(len(safe_records) / chunk_size)
+    for i, chunk in enumerate(chunked(safe_records, chunk_size)):
         logger.info("Upserting chunk %s of %s", i + 1, num_chunks)
         stmt = insert(table).values(chunk)
         set_ = {col: stmt.excluded[col] for col in non_pk_cols}
@@ -370,6 +380,7 @@ def query_companies_extended(
     force_query=False,
     use_cache=True,
     save_to_cache=True,
+    save_to_uri=None,
 ) -> QueryCompaniesExtendedResult | None:
     """Query Crunchbase organizations and related entities with Postgres DB caching.
 
@@ -399,6 +410,14 @@ def query_companies_extended(
     save_to_cache : bool, default True
         When True, upsert newly fetched records into the Postgres cache for
         future reuse. Independent of ``use_cache`` and ``force_query``.
+
+    save_to_uri : str, optional
+        When provided, write the 5 result tables as Parquet under this URI,
+        one file per table (``{save_to_uri}/{table_name}.parquet``). Accepts
+        a local directory path, ``file://`` URI, or ``s3://`` URI (the full
+        URI including bucket, e.g. ``s3://shared-data-clone/cb_raw/fisheries``).
+        Any files currently at that location will be overwritten. If not
+        provided, results are returned in memory only.
 
     Notes
     -----
@@ -559,23 +578,107 @@ def query_companies_extended(
                 founders = pd.merge(founders_temp_data[['uuid', 'org_permalink']], founders, how="left", on="uuid")
                 founders = __dedup_df(founders)
 
-        return {
+        results = {
             "organizations": organizations,
             "funding_rounds": companies_funding_rounds,
             "people_investors": people_investors,
             "org_investors": org_investors,
             "founders": founders,
         }
+        if save_to_uri:
+            search_results_to_parquet(
+                results,
+                save_to_uri,
+                search_metadata={
+                    "search_condition": search_condition,
+                    "items_list": list(items_list),
+                    "extra_filters": [str(f) for f in (extra_filters or [])],
+                },
+            )
+
+        return results
 
 
-if __name__ == '__main__':
-    query_companies_extended([
-         "local farms",
-         "fisheries"
-     ],
-     extra_filters=[
-         api.eq("status", "operating")
-     ],
-     search_condition='search_terms',
-     force_query=True,
-     )
+def search_results_to_parquet(
+    search_results: QueryCompaniesExtendedResult,
+    dir_uri: str,
+    search_metadata: dict | None = None,
+) -> dict[str, str]:
+    """Persist the 5 CB result DataFrames as Parquet under ``dir_uri``.
+
+    Parameters
+    ----------
+    search_results
+        The dict returned from :func:`query_companies_extended`.
+    dir_uri
+        URI of the directory-like container to write into. Accepts a local
+        directory path, ``file://`` URI, or full ``s3://`` URI (include bucket,
+        e.g. ``s3://shared-data-clone/cb_raw/fisheries``). Files are written
+        as ``{dir_uri}/{table_name}.parquet`` and overwrite any existing
+        file at those paths.
+    search_metadata
+        Query context (search terms, filters, etc.) embedded in each Parquet
+        file's footer for lineage.
+
+    Returns
+    -------
+    dict[str, str]
+        ``{table_name: written_uri}``.
+    """
+    # Local import to avoid pulling pyarrow/fsspec at module import time.
+    from vdl_tools.shared_tools.parquet_cache import write_dataframes
+
+    lineage = {
+        "source": "crunchbase.organizations_api_db.query_companies_extended",
+        **(search_metadata or {}),
+    }
+    return write_dataframes(
+        {k: v for k, v in search_results.items() if v is not None},
+        dir_uri=dir_uri,
+        lineage=lineage,
+    )
+
+
+def load_search_results_from_parquet(
+    dir_uri: str,
+    names: list[str] | None = None,
+    *,
+    use_cache: bool = True,
+    cache_dir: Path | None = None,
+    check_remote: bool = True,
+) -> dict[str, pd.DataFrame]:
+    """Load the 5 CB result DataFrames previously written by
+    :func:`search_results_to_parquet`.
+
+    For ``s3://`` sources, reads go through a local filecache
+    (``~/.cache/vdl-tools/parquet``) so each user downloads each file once,
+    with an ETag HEAD check on every read to avoid silent stale reads when
+    someone else pushes a new version.
+
+    Parameters
+    ----------
+    dir_uri
+        URI of the directory-like container to read from (local path,
+        ``file://`` URI, or full ``s3://`` URI including bucket).
+    names
+        Subset of tables to load. Defaults to all 5.
+    use_cache
+        If False, bypass the local cache and read straight from S3 every
+        time. Mostly useful for debugging or confirming remote contents.
+    cache_dir
+        Override the default cache directory (``~/.cache/vdl-tools/parquet``).
+    check_remote
+        If True (default), HEAD-check the remote ETag on every open. Set to
+        False for offline / airplane use — you'll serve whatever is in the
+        local cache without validating against the remote.
+    """
+    from vdl_tools.shared_tools.parquet_cache import read_dataframes
+
+    names = names or list(CB_TABLE_NAMES)
+    return read_dataframes(
+        dir_uri=dir_uri,
+        names=names,
+        use_cache=use_cache,
+        cache_dir=cache_dir,
+        check_remote=check_remote,
+    )

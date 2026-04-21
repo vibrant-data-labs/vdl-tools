@@ -2,8 +2,7 @@
 import datetime as dt
 import pandas as pd
 
-from vdl_tools.shared_tools.tools.falsey_checks import coerced_bool
-from vdl_tools.scrape_enrich.prepare_crunchbase import load_process_funding_rounds
+from vdl_tools.scrape_enrich.prepare_crunchbase import load_process_funding_rounds, load_process_funding_rounds_from_parquet
 from vdl_tools.shared_tools.cb_funding_calculations import ROUND_TO_STAGE
 
 
@@ -88,11 +87,17 @@ def combine_funding_data(
     return funding_df
 
 
-def load_cb_round_data(funding_rounds_path, investor_orgs_path):
-    full_round_df = load_process_funding_rounds(
-        funding_rounds_path,
-        investor_orgs_path
-    )
+def load_cb_round_data(funding_rounds_uri, investor_orgs_uri, use_parquet=False):
+    if use_parquet:
+        full_round_df = load_process_funding_rounds_from_parquet(
+            fr_uri=funding_rounds_uri,
+            investor_orgs_uri=investor_orgs_uri
+        )
+    else:
+        full_round_df = load_process_funding_rounds(
+            fr_uri=funding_rounds_uri,
+            investor_orgs_uri=investor_orgs_uri
+        )
 
     full_round_df["organization_uuid"] = full_round_df[
         "funded_organization_identifier"
