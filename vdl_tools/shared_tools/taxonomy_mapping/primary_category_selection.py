@@ -8,16 +8,11 @@ API.
 """
 
 import json
-import pandas as pd
 from textwrap import dedent
 
-from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type
-from openai import APIConnectionError
 from pydantic import BaseModel
 
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
-from vdl_tools.shared_tools.database_cache.database_models.prompt import PromptResponse
-from vdl_tools.shared_tools.openai.openai_api_utils import CLIENT, is_reasoning_model
 from vdl_tools.shared_tools.openai.prompt_response_cache_sql import DEFAULT_MODEL
 from vdl_tools.shared_tools.openai.prompt_response_cache_instructor import InstructorPRC
 from vdl_tools.shared_tools.tools.logger import logger
@@ -48,16 +43,10 @@ class PrimaryCategory(BaseModel):
 class PrimaryCategoryCache(InstructorPRC):
     """Cache for primary-category selection among multiple accepted taxonomy matches.
 
-    For an org with multiple accepted categories, passes all categories to the
-    LLM and asks it to pick the one that best represents the org's primary
-    mission. Results are stored in the SQL cache keyed by a composite
-    given_id ``"{org_id}|{sorted_category_names}"`` so re-runs with the same
-    accepted set are served from cache without hitting the API.
-
-    Notes
-    -----
-    Follows the same pattern as ``FewShotCache``: overrides ``get_completion``,
-    ``store_item``, and ``store_error`` to handle the dict-based payload.
+    Thin wrapper around InstructorPRC that wires up the fixed prompt, response
+    model, and cache name. The user message is pre-formatted as a plain string
+    by ``_format_user_message`` before being passed to ``bulk_get_cache_or_run``,
+    so no method overrides are needed.
     """
 
     def __init__(
@@ -77,131 +66,46 @@ class PrimaryCategoryCache(InstructorPRC):
             store_results=store_results,
         )
 
-    def _format_messages(self, payload: dict) -> list:
-        """Build chat messages from org description and candidate categories.
 
-        Parameters
-        ----------
-        payload : dict
-            Keys: ``org_name`` (str, optional), ``org_url`` (str, optional),
-            ``org_description`` (str), ``categories`` (list of dicts with
-            keys ``name``, ``level0``, ``level1``, ``level2``, ``definition``).
+def _format_user_message(payload: dict) -> str:
+    """Format org info and candidate categories into a plain user-message string.
 
-        Returns
-        -------
-        list of dict
-            OpenAI chat format: [{"role": "system", ...}, {"role": "user", ...}].
-        """
-        category_lines = []
-        for i, cat in enumerate(payload["categories"], start=1):
-            path_parts = [cat.get("level0"), cat.get("level1"), cat.get("level2")]
-            path = " > ".join(p for p in path_parts if p)
-            category_lines.append(
-                f"{i}. {cat['name']}\n"
-                f"   Path: {path}\n"
-                f"   Definition: {cat['definition']}"
-            )
-        org_lines = []
-        if payload.get("org_name"):
-            org_lines.append(f"- Name: {payload['org_name']}")
-        if payload.get("org_url"):
-            org_lines.append(f"- Website: {payload['org_url']}")
-        org_lines.append(f"- Description: {payload['org_description']}")
+    Parameters
+    ----------
+    payload : dict
+        Keys: ``org_name`` (str, optional), ``org_url`` (str, optional),
+        ``org_description`` (str), ``categories`` (list of dicts with keys
+        ``name``, ``level0``, ``level1``, ``level2``, ``definition``).
 
-        user_text = (
-            "Organization:\n"
-            + "\n".join(org_lines)
-            + "\n\nMatched categories:\n"
-            + "\n\n".join(category_lines)
-            + "\n\nReturn the exact name of the primary category."
+    Returns
+    -------
+    str
+        Formatted user message ready to be passed as ``text`` to
+        ``InstructorPRC.bulk_get_cache_or_run``.
+    """
+    category_lines = []
+    for i, cat in enumerate(payload["categories"], start=1):
+        path_parts = [cat.get("level0"), cat.get("level1"), cat.get("level2")]
+        path = " > ".join(p for p in path_parts if p)
+        category_lines.append(
+            f"{i}. {cat['name']}\n"
+            f"   Path: {path}\n"
+            f"   Definition: {cat['definition']}"
         )
-        return [
-            {"role": "system", "content": self.prompt_text},
-            {"role": "user", "content": user_text},
-        ]
+    org_lines = []
+    if payload.get("org_name"):
+        org_lines.append(f"- Name: {payload['org_name']}")
+    if payload.get("org_url"):
+        org_lines.append(f"- Website: {payload['org_url']}")
+    org_lines.append(f"- Description: {payload['org_description']}")
 
-    @retry(
-        stop=stop_after_attempt(5),
-        wait=wait_fixed(2),
-        retry=retry_if_exception_type(APIConnectionError),
-        reraise=True
+    return (
+        "Organization:\n"
+        + "\n".join(org_lines)
+        + "\n\nMatched categories:\n"
+        + "\n\n".join(category_lines)
+        + "\n\nReturn the exact name of the primary category."
     )
-    def get_completion(self, _, payload: dict, **kwargs):
-        """Call the Responses API for one primary-category selection (with retries).
-
-        Parameters
-        ----------
-        _ : Any
-            Unused; present for compatibility with parent signature.
-        payload : dict
-            Keys: ``org_description`` and ``categories`` list.
-        **kwargs
-            Forwarded to the Responses API (e.g. reasoning for reasoning models,
-            tools for web search).
-
-        Returns
-        -------
-        Response
-            Full API response (with output_parsed as PrimaryCategory instance).
-        """
-        kwargs.pop("return_all", None)  # internal base-class flag, not a Responses API param
-        messages = self._format_messages(payload)
-        response_kwargs = {
-            "model": self.model,
-            "input": messages,
-            "text_format": self.response_model,
-            **kwargs,
-        }
-        if is_reasoning_model(self.model):
-            response_kwargs["instructions"] = self.prompt_text
-            response_kwargs["input"] = messages[-1]["content"]
-        response = CLIENT.responses.parse(**response_kwargs)
-        return response
-
-    def store_item(self, given_id: str, text, response):
-        """Store a successful primary-category response in the cache."""
-        prompt_response_obj = PromptResponse(
-            prompt_id=self.prompt.id,
-            given_id=given_id,
-            model_name=self.model,
-            input_text=json.dumps(text),
-            response_full=response.model_dump(),
-            response_text=json.dumps(response.output_parsed.model_dump()),
-            num_errors=0,
-        )
-        if self.store_results:
-            self.session.merge(prompt_response_obj)
-        return prompt_response_obj
-
-    def store_error(self, given_id: str, text, response_full):
-        """Store or update a cache row for a failed API call."""
-        logger.info("Storing error for %s, %s", self.prompt.name, given_id)
-        previous_response = (
-            self.session.query(PromptResponse)
-            .filter(
-                PromptResponse.prompt_id == self.prompt.id,
-                PromptResponse.given_id == given_id,
-            )
-            .first()
-        )
-        if previous_response:
-            previous_response.response_full = response_full
-            previous_response.num_errors = (previous_response.num_errors or 0) + 1
-            if self.store_results:
-                self.session.merge(previous_response)
-            return previous_response
-        else:
-            prompt_response_obj = PromptResponse(
-                prompt_id=self.prompt.id,
-                given_id=given_id,
-                model_name=self.model,
-                input_text=json.dumps(text),
-                response_full=response_full,
-                num_errors=1,
-            )
-            if self.store_results:
-                self.session.merge(prompt_response_obj)
-            return prompt_response_obj
 
 
 def run_primary_category_selection(
@@ -300,7 +204,10 @@ def run_primary_category_selection(
     else:
         accepted_df = all_df
 
+    # ids_to_payloads: kept as dicts for response-mapping lookups
+    # ids_to_texts: pre-formatted strings passed as `text` to the cache
     ids_to_payloads = {}
+    ids_to_texts = {}
 
     for org_id, group in accepted_df.groupby(id_col):
         if len(group) == 1:
@@ -324,18 +231,21 @@ def run_primary_category_selection(
             })
 
         # Sort categories for a stable, deterministic cache key
-        sorted_cat_names = "|".join(sorted(c["name"] for c in categories))
+        sorted_categories = sorted(categories, key=lambda c: c["name"])
+        sorted_cat_names = "|".join(c["name"] for c in sorted_categories)
         given_id = f"{org_id}|{sorted_cat_names}"
 
-        ids_to_payloads[given_id] = {
+        payload = {
             "org_id": org_id,
             "org_name": org_name,
             "org_url": org_url,
             "org_description": org_description,
-            "categories": sorted(categories, key=lambda c: c["name"]),
+            "categories": sorted_categories,
         }
+        ids_to_payloads[given_id] = payload
+        ids_to_texts[given_id] = _format_user_message(payload)
 
-    if ids_to_payloads:
+    if ids_to_texts:
         cache_kwargs = {}
         if model is not None:
             cache_kwargs["model"] = model
@@ -347,7 +257,7 @@ def run_primary_category_selection(
         with get_session() as session:
             primary_cache = PrimaryCategoryCache(session=session, **cache_kwargs)
             ids_to_responses = primary_cache.bulk_get_cache_or_run(
-                given_ids_texts=ids_to_payloads.items(),
+                given_ids_texts=ids_to_texts.items(),
                 use_cached_result=use_cached_results,
                 max_workers=max_workers,
                 max_errors=max_errors,
@@ -360,7 +270,6 @@ def run_primary_category_selection(
             org_id = payload["org_id"]
             accepted_names = {c["name"] for c in payload["categories"]}
 
-            # response_text is a JSON string: '{"primary_category_name": "..."}'
             response_text = response_dict.get("response_text")
             try:
                 primary_name = json.loads(response_text).get("primary_category_name") if response_text else None

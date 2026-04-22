@@ -181,7 +181,12 @@ def add_taxonomy_mapping(
 
     if run_primary_category_selection:
         logger.info("Running primary category selection for %s", mapping_name)
-        primary_kwargs = {"model": primary_category_model} if primary_category_model else {}
+        primary_kwargs = {
+            "use_cached_results": use_cached_results,
+            "use_web_search": use_web_search,
+        }
+        if primary_category_model:
+            primary_kwargs["model"] = primary_category_model
         if primary_category_kwargs:
             primary_kwargs.update(primary_category_kwargs)
         filtered_all_df = tm.run_primary_category_selection(
@@ -191,8 +196,6 @@ def add_taxonomy_mapping(
             taxonomy=taxonomy,
             name_col=name_col,
             url_col=url_col,
-            use_web_search=use_web_search,
-            use_cached_results=use_cached_results,
             max_workers=max_workers,
             **primary_kwargs,
         )
