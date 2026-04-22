@@ -1,12 +1,18 @@
 from datetime import datetime
 from pathlib import Path
 import pandas as pd
-from pandas.io.xml import Any
+
 from vdl_tools.shared_tools.tools.logger import logger
 import vdl_tools.scrape_enrich.crunchbase.organizations_api_extended as orgs_api
 import vdl_tools.shared_tools.cb_funding_calculations as fcalc
 import vdl_tools.shared_tools.common_functions as cf  # from common directory: commonly used functions
 import vdl_tools.shared_tools.project_config as pc
+
+from vdl_tools.scrape_enrich.crunchbase.organizations_api_db import (
+    CB_TABLE_NAMES,
+    load_search_results_from_parquet,
+)
+from vdl_tools.shared_tools.parquet_cache import read_dataframe, write_dataframe
 
 
 def __validate_crunchbase_args(
@@ -102,7 +108,7 @@ def query_crunchbase_raw_data(
 
     if search_terms:
         orgs_api.query_companies_extended(
-            items_list=search_terms, 
+            items_list=search_terms,
             output_files=output_files,
             force_query=True,
             search_condition='search_terms'
@@ -299,52 +305,18 @@ def __add_funding_by_year(funding_rounds_df: pd.DataFrame, orgs_df: pd.DataFrame
     return orgs_df  # orgs with funding by year
 
 
-def process_crunchbase_raw_data(
-    filter_yr=2016,
-    organizations_file_path=None,
-    funding_rounds_file_path=None,
-    founders_file_path=None,
-    investor_orgs_file_path=None,
-    investor_person_file_path=None,
-    clean_file_path=None,
-    filter_to_companies=True,
+def _process_crunchbase_data(
+    df_orgs: pd.DataFrame,
+    df_funding_rounds: pd.DataFrame,
+    df_founders: pd.DataFrame,
+    df_investor_orgs: pd.DataFrame,
+    df_investor_person: pd.DataFrame,
+    filter_yr: int,
+    filter_to_companies: bool,
 ):
-
-    if not all([
-        organizations_file_path,
-        funding_rounds_file_path,
-        founders_file_path,
-        investor_orgs_file_path,
-        investor_person_file_path,
-        clean_file_path,
-    ]):
-        paths = pc.get_paths()
-    if not organizations_file_path:
-        organizations_file_path=paths.get('expanded_orgs_data')
-    if not funding_rounds_file_path:
-        funding_rounds_file_path=paths.get('expanded_orgs_funding_rounds')
-    if not founders_file_path:
-        founders_file_path=paths.get('expanded_orgs_founders')
-    if not investor_orgs_file_path:
-        investor_orgs_file_path=paths.get('expanded_orgs_investor_orgs')
-    if not investor_person_file_path:
-        investor_person_file_path=paths.get('expanded_orgs_investor_person')
-    if not clean_file_path:
-        clean_file_path=paths.get('cb_companies_cleaned')
-
-    logger.info('loading raw crunchbase data')
-    df_orgs = pd.read_json(organizations_file_path)
-    logger.info('loading orgs')
-    df_funding_rounds = pd.read_json(funding_rounds_file_path)
-    logger.info('loading fr')
-    df_founders = pd.read_json(founders_file_path)
-    logger.info('loading founders')
-    df_investor_orgs = pd.read_json(investor_orgs_file_path)
-    logger.info('loading investor orgs')
-    df_investor_person = pd.read_json(investor_person_file_path)
-    logger.info('loading investor persons')
-
-
+    """
+    Process Crunchbase raw data
+    """
     # print('filtering crunchbase data to keep only active organizations')
     # keep all organizations despite of funding amount
     # df_orgs = df_orgs[df_orgs['operating_status'] == 'active']
@@ -412,6 +384,7 @@ def process_crunchbase_raw_data(
     logger.info('Extracted funding types from funding rounds')
 
     logger.info('Extracting year last funded')
+    df_cb['last_funding_at'] = pd.to_datetime(df_cb['last_funding_at'])
     df_cb['Year_Last_Funded'] = df_cb['last_funding_at'].apply(lambda lf: lf.year if len(str(lf)) >= 10 else None)
 
     logger.info('Getting total funding by year for each organization')
@@ -523,6 +496,173 @@ def process_crunchbase_raw_data(
         # remove any empty elements of the list
         df_cb[col] = df_cb[col].apply(lambda l: [x for x in l if str(x) != 'nan'])
 
+    return df_cb
+
+
+def process_crunchbase_raw_data_from_parquet(
+    dir_uri: str | None = None,
+    filter_yr: int = 2016,
+    filter_to_companies: bool = True,
+    save_cleaned: bool = True,
+    cleaned_filename: str = "cb_companies_cleaned",
+    *,
+    tables: dict[str, pd.DataFrame] | None = None,
+    use_cache: bool = True,
+    cache_dir: Path | None = None,
+    check_remote: bool = True,
+) -> pd.DataFrame:
+    """Clean the 5 raw CB tables and (by default) persist the cleaned DataFrame.
+
+    Supply **either** the raw tables in-memory (``tables=``) **or** a directory
+    URI to read them from (``dir_uri=``). Passing ``tables=`` skips the
+    round-trip through storage entirely — the natural pairing with
+    ``query_companies_extended``, which already returns the 5 DataFrames::
+
+        # zero-round-trip pipeline
+        raw = query_companies_extended(items_list=..., save_to_uri="s3://X")
+        cleaned = process_crunchbase_raw_data_from_parquet(
+            dir_uri="s3://X",   # still needed as the save destination
+            tables=raw,         # read from memory, not S3
+        )
+
+        # pure reader (no prior query in this process)
+        cleaned = process_crunchbase_raw_data_from_parquet(dir_uri="s3://X")
+
+    Parameters
+    ----------
+    dir_uri
+        URI of the directory-like container. Required when ``tables`` is not
+        provided (used as the read source) OR when ``save_cleaned=True``
+        (used as the write destination). Accepts a local directory path,
+        ``file://`` URI, or full ``s3://`` URI including bucket
+        (e.g. ``s3://shared-data-clone/cb_raw/fisheries``).
+    tables
+        Pre-loaded raw tables keyed by table name
+        (``organizations``, ``funding_rounds``, ``founders``, ``org_investors``,
+        ``people_investors``). Typically the return value from
+        :func:`query_companies_extended`. When provided, skips all S3 reads.
+    filter_yr
+        Earliest year of founding to keep.
+    filter_to_companies
+        If True, restrict to companies (drop investors etc.).
+    save_cleaned
+        If True (default), write the cleaned DataFrame to
+        ``{dir_uri}/{cleaned_filename}.parquet``. Pass False to skip the
+        write and only return in memory.
+    cleaned_filename
+        Base filename (without extension) for the cleaned output. Override
+        to namespace per-user or per-run variants so different cleaning
+        conventions don't clobber each other (e.g. ``"cb_companies_cleaned__zein"``).
+    use_cache, cache_dir, check_remote
+        Read-cache controls, only relevant when ``tables`` is not provided.
+        See :func:`load_search_results_from_parquet`.
+
+    Notes
+    -----
+    ``cb_companies_cleaned.parquet`` is a **mutable shared artifact** — the
+    last writer wins. Parquet handles column/type drift between writers
+    gracefully (schema is per-file), so different cleaning conventions will
+    not error; they will simply overwrite each other. If your team's cleaning
+    diverges materially, use ``cleaned_filename`` to namespace your output.
+    """
+    if tables is None and not dir_uri:
+        raise ValueError("Must provide either tables= (in-memory) or dir_uri= (storage).")
+    if save_cleaned and not dir_uri:
+        raise ValueError("save_cleaned=True requires dir_uri= as the write destination.")
+
+    if tables is None:
+        tables = load_search_results_from_parquet(
+            dir_uri=dir_uri,
+            names=list(CB_TABLE_NAMES),
+            use_cache=use_cache,
+            cache_dir=cache_dir,
+            check_remote=check_remote,
+        )
+        data_source = str(dir_uri)
+    else:
+        data_source = "in-memory (caller-supplied)"
+
+    cleaned_df = _process_crunchbase_data(
+        df_orgs=tables["organizations"],
+        df_funding_rounds=tables["funding_rounds"],
+        df_founders=tables["founders"],
+        df_investor_orgs=tables["org_investors"],
+        df_investor_person=tables["people_investors"],
+        filter_yr=filter_yr,
+        filter_to_companies=filter_to_companies,
+    )
+
+    if save_cleaned:
+        uri = f"{str(dir_uri).rstrip('/')}/{cleaned_filename}.parquet"
+        write_dataframe(
+            cleaned_df,
+            uri,
+            lineage={
+                "source": "prepare_crunchbase.process_crunchbase_raw_data_from_parquet",
+                "filter_yr": filter_yr,
+                "filter_to_companies": filter_to_companies,
+                "input_source": data_source,
+                "n_rows": len(cleaned_df),
+            },
+        )
+
+    return cleaned_df
+
+
+def process_crunchbase_raw_data(
+    filter_yr=2016,
+    organizations_file_path=None,
+    funding_rounds_file_path=None,
+    founders_file_path=None,
+    investor_orgs_file_path=None,
+    investor_person_file_path=None,
+    clean_file_path=None,
+    filter_to_companies=True,
+):
+
+    if not all([
+        organizations_file_path,
+        funding_rounds_file_path,
+        founders_file_path,
+        investor_orgs_file_path,
+        investor_person_file_path,
+        clean_file_path,
+    ]):
+        paths = pc.get_paths()
+    if not organizations_file_path:
+        organizations_file_path=paths.get('expanded_orgs_data')
+    if not funding_rounds_file_path:
+        funding_rounds_file_path=paths.get('expanded_orgs_funding_rounds')
+    if not founders_file_path:
+        founders_file_path=paths.get('expanded_orgs_founders')
+    if not investor_orgs_file_path:
+        investor_orgs_file_path=paths.get('expanded_orgs_investor_orgs')
+    if not investor_person_file_path:
+        investor_person_file_path=paths.get('expanded_orgs_investor_person')
+    if not clean_file_path:
+        clean_file_path=paths.get('cb_companies_cleaned')
+
+    logger.info('loading raw crunchbase data')
+    df_orgs = pd.read_json(organizations_file_path)
+    logger.info('loading orgs')
+    df_funding_rounds = pd.read_json(funding_rounds_file_path)
+    logger.info('loading fr')
+    df_founders = pd.read_json(founders_file_path)
+    logger.info('loading founders')
+    df_investor_orgs = pd.read_json(investor_orgs_file_path)
+    logger.info('loading investor orgs')
+    df_investor_person = pd.read_json(investor_person_file_path)
+    logger.info('loading investor persons')
+
+    df_cb = _process_crunchbase_data(
+        df_orgs=df_orgs,
+        df_funding_rounds=df_funding_rounds,
+        df_founders=df_founders,
+        df_investor_orgs=df_investor_orgs,
+        df_investor_person=df_investor_person,
+        filter_yr=filter_yr,
+        filter_to_companies=filter_to_companies
+    )
     logger.info(f'Writing cleaned Crunchbase data to {clean_file_path}')
     # add directory if it does not exist
     if not isinstance(clean_file_path, Path):
@@ -539,6 +679,19 @@ def __get_org_country_from_fr(entries):
         if entry.get('location_type') == 'country':
             return entry.get('value')
     return None  # Return None if no country entry is found
+
+
+def load_process_funding_rounds_from_parquet(
+    fr_uri,
+    investor_orgs_uri,
+    filter_yr=2010,
+):
+    logger.info('loading funding rounds')
+    df_fr = read_dataframe(uri=fr_uri)
+    logger.info('loading investor orgs')
+    orgs_investors_df = read_dataframe(uri=investor_orgs_uri)
+    logger.info('processing funding rounds')
+    return process_funding_rounds(df_fr, orgs_investors_df, filter_yr)
 
 
 def load_process_funding_rounds(

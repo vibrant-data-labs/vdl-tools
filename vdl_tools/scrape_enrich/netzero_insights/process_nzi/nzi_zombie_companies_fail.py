@@ -73,14 +73,34 @@ STAGE_FAILURE_MAP = {
 
 
 def _get_graduation_and_later_stages(graduation_stages, late_venture_cutoff):
-    """Get all stages at or after the graduation threshold.
+    """Get all stage names at or after the graduation threshold.
 
-    Returns the graduation stages plus everything after them in the ordered
-    stage list. Also includes "Late VC" or "Early VC" as aliases when the
-    graduation threshold falls in their range.
+    Given a list of graduation stages, returns those stages plus every stage
+    that comes after them in ``DISCLOSED_STAGES_ORDERED``.  Also appends the
+    catch-all labels ``"Late VC"`` or ``"Early VC"`` when the graduation
+    threshold overlaps their range, since those labels are not part of the
+    natural ordering but can appear in funding round data.
 
-    Example: graduation_stages=["Series B"], late_venture_cutoff="Series B"
-        → ["Series B", "Late VC", "Series C", ..., "Post IPO - Equity", "Late VC"]
+    Parameters
+    ----------
+    graduation_stages : list[str]
+        Stage names that define the graduation threshold (e.g. ``["Series B"]``).
+        Must all be present in ``DISCLOSED_STAGES_ORDERED``.
+    late_venture_cutoff : str
+        The stage at or after which rounds are considered "late venture".
+        Used to decide whether the ``"Late VC"`` alias should be included.
+        Comes from ``split_early_late_funding_rounds.LATE_VC_CUTOFF``.
+
+    Returns
+    -------
+    list[str]
+        All stage names at or after the earliest graduation stage, potentially
+        with ``"Late VC"`` or ``"Early VC"`` appended.
+
+    Examples
+    --------
+    >>> _get_graduation_and_later_stages(["Series B"], "Series B")
+    ["Series B", "Series C", ..., "Post IPO - Equity", "Late VC"]
     """
     earliest_graduation_idx = min(
         DISCLOSED_STAGES_ORDERED.index(stage) for stage in graduation_stages
@@ -105,8 +125,24 @@ def raised_stage_or_earlier(company_funding_rows, stages=["Series A", "Early VC"
     """Check if the company raised any round at or before the given stages.
 
     Used as a gate: if a company never raised at or before the threshold,
-    they can't be evaluated for success/failure at that threshold.
-    (e.g., a company that went straight to IPO with no early rounds)
+    they can't be evaluated for success/failure at that threshold
+    (e.g. a company that went straight to IPO with no early rounds).
+
+    Parameters
+    ----------
+    company_funding_rows : pandas.DataFrame
+        Funding round rows for a single company. Must contain a
+        ``"round_type_nzi"`` column with stage labels.
+    stages : list[str], default ["Series A", "Early VC"]
+        The stage(s) to use as the threshold.  The function checks whether
+        the company has any round matching these stages or any stage earlier
+        in ``DISCLOSED_STAGES_ORDERED``.
+
+    Returns
+    -------
+    bool
+        ``True`` if the company raised at least one round at or before the
+        earliest of *stages*; ``False`` otherwise.
     """
     round_types = set(company_funding_rows['round_type_nzi'].values)
 
@@ -123,10 +159,28 @@ def raised_stage_or_earlier(company_funding_rows, stages=["Series A", "Early VC"
 
 
 def _has_successful_manda(round_types, m_and_a_success_stage):
-    """Check if the company had an M&A event at or after the success stage.
+    """Check if the company had an M&A event and whether it counts as success.
 
-    M&A before Series A (default) is considered a failure (early acqui-hire).
-    M&A at Series A or later is considered a success.
+    M&A outcomes are stage-dependent:
+    - M&A at or after ``m_and_a_success_stage`` (default: Series A) is
+      considered a **success** (meaningful acquisition).
+    - M&A before that stage is considered a **failure** (early acqui-hire).
+
+    Parameters
+    ----------
+    round_types : set[str]
+        The set of ``round_type_nzi`` values for the company.
+    m_and_a_success_stage : str
+        The earliest stage at which an M&A event counts as success.
+        Defaults to ``M_AND_A_SUCCESS_STAGE`` from
+        ``split_early_late_funding_rounds``.
+
+    Returns
+    -------
+    bool or None
+        ``True`` if M&A occurred at or after the success stage (success).
+        ``False`` if M&A occurred before the success stage (failure).
+        ``None`` if the company had no M&A event at all.
     """
     if not round_types.intersection(M_AND_A_NAMES):
         return None  # No M&A event at all
@@ -142,22 +196,47 @@ def _has_successful_manda(round_types, m_and_a_success_stage):
 
 def did_company_succeed(
     company_funding_rows,
-    company_row,
+    company_classifier_status,
     graduation_stages=("Series B",),
     late_venture_cutoff=LATE_VC_CUTOFF,
     m_and_a_success_stage=M_AND_A_SUCCESS_STAGE,
 ):
-    """Did this company succeed past the given graduation threshold?
+    """Determine whether a company succeeded past the given graduation stage.
 
-    A company succeeds if it:
-      1. Raised equity (or grant) funding
-      2. Raised at or before the graduation stage (wasn't a straight-to-IPO)
-      3. AND any of:
-         a. IPO'd
-         b. Had a successful M&A (at or after m_and_a_success_stage)
-         c. Raised a round at or after the graduation stage
-         d. Was acquired per ensemble_operating_status_classification
-            (covers companies with no M&A round type in funding data)
+    A company is classified as "succeeded" if **all** of the following hold:
+
+    1. It raised equity (or grant) funding (via ``raised_equity_round``).
+    2. It raised at or before the graduation stage — this excludes companies
+       that skipped early stages entirely (e.g. straight-to-IPO).
+    3. It meets **any one** of these success signals:
+       a. IPO'd (has ``"IPO"`` in round types).
+       b. Had a successful M&A at or after ``m_and_a_success_stage``.
+       c. Raised a funding round at or after the graduation stage.
+       d. Has ``ensemble_operating_status_classification == "Acquired / Merger"``
+          (covers cases where the M&A round type is missing from funding data).
+
+    Parameters
+    ----------
+    company_funding_rows : pandas.DataFrame
+        All funding round rows for a single company. Must contain columns
+        ``"round_type_nzi"`` and ``"financing_type_nzi"``.
+    company_classifier_status : str or None
+        The company's ``ensemble_operating_status_classification`` value.
+        Used as a fallback signal for acquisitions not captured in round data.
+    graduation_stages : tuple[str, ...], default ("Series B",)
+        The stage(s) the company must reach or surpass to be considered
+        successful.  Looked up in ``STAGE_FAILURE_MAP`` by the caller.
+    late_venture_cutoff : str, default LATE_VC_CUTOFF
+        Stage threshold separating early from late venture rounds.
+    m_and_a_success_stage : str, default M_AND_A_SUCCESS_STAGE
+        Earliest stage at which an M&A event is considered a success
+        rather than a failure (acqui-hire).
+
+    Returns
+    -------
+    bool
+        ``True`` if the company succeeded past the graduation threshold;
+        ``False`` otherwise.
     """
     round_types = set(company_funding_rows['round_type_nzi'].values)
 
@@ -185,41 +264,81 @@ def did_company_succeed(
 
     # Some companies were acquired but have no M&A round type in their funding data.
     # If they passed the stage gate above, treat the acquisition as success.
-    if company_row.get("ensemble_operating_status_classification") == "Acquired / Merger":
+    if company_classifier_status == "Acquired / Merger":
         return True
 
     return False
 
 
 def time_since_last_funding(company_funding_rows):
+    """Compute the number of days since the company's most recent funding round.
+
+    Parameters
+    ----------
+    company_funding_rows : pandas.DataFrame
+        Funding round rows for a single company. Must contain a
+        ``"round_date_nzi"`` column with datetime values.
+
+    Returns
+    -------
+    int
+        Number of days between now and the most recent ``round_date_nzi``.
+    """
     return (dt.datetime.now() - company_funding_rows['round_date_nzi'].max()).days
 
 
 def did_company_fail(
     company_funding_rows,
-    company_row,
+    company_classifier_status,
     at_stage="Early VC",
     outlier_time=TWO_YEARS_IN_DAYS,
     late_venture_cutoff=LATE_VC_CUTOFF,
     m_and_a_success_stage=M_AND_A_SUCCESS_STAGE,
 ):
-    """Did this company fail at the given stage?
+    """Determine whether a company failed at the given funding stage.
 
-    A company fails if it:
-      1. Raised equity (or grant) funding
-      2. Reached the evaluation stage (has rounds matching at_stage_round_types)
-      3. Did NOT succeed past the graduation threshold
-      4. AND any of:
-         a. ensemble_operating_status_classification is "Shut Down"
-         b. Had an early M&A (before the success stage — acqui-hire)
-         c. Last funding was 2+ years ago (zombie/stale)
+    A company is classified as "failed" if **all** of the following hold:
 
-    Returns False if the company is still in progress (not yet classifiable).
+    1. It raised equity (or grant) funding (via ``raised_equity_round``).
+    2. It raised at or before ``at_stage`` (via ``raised_stage_or_earlier``).
+    3. It actually reached the evaluation stage (has rounds matching
+       ``STAGE_FAILURE_MAP[at_stage]["at_stage_round_types"]``).
+    4. It did **not** succeed past the graduation threshold (checked via
+       ``did_company_succeed``).
+    5. It exhibits **at least one** failure signal:
+       a. ``ensemble_operating_status_classification == "Shut Down"``.
+       b. Had an early M&A before ``m_and_a_success_stage`` (acqui-hire).
+       c. Last funding round was ``>= outlier_time`` days ago (zombie/stale).
 
-    Args:
-        at_stage: The stage to evaluate failure at. Must be a key in STAGE_FAILURE_MAP
-                  or a stage in DISCLOSED_STAGES_ORDERED.
-                  Common values: "Seed", "Early VC", "Series A", "Series B"
+    If conditions 1-4 hold but none of the failure signals (5a-c) are present,
+    the company is considered **still in progress** and this returns ``False``.
+
+    Parameters
+    ----------
+    company_funding_rows : pandas.DataFrame
+        All funding round rows for a single company. Must contain columns
+        ``"round_type_nzi"``, ``"financing_type_nzi"``, and ``"round_date_nzi"``.
+    company_classifier_status : str or None
+        The company's ``ensemble_operating_status_classification`` value.
+    at_stage : str, default "Early VC"
+        The stage to evaluate failure at. Must be a key in
+        ``STAGE_FAILURE_MAP`` or a stage in ``DISCLOSED_STAGES_ORDERED``.
+        Common values: ``"Seed"``, ``"Early VC"``, ``"Series A"``,
+        ``"Series B"``.
+    outlier_time : int, default TWO_YEARS_IN_DAYS (730)
+        Number of days since last funding after which a non-succeeded company
+        is considered a zombie/stale failure.
+    late_venture_cutoff : str, default LATE_VC_CUTOFF
+        Stage threshold separating early from late venture rounds.
+    m_and_a_success_stage : str, default M_AND_A_SUCCESS_STAGE
+        Earliest stage at which an M&A event is considered a success
+        rather than a failure.
+
+    Returns
+    -------
+    bool
+        ``True`` if the company failed at the given stage; ``False`` if it
+        succeeded, hasn't reached the stage, or is still in progress.
     """
     if not raised_equity_round(company_funding_rows):
         return False
@@ -246,7 +365,7 @@ def did_company_fail(
     # Can't be a failure if they succeeded
     if did_company_succeed(
         company_funding_rows,
-        company_row,
+        company_classifier_status,
         graduation_stages=graduation_stages,
         late_venture_cutoff=late_venture_cutoff,
         m_and_a_success_stage=m_and_a_success_stage,
@@ -255,7 +374,7 @@ def did_company_fail(
 
     # --- Failure signals (company didn't succeed, check why) ---
 
-    if company_row.get("ensemble_operating_status_classification") == "Shut Down":
+    if company_classifier_status == "Shut Down":
         return True
 
     # Early M&A = failure (acquired before reaching a mature stage)

@@ -18,6 +18,21 @@ def get_project_config():
     return config["project"]
 
 
+def get_s3_paths():
+    paths_config = configparser.ConfigParser()
+    paths_file = pl.Path.cwd() / "paths.ini"
+    paths_config.read(paths_file)
+
+    path_items = list(paths_config.items('s3_paths'))
+
+    subst = substitutions.copy()
+    res = dict()
+    for key, pval in path_items:
+        pval = pval.format(**subst)
+        subst[key] = pval
+        res[key] = pval
+    return res
+
 def get_paths() -> Dict[str, pl.Path]:
     global dataroot
     global cftroot

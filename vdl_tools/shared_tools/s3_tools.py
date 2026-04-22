@@ -1,3 +1,14 @@
+"""General-purpose S3 helpers for arbitrary files (xlsx, images, raw JSON, etc.).
+
+.. note::
+    **For DataFrames, use** :mod:`vdl_tools.shared_tools.parquet_cache` instead.
+    ``parquet_cache`` writes typed, compressed Parquet, handles dict/list
+    columns, and caches remote reads locally with ETag validation — a better
+    fit than ``write_pandas_to_s3`` + ``to_json`` for any DataFrame workload.
+    This module is the right tool when you need arbitrary file I/O (Excel,
+    images, bulk JSON blobs, etc.) or when you want boto3-level control.
+"""
+
 import boto3
 import pathlib as pl
 import tempfile
