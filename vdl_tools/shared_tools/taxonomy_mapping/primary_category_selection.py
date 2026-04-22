@@ -230,7 +230,7 @@ def run_primary_category_selection(
                 "definition": (definitions_dict.get(cat_name) or "").strip(),
             })
 
-        # Sort categories for a stable, deterministic cache key
+        # Sort categories for a stable, deterministic cache key :)
         sorted_categories = sorted(categories, key=lambda c: c["name"])
         sorted_cat_names = "|".join(c["name"] for c in sorted_categories)
         given_id = f"{org_id}|{sorted_cat_names}"
@@ -286,7 +286,7 @@ def run_primary_category_selection(
                 # Fallback: mark the highest-pct accepted row as primary
                 logger.warning(
                     "Primary category '%s' not in accepted set for org %s. "
-                    "Falling back to highest pct.",
+                    "Falling back to highest pct.", # prevents hallucinations
                     primary_name, org_id,
                 )
                 org_accepted_rows = accepted_df[accepted_df[id_col] == org_id]
