@@ -65,69 +65,6 @@ def num_tokens_from_messages(messages, model="gpt-4o-mini-2024-07-18"):
     return num_tokens
 
 
-def _get_completion_kwargs(
-    prompt,
-    model,
-    text,
-    messages=None,
-    temperature=0.2,
-    max_tokens=2000,
-    top_p=1,
-    seed=SEED,
-    frequency_penalty=0,
-    presence_penalty=0,
-    stop=None,
-    response_format_type="text",
-    logprobs=None,
-    top_logprobs=None,
-):
-
-
-    messages = messages or []
-    if not messages and prompt:
-        messages = [
-            {
-                "role": "system",
-                "content": prompt,
-            },
-        ]
-
-    messages.append({"role": "user", "content": text})
-
-
-    kwargs = {
-        "model": model,
-        "temperature": temperature,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "top_p": top_p,
-        "seed": seed,
-        "frequency_penalty": frequency_penalty,
-        "presence_penalty": presence_penalty,
-        "stop": stop,
-        "response_format": {"type": response_format_type},
-    }
-
-    # Add logprobs if specified
-    if logprobs is not None:
-        kwargs["logprobs"] = logprobs
-        if top_logprobs is not None:
-            kwargs["top_logprobs"] = top_logprobs
-
-    # patch up args for reasoning models
-    if model.startswith("o") or model.startswith("gpt-5"):
-        max_tokens = kwargs.pop("max_tokens")
-        kwargs["max_completion_tokens"] = max_tokens
-        kwargs.pop("top_p")
-        kwargs.pop("temperature")
-        kwargs.pop("seed")
-        kwargs.pop("frequency_penalty")
-        kwargs.pop("presence_penalty")
-        kwargs.pop("stop")
-
-    return kwargs
-
-
 def get_completion(
     prompt,
     model,
