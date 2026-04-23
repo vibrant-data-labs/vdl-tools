@@ -15,6 +15,9 @@ import tempfile
 import os
 import json
 from contextlib import contextmanager
+
+from botocore.exceptions import ClientError
+
 from vdl_tools.shared_tools.tools.config_utils import get_configuration
 from vdl_tools.shared_tools.tools.logger import logger
 
@@ -32,7 +35,7 @@ def __get_default_policy(bucket_name):
             ],
             "Resource": [
                 "arn:aws:s3:::%s/*"
- 
+
             ]
         }
     ]
@@ -96,10 +99,10 @@ def list_bucket_contents(s3_client, bucket_name):
 def bucket_exists(bucket_name):
     """
     Check if an S3 bucket exists and is accessible.
-    
+
     Args:
         bucket_name: Name of the S3 bucket
-        
+
     Returns:
         bool: True if bucket exists and is accessible, False otherwise
     """
@@ -109,6 +112,36 @@ def bucket_exists(bucket_name):
         return True
     except Exception:
         return False
+
+
+def key_exists(bucket_name, key):
+    """Check if an object exists at the given S3 key.
+
+    Analogous to :meth:`pathlib.Path.exists` but for S3.
+
+    Args:
+        bucket_name: Name of the S3 bucket.
+        key: Object key within the bucket. Accepts a ``str`` or
+            :class:`pathlib.Path` (path is converted via ``as_posix``; a
+            leading ``..`` part is stripped to match ``save_file_to_s3``).
+
+    Returns:
+        bool: True if the object exists and is accessible, False if it
+        doesn't exist. Re-raises any other ``ClientError`` (e.g. 403).
+    """
+    if isinstance(key, pl.PurePath):
+        if key.parts and key.parts[0] == '..':
+            key = pl.Path(*key.parts[1:])
+        key = key.as_posix()
+
+    s3_client = get_s3_client()
+    try:
+        s3_client.head_object(Bucket=bucket_name, Key=key)
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
+            return False
+        raise
 
 
 def save_file_to_s3(bucket_name, full_name):
@@ -208,17 +241,17 @@ def read_s3_to_pandas(
 ):
     """
     Download a file from S3 and read it with a pandas function.
-    
+
     Args:
         s3_path: Path to file in S3
         reader_func: Pandas reading function (e.g., pd.read_json, pd.read_csv)
         bucket_name: S3 bucket name (default: 'shared-data-clone')
         cleanup: Whether to delete the local file after reading
         **kwargs: Additional arguments to pass to the reader function
-    
+
     Returns:
         pandas DataFrame
-    
+
     Usage:
         df = read_s3_to_pandas('data/input.json', pd.read_json)
         df = read_s3_to_pandas('data/input.csv', pd.read_csv, sep=';')
@@ -237,7 +270,7 @@ def write_pandas_to_s3(
 ):
     """
     Write a pandas DataFrame to S3.
-    
+
     Args:
         df: pandas DataFrame to write
         s3_path: Path to save file in S3
@@ -303,7 +336,7 @@ def write_json_to_s3(
 ):
     """
     Write JSON data to S3.
-    
+
     Args:
         data: Data to write (dict, list, etc.)
         s3_path: Path to save file in S3
@@ -324,7 +357,7 @@ def write_json_to_s3(
     with s3_file(s3_path, bucket_name=bucket_name, mode='w', cleanup=cleanup) as local_path:
         with open(local_path, 'w') as f:
             json.dump(data, f, **kwargs)
-    
+
     # Return the S3 key
     return pl.Path(s3_path).as_posix()
 
