@@ -26,7 +26,12 @@ def add_taxonomy_mapping(
     distribute_funding=True,
     mapping_name=None,
     max_distr_funding_level=2,
-    prompt_str=None
+    prompt_str=None,
+    run_primary_category_selection=True,
+    primary_category_model=None,
+    primary_category_kwargs=None,
+    url_col=None,
+    use_web_search=False,
 ):
     """
     Add taxonomy mapping to a dataframe.
@@ -69,6 +74,22 @@ def add_taxonomy_mapping(
         The name of the mapping.
     max_distr_funding_level : int, optional
         The maximum depth of the funding distribution.
+    run_primary_category_selection : bool, optional
+        When True (default), run an LLM step to pick the primary category for
+        orgs with more than one accepted match. Falls back to highest percentile
+        when False or when an org has only one accepted match.
+    primary_category_model : str, optional
+        OpenAI model for primary-category selection. Defaults to the
+        PrimaryCategoryCache default (DEFAULT_MODEL).
+    primary_category_kwargs : dict, optional
+        Extra kwargs forwarded to the primary-category LLM call (e.g.
+        ``{"reasoning": {"effort": "medium"}}`` for reasoning models).
+    url_col : str, optional
+        Column holding the org website URL, passed to primary category
+        selection so the model can reference it. Default None.
+    use_web_search : bool, optional
+        When True, enables web search in the primary-category LLM call.
+        Default False.
 
     Returns
     -------
@@ -157,6 +178,27 @@ def add_taxonomy_mapping(
             filtered_all_df = all_df.copy()
     else:
         filtered_all_df = all_df.copy()
+
+    if run_primary_category_selection:
+        logger.info("Running primary category selection for %s", mapping_name)
+        primary_kwargs = {
+            "use_cached_results": use_cached_results,
+            "use_web_search": use_web_search,
+        }
+        if primary_category_model:
+            primary_kwargs["model"] = primary_category_model
+        if primary_category_kwargs:
+            primary_kwargs.update(primary_category_kwargs)
+        filtered_all_df = tm.run_primary_category_selection(
+            all_df=filtered_all_df,
+            id_col=id_col,
+            text_col=text_col,
+            taxonomy=taxonomy,
+            name_col=name_col,
+            url_col=url_col,
+            max_workers=max_workers,
+            **primary_kwargs,
+        )
 
     if distribute_funding:
         # Remove this column from the output since it is calculated before re-ranking
@@ -1005,6 +1047,11 @@ def add_lstudio_taxonomy(
     pct_delta_min=2,
     run_fewshot_classification=True,
     filter_fewshot_classification=False,
+    run_primary_category_selection=False,
+    primary_category_model=None,
+    primary_category_kwargs=None,
+    url_col='Website',
+    use_web_search=True,
     use_cached_results=True,
     paths=None,
     max_workers=3,
@@ -1047,6 +1094,11 @@ def add_lstudio_taxonomy(
         pct_delta=pct_delta_min,
         run_fewshot_classification=run_fewshot_classification,
         filter_fewshot_classification=filter_fewshot_classification,
+        run_primary_category_selection=run_primary_category_selection,
+        primary_category_model=primary_category_model,
+        primary_category_kwargs=primary_category_kwargs,
+        url_col=url_col,
+        use_web_search=use_web_search,
         fewshot_examples=fse.lstudio_examples,
         use_cached_results=use_cached_results,
         force_parents=force_parents,
@@ -1074,7 +1126,8 @@ def add_lstudio_taxonomy(
         pct = 'pct'
         sim = 'sim'
         cols = ['mapped_category', 'cat_level'] + [f'level{tx["level"]}' for tx in taxonomy]
-    new_df = tm.add_mapping_to_orgs(df, all_df, id_col, pct=pct, sim=sim, cats=cols)
+    primary_col = 'is_llm_primary' if run_primary_category_selection else None
+    new_df = tm.add_mapping_to_orgs(df, all_df, id_col, pct=pct, sim=sim, cats=cols, primary_col=primary_col)
     return new_df
 
 def add_mapping_name_suffix_to_taxonomy_results(
