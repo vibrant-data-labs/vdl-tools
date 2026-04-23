@@ -1,4 +1,5 @@
 import json
+from textwrap import dedent
 from json import JSONDecodeError
 
 from sqlalchemy.orm.session import Session
@@ -39,13 +40,13 @@ def geotag_texts_bulk(
     session: Session,
     max_workers: int=8,
     use_cached_result: bool=True,
+    max_errors: int=2,
 ):
     """Runs Geotagging on a set of texts. Uses cached results when set.
 
     The Geotagging is a done with a long formed prompt that was "tuned" prompt using DsPy.
     https://github.com/vibrant-data-labs/zein-hack-box/blob/main/notebooks/dspy_location_extraction.ipynb
 
-    It is 
 
     Parameters
     ----------
@@ -71,6 +72,7 @@ def geotag_texts_bulk(
         session=session,
         use_cached_result=use_cached_result,
         max_workers=max_workers,
+        max_errors=max_errors,
     )
 
     id_to_locations = {}
@@ -100,26 +102,21 @@ class GeoTaggingPromptCache(PromptResponseCacheSQL):
 
     def get_completion(self, prompt_str, text, **kwargs):
         """Writes a custom get completion with ignores a system prompt and focuses on the text prompt.
-        
+
         This was built using the optomized prompting through DsPy work
         """
-
-        full_text = f"""{self.prompt.prompt_str}
-        ---
-
-        Text: {text}
-        Metadatas:
-        """
+        full_text = dedent(
+          f"""
+          Text: {text}
+          Metadatas:
+          """
+        )
         return get_completion(
-            prompt=None,
+            prompt=self.prompt.prompt_str,
             text=full_text,
             model=self.model,
             return_all=True,
-            temperature=0,
-            max_tokens=4096,
-            top_p=1,
-            frequency_penalty=0,
-            presence_penalty=0,
+            max_output_tokens=4096,
         )
 
 

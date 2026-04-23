@@ -318,6 +318,7 @@ def add_geotags(
     text_fields=TEXT_FIELDS,
     max_workers=MAX_WORKERS,
     id_col='id',
+    max_errors=2,
 ):
     ids_texts = []
     for _, row in df[[id_col] + text_fields].iterrows():
@@ -330,6 +331,7 @@ def add_geotags(
             session=session,
             use_cached_result=True,
             max_workers=max_workers,
+            max_errors=max_errors,
         )
 
     df['Geo_Tags_Dicts'] = df[id_col].map(ids_to_geotags)
