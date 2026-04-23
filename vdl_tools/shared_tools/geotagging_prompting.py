@@ -47,7 +47,6 @@ def geotag_texts_bulk(
     The Geotagging is a done with a long formed prompt that was "tuned" prompt using DsPy.
     https://github.com/vibrant-data-labs/zein-hack-box/blob/main/notebooks/dspy_location_extraction.ipynb
 
-    It is
 
     Parameters
     ----------
