@@ -274,16 +274,12 @@ def query_process_givingtuesday_data(
 
 
 if __name__ == "__main__":
-    from vdl_tools.shared_tools.project_config import get_paths, get_s3_paths
-    paths = get_paths()
-    s3_paths = get_s3_paths()
-
-    filter_yr = 2017
+    filter_yr = 2023
     query_process_givingtuesday_data(
-        nonprofits_with_text_df_uri=s3_paths['nonprofits_with_text_df'],
-        search_terms_list=None,
-        search_terms_path=paths['nonprofit_search_terms'],
-        proceessed_output_path=paths['givingtuesday_data_cleaned'],
+        nonprofits_with_text_df_uri="s3://ed-tracker-data/givingtuesday/giving_tuesday_all_text_fields.parquet",
+        search_terms_list=["teachers", "education"],
+        # search_terms_path=paths['nonprofit_search_terms'],
+        proceessed_output_path="s3://ed-tracker-data/givingtuesday/giving_tuesday_data_cleaned.json",
         filter_yr=filter_yr,
         column_for_funding='total_cash_contributions',
     )
