@@ -8,7 +8,7 @@ Conceptual model:
 
     2. Did the company FAIL at that stage?
        → They didn't succeed, AND one of:
-         - ensemble_operating_status_classification is "Shut Down"
+         - ensemble_operating_status_classification is "Shut Down" or "Restructured"
          - They had an M&A exit before the success stage (early acqui-hire = failure)
          - Their last funding was 2+ years ago (zombie/stale)
 
@@ -158,40 +158,41 @@ def raised_stage_or_earlier(company_funding_rows, stages=["Series A", "Early VC"
     return bool(earlier_stages.intersection(round_types))
 
 
-def _has_successful_manda(round_types, m_and_a_success_stage):
+def _has_successful_manda(
+    round_types,
+    m_and_a_success_stage,
+    company_classifier_status,
+):
     """Check if the company had an M&A event and whether it counts as success.
 
-    M&A outcomes are stage-dependent:
-    - M&A at or after ``m_and_a_success_stage`` (default: Series A) is
-      considered a **success** (meaningful acquisition).
-    - M&A before that stage is considered a **failure** (early acqui-hire).
+    M&A signals come from two sources:
+    - Round-level: Merger / Acquisition / Buyout in funding data.
+    - Ensemble-level: company_classifier_status == "Acquired / Merger"
+      catches acquisitions the LLM detected but that aren't recorded as M&A
+      rounds in the funding data.
 
-    Parameters
-    ----------
-    round_types : set[str]
-        The set of ``round_type_nzi`` values for the company.
-    m_and_a_success_stage : str
-        The earliest stage at which an M&A event counts as success.
-        Defaults to ``M_AND_A_SUCCESS_STAGE`` from
-        ``split_early_late_funding_rounds``.
-
-    Returns
-    -------
-    bool or None
-        ``True`` if M&A occurred at or after the success stage (success).
-        ``False`` if M&A occurred before the success stage (failure).
-        ``None`` if the company had no M&A event at all.
+    Either source triggers the same stage-based determination:
+    - At or after `m_and_a_success_stage` (default: Series A) → success.
+    - Before that stage → failure (early acqui-hire).
     """
-    if not round_types.intersection(M_AND_A_NAMES):
-        return None  # No M&A event at all
+    has_manda_round    = bool(round_types.intersection(M_AND_A_NAMES))
+    has_ensemble_manda = (company_classifier_status == "Acquired / Merger")
+
+    if not has_manda_round and not has_ensemble_manda:
+        return None  # no M&A signal at all
 
     stages_where_manda_is_success = set(DISCLOSED_STAGES_ORDERED[
         DISCLOSED_STAGES_ORDERED.index(m_and_a_success_stage):
     ])
+    # "Early VC" is a catch-all label for Series A-era rounds; treat it as
+    # equivalent to Series A for M&A success purposes (parallels the existing
+    # _get_graduation_and_later_stages logic).
+    if m_and_a_success_stage in ("Series A", "Early VC"):
+        stages_where_manda_is_success.update({"Early VC", "Series A"})
 
     if stages_where_manda_is_success.intersection(round_types):
-        return True   # M&A at a mature stage → success
-    return False      # M&A at an early stage → failure
+        return True   # mature M&A → success
+    return False      # early acqui-hire → failure
 
 
 def did_company_succeed(
@@ -251,7 +252,11 @@ def did_company_succeed(
         return True
 
     # M&A check — if they had M&A, its success depends on what stage they reached
-    manda_result = _has_successful_manda(round_types, m_and_a_success_stage)
+    manda_result = _has_successful_manda(
+        round_types,
+        m_and_a_success_stage,
+        company_classifier_status,
+    )
     if manda_result is not None:
         return manda_result
 
@@ -260,11 +265,6 @@ def did_company_succeed(
         list(graduation_stages), late_venture_cutoff,
     )
     if set(stages_at_or_after).intersection(round_types):
-        return True
-
-    # Some companies were acquired but have no M&A round type in their funding data.
-    # If they passed the stage gate above, treat the acquisition as success.
-    if company_classifier_status == "Acquired / Merger":
         return True
 
     return False
@@ -306,7 +306,7 @@ def did_company_fail(
     4. It did **not** succeed past the graduation threshold (checked via
        ``did_company_succeed``).
     5. It exhibits **at least one** failure signal:
-       a. ``ensemble_operating_status_classification == "Shut Down"``.
+       a. ensemble_operating_status_classification is "Shut Down" or "Restructured".
        b. Had an early M&A before ``m_and_a_success_stage`` (acqui-hire).
        c. Last funding round was ``>= outlier_time`` days ago (zombie/stale).
 
@@ -319,7 +319,7 @@ def did_company_fail(
         All funding round rows for a single company. Must contain columns
         ``"round_type_nzi"``, ``"financing_type_nzi"``, and ``"round_date_nzi"``.
     company_classifier_status : str or None
-        The company's ``ensemble_operating_status_classification`` value.
+        The company's ensemble_operating_status_classification value.
     at_stage : str, default "Early VC"
         The stage to evaluate failure at. Must be a key in
         ``STAGE_FAILURE_MAP`` or a stage in ``DISCLOSED_STAGES_ORDERED``.
@@ -374,11 +374,15 @@ def did_company_fail(
 
     # --- Failure signals (company didn't succeed, check why) ---
 
-    if company_classifier_status == "Shut Down":
+    if company_classifier_status in {"Shut Down", "Restructured"}:
         return True
 
     # Early M&A = failure (acquired before reaching a mature stage)
-    manda_result = _has_successful_manda(round_types, m_and_a_success_stage)
+    manda_result = _has_successful_manda(
+        round_types,
+        m_and_a_success_stage,
+        company_classifier_status,
+    )
     if manda_result is False:
         return True
 

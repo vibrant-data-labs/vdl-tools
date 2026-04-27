@@ -279,6 +279,7 @@ def divided_funding_rows_and_flatten(
                 "last_round_date": None,
                 "amount_raised": None,
                 "num_rounds": None,
+                "all_funding_activity": None,
             }
             if round_name == 'early':
                 round_group_dict.update({f"{col}_count": None for col in investor_type_columns})
@@ -293,6 +294,7 @@ def divided_funding_rows_and_flatten(
             if round_name == 'early':
                 for investor_type_col in investor_type_columns:
                     round_group_dict[f"{investor_type_col}_count"] = round_group_rounds[investor_type_col].sum()
+            round_group_dict["all_funding_activity"] = round_group_rounds
             company_round_groups_parsed.append(round_group_dict)
 
         company_round_groups_parsed_dict = {

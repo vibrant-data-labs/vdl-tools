@@ -19,11 +19,6 @@ def make_rows(rounds):
     return pd.DataFrame(rounds)
 
 
-def make_company_row(ensemble_operating_status_classification):
-    """Build a minimal company details dict with the ensemble status field."""
-    return {"ensemble_operating_status_classification": ensemble_operating_status_classification}
-
-
 # ---------------------------------------------------------------------------
 # Real-data fixtures (based on actual companies in the dataset)
 # ---------------------------------------------------------------------------
@@ -152,15 +147,25 @@ ACCELERATOR_TO_SERIES_B = make_rows([
     {"round_date_nzi": pd.Timestamp("2021-01-01"), "round_type_nzi": "Series B", "financing_type_nzi": "Equity"},
 ])
 
+# Recent Seed-only — last funding < 730 days from FIXED_NOW so the zombie
+# rule does NOT fire. Used to test failure paths that should be triggered by
+# the ensemble status alone (early acqui-hire via Acquired/Merger;
+# Restructured-without-graduation).
+RECENT_SEED_ONLY = make_rows([
+    {"round_date_nzi": pd.Timestamp("2024-06-01"), "round_type_nzi": "Seed", "financing_type_nzi": "Equity"},
+])
+
 
 # ---------------------------------------------------------------------------
-# Company row fixtures (mimic company details records)
+# Ensemble operating-status fixtures
+# These are passed directly as `company_classifier_status` (a string) to
+# did_company_succeed / did_company_fail.
 # ---------------------------------------------------------------------------
 
-COMPANY_SHUT_DOWN = make_company_row("Shut Down")
-COMPANY_ACQUIRED = make_company_row("Acquired / Merger")
-COMPANY_RESTRUCTURED = make_company_row("Restructured")
-COMPANY_OPERATING = make_company_row("Operating")
+COMPANY_SHUT_DOWN    = "Shut Down"
+COMPANY_ACQUIRED     = "Acquired / Merger"
+COMPANY_RESTRUCTURED = "Restructured"
+COMPANY_OPERATING    = "Operating"
 
 
 # ===========================================================================
@@ -248,11 +253,20 @@ class TestDidCompanySucceed:
         assert did_company_succeed(MANTLE, COMPANY_ACQUIRED) is True
 
     def test_acquired_status_without_ma_round_below_threshold(self):
-        # Spero Foods: Early VC only, acquired per status but no M&A round
-        # Below Series B threshold — but with Acquired company_row, treated as success
-        # since they passed the stage gate (raised_stage_or_earlier checks for Early VC)
+        # Spero Foods: Early VC only, acquired per status but no M&A round.
+        # Early VC is treated as Series A-equivalent for M&A success purposes,
+        # so an Acquired ensemble with an Early VC round counts as mature M&A.
         assert did_company_succeed(SPERO_FOODS, COMPANY_OPERATING) is False
         assert did_company_succeed(SPERO_FOODS, COMPANY_ACQUIRED) is True
+
+    def test_acquired_below_series_a_is_early_acqui_hire(self):
+        # Ensemble = Acquired but only Seed-stage funding (never reached
+        # Series A or Early VC) → early acqui-hire, NOT success.
+        # This was the bug: pre-fix, the line-267 fallback flipped this to True.
+        assert did_company_succeed(
+            RECENT_SEED_ONLY, COMPANY_ACQUIRED,
+            graduation_stages=("Series A", "Early VC"),
+        ) is False
 
     def test_operating_company_row_no_effect(self):
         assert did_company_succeed(SEED_ONLY_STALE, COMPANY_OPERATING) is False
@@ -479,3 +493,22 @@ class TestDidCompanyFailWithCompanyRow:
     def test_debt_only_shut_down_still_false(self):
         """Debt-only company, even if Shut Down, fails the equity gate."""
         assert did_company_fail(DEBT_ONLY, COMPANY_SHUT_DOWN) is False
+
+    def test_acquired_pre_seed_only_is_early_acqui_hire(self):
+        """Ensemble = Acquired with only Seed funding (didn't reach Series A) →
+        early acqui-hire = failure. Triggered by _has_successful_manda
+        returning False via the ensemble signal."""
+        with self._patch_now() as mock_dt:
+            mock_dt.now.return_value = FIXED_NOW
+            assert did_company_fail(
+                RECENT_SEED_ONLY, COMPANY_ACQUIRED, at_stage="Seed",
+            ) is True
+
+    def test_restructured_seed_only_is_failure(self):
+        """Ensemble = Restructured + didn't graduate past Seed → failure (rule 4a).
+        Distinct from the AppHarvest case above (which succeeded via SPAC)."""
+        with self._patch_now() as mock_dt:
+            mock_dt.now.return_value = FIXED_NOW
+            assert did_company_fail(
+                RECENT_SEED_ONLY, COMPANY_RESTRUCTURED, at_stage="Seed",
+            ) is True
