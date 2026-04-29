@@ -1,83 +1,113 @@
+"""Build the Giving Tuesday CB-shaped DataFrame for ed-tracker / similar pipelines.
+
+Cut over to gt_datamart via ``givingtuesday_datamart.client``: keyword search
+runs as Postgres FTS over ``public.nonprofit_text.text_tsv`` (replacing the
+S3 parquet + FlashText path), and the per-EIN basic-fields / grants reads go
+through the typed client surface.
+"""
+
+from dataclasses import asdict
+
 import pandas as pd
-from sqlalchemy import text
-from vdl_tools.shared_tools.project_config import get_paths
+from vdl_tools.shared_tools.tools.config_utils import get_configuration
 from vdl_tools.shared_tools.tools.logger import logger
-from vdl_tools.shared_tools.database_cache.database_utils import get_session
-from vdl_tools.shared_tools.keyword_extraction.search_term_recall_calculations import run_keyword_extraction
-import vdl_tools.shared_tools.parquet_cache as pq_cache
+
+from givingtuesday_datamart.client import GtDatamartClient
+
+
+def _make_default_client() -> GtDatamartClient:
+    """Build a GtDatamartClient from vdl-tools' postgres config.
+
+    The client itself does not depend on vdl-tools (so it is shippable as a
+    standalone package); this adapter lives on the vdl-tools side and maps
+    ``get_configuration()`` to the client's component args. Database is
+    pinned to ``gt_datamart`` regardless of what the local config has set.
+    """
+    pg = get_configuration()["postgres"]
+    return GtDatamartClient(
+        host=pg["host"],
+        port=pg["port"],
+        user=pg["user"],
+        password=pg["password"],
+        database="gt_datamart",
+    )
 
 
 def search_for_eins(
-    nonprofits_with_text_df_uri,
+    client,
     search_terms_list=None,
     search_terms_path=None,
 ):
+    """Return EINs whose ``nonprofit_text`` matches any of the keywords.
 
-    logger.info(f"Searching for EINs with search terms")
+    Output DataFrame uses ``filerein`` and ``concat_text`` to keep the
+    downstream pivot/reformat helpers untouched (those were written against
+    the old parquet's column names).
+    """
+    logger.info("Searching for EINs with search terms")
     if not any([search_terms_list, search_terms_path]):
         raise ValueError("Must provide either search_terms_list or search_terms_path")
 
     if search_terms_list:
-        nonprofit_search_terms = search_terms_list
+        keywords = search_terms_list
     else:
-        nonprofit_search_terms_df = pd.read_csv(search_terms_path)
-        nonprofit_search_terms = nonprofit_search_terms_df['term'].tolist()
+        keywords = pd.read_csv(search_terms_path)['term'].tolist()
 
-    nonprofits_with_text_df = pq_cache.read_dataframe(uri=nonprofits_with_text_df_uri)
-    results = run_keyword_extraction(
-        keywords=nonprofit_search_terms,
-        df=nonprofits_with_text_df,
-        text_field="concat_text",
-    )
-    results = results[results['KW_Extracted_Len'] > 0]
+    hits = client.search_nonprofits(keywords)
+    if not hits:
+        return pd.DataFrame(columns=['filerein', 'concat_text'])
+
+    results = pd.DataFrame.from_records([
+        {'filerein': h.ein, 'concat_text': h.unique_text or ''} for h in hits
+    ])
     logger.info(f"Found {len(results)} EINs with search terms")
     return results
 
 
 def query_basic_fields_db_for_eins(
+    client,
     eins_list,
     filter_yr=2017,
 ):
-    with get_session() as session:
-        query = text("""
-            SELECT
-                filerein::text,
-                filername1,
-                filername2,
-                taxyear,
-                filerus1,
-                filerus2,
-                fileruscity,
-                filerusstate,
-                fileruszip,
-                websitsiteit,
-                totrevcuryea AS total_revenue_current_year,
-                totacashcont AS total_cash_contributions,
-                totacashcont - governgrants AS total_cash_contributions_no_gov
-            FROM irs_filings.basic_fields
-            WHERE filerein::text = ANY(:eins_list)
-            AND taxyear >= :filter_yr
-            """)
-        cur = session.execute(query, {"eins_list": eins_list, "filter_yr": filter_yr})
-        results = pd.DataFrame(cur.fetchall(), columns=cur.keys())
-        return results
+    rows = client.get_basic_fields(eins_list, min_taxyear=filter_yr)
+    if not rows:
+        return pd.DataFrame(columns=[
+            'filerein', 'filername1', 'filername2', 'taxyear',
+            'filerus1', 'filerus2', 'fileruscity', 'filerusstate', 'fileruszip',
+            'websitsiteit',
+            'total_revenue_current_year', 'total_cash_contributions',
+            'total_cash_contributions_no_gov',
+        ])
+    df = pd.DataFrame.from_records([asdict(r) for r in rows])
+    # Restore the old column names downstream pivot/reformat helpers expect.
+    df.rename(columns={
+        'ein': 'filerein',
+        'name': 'filername1',
+        'name_secondary': 'filername2',
+        'addr_line_1': 'filerus1',
+        'addr_line_2': 'filerus2',
+        'city': 'fileruscity',
+        'state': 'filerusstate',
+        'zip': 'fileruszip',
+        'website': 'websitsiteit',
+    }, inplace=True)
+    return df
+
 
 def query_unioned_grants_for_eins(
+    client,
     eins_list,
     filter_yr=2017,
 ):
     logger.info(f"Querying unioned grants for {len(eins_list)} EINs")
-    with get_session() as session:
-        query = text("""
-            SELECT *
-            FROM irs_filings.unioned_grants
-            WHERE grantee_ein::text = ANY(:eins_list)
-            AND taxyear >= :filter_yr
-            """)
-        cur = session.execute(query, {"eins_list": eins_list, "filter_yr": filter_yr})
-        results = pd.DataFrame(cur.fetchall(), columns=cur.keys())
-        logger.info(f"Found {len(results)} grants for {len(eins_list)} EINs")
-        return results
+    grants = client.get_grants(eins_list, role='grantee', min_taxyear=filter_yr)
+    if not grants:
+        return pd.DataFrame(columns=[
+            'granter_ein', 'granter_name', 'grantee_ein', 'taxyear', 'grant_amount',
+        ])
+    df = pd.DataFrame.from_records([asdict(g) for g in grants])
+    logger.info(f"Found {len(df)} grants for {len(eins_list)} EINs")
+    return df
 
 
 def filter_format_grants_data(
@@ -229,21 +259,24 @@ def reformat_ein(filerein):
 
 
 def query_process_givingtuesday_data(
-    nonprofits_with_text_df_uri,
     search_terms_list=None,
     search_terms_path=None,
     proceessed_output_path=None,
     filter_yr=2017,
     column_for_funding='total_cash_contributions',
+    client=None,
 ):
+    client = client or _make_default_client()
+
     # Get us potential EINs that match the search results
     search_results = search_for_eins(
-        nonprofits_with_text_df_uri=nonprofits_with_text_df_uri,
+        client=client,
         search_terms_list=search_terms_list,
         search_terms_path=search_terms_path,
     )
 
     grants_data = query_unioned_grants_for_eins(
+        client,
         search_results['filerein'].tolist(),
         filter_yr=filter_yr,
     )
@@ -252,7 +285,7 @@ def query_process_givingtuesday_data(
     # Get the EINs that have grants and contributions over the minimums
     eins_list = grants_funding_df['grantee_ein'].tolist()
     ein_to_full_text = dict(search_results[['filerein', 'concat_text']].values)
-    all_data_long = query_basic_fields_db_for_eins(eins_list, filter_yr=filter_yr)
+    all_data_long = query_basic_fields_db_for_eins(client, eins_list, filter_yr=filter_yr)
 
     total_cash_contributions_df = filter_format_funding_data(
         all_data_long,
@@ -269,14 +302,14 @@ def query_process_givingtuesday_data(
         ],
         column_for_funding=column_for_funding,
     )
-    all_data_reformatted.to_json(proceessed_output_path, orient='records')
+    if proceessed_output_path:
+        all_data_reformatted.to_json(proceessed_output_path, orient='records')
     return all_data_reformatted
 
 
 if __name__ == "__main__":
     filter_yr = 2023
     query_process_givingtuesday_data(
-        nonprofits_with_text_df_uri="s3://ed-tracker-data/givingtuesday/giving_tuesday_all_text_fields.parquet",
         search_terms_list=["teachers", "education"],
         # search_terms_path=paths['nonprofit_search_terms'],
         proceessed_output_path="s3://ed-tracker-data/givingtuesday/giving_tuesday_data_cleaned.json",
