@@ -37,6 +37,7 @@ def search_for_eins(
     client,
     search_terms_list=None,
     search_terms_path=None,
+    search_mode='exact',
     return_full_text=False,
 ):
     """Return EINs whose ``nonprofit_text`` matches any of the keywords.
@@ -50,7 +51,7 @@ def search_for_eins(
     else:
         keywords = pd.read_csv(search_terms_path)['term'].tolist()
 
-    hits = client.search_nonprofits(keywords, return_text=return_full_text)
+    hits = client.search_nonprofits(keywords, return_text=return_full_text, search_mode=search_mode)
     if not hits:
         return pd.DataFrame(columns=['filerein', 'full_text'])
 
@@ -264,6 +265,7 @@ def reformat_ein(filerein):
 def query_process_givingtuesday_data(
     search_terms_list=None,
     search_terms_path=None,
+    search_mode='exact',
     proceessed_output_path=None,
     require_one_grant=True,
     filter_yr=2017,
@@ -281,6 +283,7 @@ def query_process_givingtuesday_data(
         search_terms_list=search_terms_list,
         search_terms_path=search_terms_path,
         return_full_text=return_full_text,
+        search_mode=search_mode,
     )
 
     grants_data = query_unioned_grants_for_eins(
