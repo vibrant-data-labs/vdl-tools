@@ -263,14 +263,13 @@ def prepare_for_relevance_model(df, max_workers=MAX_WORKERS, description_col='De
     # UPDATED: Uses the custom column if provided, defaults to 'Description'
     df['text_for_relevance_model'] = df[description_col]
 
-    df['Website'] = None
-
-    # df_missing_descriptions will have a Website either from Website_cb_cd or LinkedIn
     if df_missing_descriptions.shape[0] > 0:
-        df['Website'].fillna(df_missing_descriptions['Website'], inplace=True)
-    df['Website'].fillna(df['Website_cb_cd'], inplace=True)
-    df['Website Summary'] = df['Website'].map(summaries_for_missing_desc, None)
-    df['text_for_relevance_model'].fillna(df['Website Summary'], inplace=True)
+        df['Website Summary'] = df_missing_descriptions['Website Summary']
+        # For orgs with a short/missing description, prefer the website summary when available
+        has_website_summary = df['Website Summary'].notnull()
+        df.loc[has_website_summary, 'text_for_relevance_model'] = df.loc[has_website_summary, 'Website Summary']
+    else:
+        df['Website Summary'] = None
 
     # TO DO: Fix what happens when there is no website text
     # LinkedIn text? 990?

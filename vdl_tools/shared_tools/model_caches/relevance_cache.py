@@ -4,11 +4,25 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import tiktoken
 
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 from vdl_tools.shared_tools.openai.prompt_response_cache_sql import PromptResponseCacheSQL
 from vdl_tools.shared_tools.openai.openai_api_utils import get_completion
 from vdl_tools.shared_tools.tools.logger import logger
+
+MAX_TEXT_TOKENS = 500_000
+_ENCODING = "cl100k_base"
+
+
+def _truncate_text(text: str) -> str:
+    if not isinstance(text, str):
+        return text
+    encoding = tiktoken.get_encoding(_ENCODING)
+    tokens = encoding.encode(text)
+    if len(tokens) <= MAX_TEXT_TOKENS:
+        return text
+    return encoding.decode(tokens[:MAX_TEXT_TOKENS])
 
 
 class RelevanceCache(PromptResponseCacheSQL):
@@ -315,7 +329,10 @@ def generate_predictions(
         raise Exception("Cannot provide both label overrides as a dict and filepath")
 
     # Prepare data for bulk processing
-    given_ids_texts = df[[idn, column_text]].values.tolist()
+    given_ids_texts = [
+        (row[idn], _truncate_text(row[column_text]))
+        for _, row in df[[idn, column_text]].iterrows()
+    ]
 
     # Use provided session or create a new one
     # Create session using context manager
