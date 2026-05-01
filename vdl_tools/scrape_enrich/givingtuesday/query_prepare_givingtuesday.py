@@ -37,12 +37,9 @@ def search_for_eins(
     client,
     search_terms_list=None,
     search_terms_path=None,
+    return_full_text=False,
 ):
     """Return EINs whose ``nonprofit_text`` matches any of the keywords.
-
-    Output DataFrame uses ``filerein`` and ``concat_text`` to keep the
-    downstream pivot/reformat helpers untouched (those were written against
-    the old parquet's column names).
     """
     logger.info("Searching for EINs with search terms")
     if not any([search_terms_list, search_terms_path]):
@@ -53,12 +50,12 @@ def search_for_eins(
     else:
         keywords = pd.read_csv(search_terms_path)['term'].tolist()
 
-    hits = client.search_nonprofits(keywords)
+    hits = client.search_nonprofits(keywords, return_text=return_full_text)
     if not hits:
-        return pd.DataFrame(columns=['filerein', 'concat_text'])
+        return pd.DataFrame(columns=['filerein', 'full_text'])
 
     results = pd.DataFrame.from_records([
-        {'filerein': h.ein, 'concat_text': h.unique_text or ''} for h in hits
+        {'filerein': h.ein, 'full_text': h.unique_text or ''} for h in hits
     ])
     logger.info(f"Found {len(results)} EINs with search terms")
     return results
@@ -188,7 +185,12 @@ def reformat_basic_fields_data(
 
     basic_fields_data['Description'] = basic_fields_data['filerein'].map(ein_to_full_text)
     for join_key, funding_df in funding_dfs:
-        basic_fields_data = basic_fields_data.merge(funding_df, left_on='filerein', right_on=join_key)
+        basic_fields_data = basic_fields_data.merge(
+            funding_df,
+            left_on='filerein',
+            right_on=join_key,
+            how='left',
+        )
         if join_key != 'filerein':
             basic_fields_data.drop(columns=[join_key], inplace=True)
 
@@ -245,6 +247,7 @@ def reformat_basic_fields_data(
 
     return basic_fields_data
 
+
 def reformat_ein(filerein):
     if len(filerein) == 10:
         if '-' not in filerein:
@@ -262,9 +265,13 @@ def query_process_givingtuesday_data(
     search_terms_list=None,
     search_terms_path=None,
     proceessed_output_path=None,
+    require_one_grant=True,
     filter_yr=2017,
+    avg_yearly_contributions_min=300000,
+    avg_yearly_funding_grants_min=0,
     column_for_funding='total_cash_contributions',
     client=None,
+    return_full_text=True,
 ):
     client = client or _make_default_client()
 
@@ -273,6 +280,7 @@ def query_process_givingtuesday_data(
         client=client,
         search_terms_list=search_terms_list,
         search_terms_path=search_terms_path,
+        return_full_text=return_full_text,
     )
 
     grants_data = query_unioned_grants_for_eins(
@@ -280,17 +288,23 @@ def query_process_givingtuesday_data(
         search_results['filerein'].tolist(),
         filter_yr=filter_yr,
     )
-    grants_funding_df = filter_format_grants_data(grants_data, avg_yearly_funding_min=0)
+    grants_funding_df = filter_format_grants_data(
+        grants_data,
+        avg_yearly_funding_min=avg_yearly_funding_grants_min
+    )
 
-    # Get the EINs that have grants and contributions over the minimums
-    eins_list = grants_funding_df['grantee_ein'].tolist()
-    ein_to_full_text = dict(search_results[['filerein', 'concat_text']].values)
+    if require_one_grant:
+        # Get the EINs that have grants and contributions over the minimums
+        eins_list = grants_funding_df['grantee_ein'].unique().tolist()
+    else:
+        eins_list = search_results['filerein'].unique().tolist()
+    ein_to_full_text = dict(search_results[['filerein', 'full_text']].values)
     all_data_long = query_basic_fields_db_for_eins(client, eins_list, filter_yr=filter_yr)
 
     total_cash_contributions_df = filter_format_funding_data(
         all_data_long,
         column='total_cash_contributions',
-        avg_yearly_contributions_min=300000
+        avg_yearly_contributions_min=avg_yearly_contributions_min
     )
 
     all_data_reformatted = reformat_basic_fields_data(
