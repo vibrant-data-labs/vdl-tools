@@ -43,6 +43,37 @@ def get_num_tokens(text, model_name):
     return len(encoding.encode(text))
 
 
+def truncate_text(text, model_name, max_tokens):
+    """Truncate text to at most max_tokens using the model-appropriate encoding."""
+    if not isinstance(text, str):
+        return text
+    try:
+        encoding = tiktoken.encoding_for_model(model_name)
+    except KeyError:
+        encoding = tiktoken.get_encoding("o200k_base")
+    tokens = encoding.encode(text)
+    if len(tokens) <= max_tokens:
+        return text
+    return encoding.decode(tokens[:max_tokens])
+
+
+def get_context_window(model_name):
+    """Return (max_context_window, max_output_tokens) for a model.
+
+    Handles fine-tuned models by matching their base model name.
+    Returns (None, None) if the model is unknown.
+    """
+    if model_name in MODEL_DATA:
+        d = MODEL_DATA[model_name]
+        return d["max_context_window"], d["max_output_tokens"]
+    if model_name.startswith("ft:"):
+        base = model_name.split(":")[1]  # e.g. "gpt-4.1-mini-2025-04-14"
+        for key, d in MODEL_DATA.items():
+            if base.startswith(key):
+                return d["max_context_window"], d["max_output_tokens"]
+    return None, None
+
+
 def num_tokens_from_messages(messages, model="gpt-4o-mini-2024-07-18"):
     """Return the number of tokens used by a list of messages.
     https://github.com/openai/openai-cookbook/blob/main/examples/How_to_count_tokens_with_tiktoken.ipynb
@@ -70,6 +101,7 @@ def get_completion(
     model,
     text,
     return_all=False,
+    max_text_tokens=None,
     **kwargs,
 ):
     """Call the OpenAI Responses API and return the parsed completion.
@@ -110,6 +142,9 @@ def get_completion(
     -------
     Parsed completion, or the full response object if `return_all` is True.
     """
+    if max_text_tokens is not None:
+        text = truncate_text(text, model_name=model, max_tokens=max_text_tokens)
+
     messages = [
         {
             "role": "system",
