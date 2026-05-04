@@ -20,6 +20,13 @@ MODEL_DATA = {
         "input_cost_per_token": 0.75 / 1_000_000,
         "output_cost_per_token": 4.5 / 1_000_000,
     },
+    "gpt-5.4-nano": {
+        "model_name": "gpt-5.4-nano",
+        "max_context_window": 400_000,
+        "max_output_tokens": 128_000,
+        "input_cost_per_token": 0.20 / 1_000_000,
+        "output_cost_per_token": 1.25 / 1_000_000,
+    },
     "o3-mini":{
         "model_name": "o3-mini",
         "max_context_window": 1_047_576,

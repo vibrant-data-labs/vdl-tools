@@ -19,7 +19,8 @@ if not api_key:
 CLIENT = OpenAI(max_retries=4,
                 api_key=api_key)
 ASYNC_CLIENT = AsyncOpenAI(api_key=api_key)
-
+DEFAULT_CONTEXT_WINDOW = 400_000
+DEFAULT_MAX_OUTPUT_TOKENS = 128_000
 
 def is_reasoning_model(model):
     return model.startswith("gpt-5")
@@ -71,7 +72,13 @@ def get_context_window(model_name):
         for key, d in MODEL_DATA.items():
             if base.startswith(key):
                 return d["max_context_window"], d["max_output_tokens"]
-    return None, None
+    print(
+        "Unknown model %s, falling back to default context window %d",
+        model_name,
+        DEFAULT_CONTEXT_WINDOW
+    )
+    return DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT_TOKENS
+
 
 
 def num_tokens_from_messages(messages, model="gpt-4o-mini-2024-07-18"):
