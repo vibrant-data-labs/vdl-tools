@@ -73,9 +73,7 @@ def get_context_window(model_name):
             if base.startswith(key):
                 return d["max_context_window"], d["max_output_tokens"]
     print(
-        "Unknown model %s, falling back to default context window %d",
-        model_name,
-        DEFAULT_CONTEXT_WINDOW
+        f"Unknown model {model_name}, falling back to default context window {DEFAULT_CONTEXT_WINDOW}"
     )
     return DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT_TOKENS
 
