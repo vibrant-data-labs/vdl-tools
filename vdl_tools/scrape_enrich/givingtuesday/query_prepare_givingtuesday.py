@@ -11,6 +11,7 @@ from dataclasses import asdict
 import pandas as pd
 from vdl_tools.shared_tools.tools.config_utils import get_configuration
 from vdl_tools.shared_tools.tools.logger import logger
+from vdl_tools.shared_tools.parquet_cache import write_dataframe
 
 from givingtuesday_datamart.client import GtDatamartClient
 
@@ -51,7 +52,11 @@ def search_for_eins(
     else:
         keywords = pd.read_csv(search_terms_path)['term'].tolist()
 
-    hits = client.search_nonprofits(keywords, return_text=return_full_text, search_mode=search_mode)
+    hits = client.search_nonprofits(
+        keywords,
+        return_text=return_full_text,
+        search_mode=search_mode,
+    )
     if not hits:
         return pd.DataFrame(columns=['filerein', 'full_text'])
 
@@ -320,7 +325,7 @@ def query_process_givingtuesday_data(
         column_for_funding=column_for_funding,
     )
     if proceessed_output_path:
-        all_data_reformatted.to_json(proceessed_output_path, orient='records')
+        write_dataframe(all_data_reformatted, proceessed_output_path)
     return all_data_reformatted
 
 
