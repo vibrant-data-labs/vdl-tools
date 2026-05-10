@@ -97,39 +97,60 @@ def query_basic_fields_db_for_eins(
     return df
 
 
-def query_unioned_grants_for_eins(
+def query_grant_summaries_for_eins(
     client,
     eins_list,
     filter_yr=2017,
 ):
-    logger.info(f"Querying unioned grants for {len(eins_list)} EINs")
-    grants = client.get_grants(eins_list, role='grantee', min_taxyear=filter_yr)
-    if not grants:
+    """Server-side aggregated grants for ``eins_list``.
+
+    One row per ``(grantee_ein, taxyear)`` with the same totals + funder
+    rollups the downstream pivot needs, so we never pay the wire cost of
+    moving raw grant rows the caller immediately groups away.
+    """
+    logger.info(f"Querying grant summaries for {len(eins_list)} EINs")
+    summaries = client.get_grant_summaries(eins_list, role='grantee', min_taxyear=filter_yr)
+    if not summaries:
         return pd.DataFrame(columns=[
-            'granter_ein', 'granter_name', 'grantee_ein', 'taxyear', 'grant_amount',
+            'grantee_ein', 'taxyear', 'total_grant_amount', 'grant_count',
+            'granter_eins', 'granter_names',
         ])
-    df = pd.DataFrame.from_records([asdict(g) for g in grants])
-    logger.info(f"Found {len(df)} grants for {len(eins_list)} EINs")
+    df = pd.DataFrame.from_records([asdict(s) for s in summaries])
+    df.rename(columns={'ein': 'grantee_ein'}, inplace=True)
+    logger.info(f"Found {len(df)} (EIN, year) grant summaries for {len(eins_list)} EINs")
     return df
 
 
 def filter_format_grants_data(
-    grants_data,
+    grant_summaries,
     avg_yearly_funding_min=0, # Require they received a grant in any year but don't require a minimum amount
 ):
+    """Pivot the per-(EIN, year) summaries into the wide ``grant_YYYY`` form.
+
+    ``grant_summaries`` already has one row per ``(grantee_ein, taxyear)``
+    with ``total_grant_amount`` summed server-side. The funder columns are
+    deduped per year on the server, so the final ``Funders`` / ``Funder_Names``
+    sets are just unions across years.
+    """
     logger.info(f"Filtering and formatting grants data")
-    grants_data = grants_data.copy()
-    avg_yearly_funding = grants_data.groupby(['grantee_ein', 'taxyear'])['grant_amount'].sum().groupby('grantee_ein').mean().reset_index()
+    grant_summaries = grant_summaries.copy()
 
-    filtered_eins = avg_yearly_funding[avg_yearly_funding['grant_amount'] >= avg_yearly_funding_min]['grantee_ein'].tolist()
-    filtered_grants_data = grants_data[grants_data['grantee_ein'].isin(filtered_eins)]
+    avg_yearly_funding = (
+        grant_summaries
+        .groupby('grantee_ein')['total_grant_amount']
+        .mean()
+        .reset_index()
+    )
+    filtered_eins = avg_yearly_funding[
+        avg_yearly_funding['total_grant_amount'] >= avg_yearly_funding_min
+    ]['grantee_ein'].tolist()
+    filtered = grant_summaries[grant_summaries['grantee_ein'].isin(filtered_eins)]
 
-    max_funding_year = filtered_grants_data.groupby('grantee_ein')['taxyear'].max().to_dict()
-    annual_funding = filtered_grants_data.groupby(['grantee_ein', 'taxyear'])['grant_amount'].sum().reset_index()
-    funding_df = annual_funding.pivot_table(
+    max_funding_year = filtered.groupby('grantee_ein')['taxyear'].max().to_dict()
+    funding_df = filtered.pivot_table(
         index='grantee_ein',
         columns='taxyear',
-        values='grant_amount',
+        values='total_grant_amount',
         aggfunc='first',
     )
     funding_df = funding_df.fillna(0)
@@ -141,8 +162,17 @@ def filter_format_grants_data(
     funding_df.reset_index(inplace=True)
     funding_df['last_grant_year'] = funding_df['grantee_ein'].map(max_funding_year)
 
-    funder_data = filtered_grants_data.groupby(['grantee_ein']).agg({"granter_ein": set, "granter_name": set}).reset_index()
-    funder_data.rename(columns={"granter_ein": "Funders", "granter_name": "Funder_Names"}, inplace=True)
+    # Union across years — server already deduped within each year.
+    funder_data = (
+        filtered
+        .groupby('grantee_ein')
+        .agg({
+            'granter_eins': lambda series: sorted({e for arr in series for e in (arr or [])}),
+            'granter_names': lambda series: sorted({n for arr in series for n in (arr or [])}),
+        })
+        .reset_index()
+        .rename(columns={'granter_eins': 'Funders', 'granter_names': 'Funder_Names'})
+    )
 
     funding_df = funding_df.merge(funder_data, left_on='grantee_ein', right_on='grantee_ein', how='left')
     logger.info(f"Merged funder data with funding data")
@@ -282,7 +312,7 @@ def query_process_givingtuesday_data(
 ):
     client = client or _make_default_client()
 
-    # Get us potential EINs that match the search results
+    # 1) FTS over nonprofit_text → candidate EIN universe.
     search_results = search_for_eins(
         client=client,
         search_terms_list=search_terms_list,
@@ -290,29 +320,49 @@ def query_process_givingtuesday_data(
         return_full_text=return_full_text,
         search_mode=search_mode,
     )
+    candidate_eins = search_results['filerein'].unique().tolist()
+    ein_to_full_text = dict(search_results[['filerein', 'full_text']].values)
 
-    grants_data = query_unioned_grants_for_eins(
+    # 2) Push the avg-contributions threshold into Postgres so we don't pull
+    #    multi-year basic_fields rows for EINs we'll discard. With the default
+    #    avg_yearly_contributions_min=300000 this typically prunes the EIN
+    #    universe ~5-10x. NOTE: this changes behavior vs. the prior LEFT-join
+    #    flow, where below-threshold EINs survived to output with NaN contribs
+    #    columns. They're now dropped — which appears to be the intent of the
+    #    threshold parameter.
+    if avg_yearly_contributions_min and avg_yearly_contributions_min > 0:
+        eligible_eins = client.find_eins_with_min_avg_contributions(
+            candidate_eins,
+            min_taxyear=filter_yr,
+            min_avg=avg_yearly_contributions_min,
+        )
+    else:
+        eligible_eins = candidate_eins
+
+    # 3) basic_fields for the (now smaller) eligible set.
+    all_data_long = query_basic_fields_db_for_eins(client, eligible_eins, filter_yr=filter_yr)
+
+    # 4) Server-side aggregated grants for the same eligible set.
+    grant_summaries_df = query_grant_summaries_for_eins(
         client,
-        search_results['filerein'].tolist(),
+        eligible_eins,
         filter_yr=filter_yr,
     )
     grants_funding_df = filter_format_grants_data(
-        grants_data,
-        avg_yearly_funding_min=avg_yearly_funding_grants_min
+        grant_summaries_df,
+        avg_yearly_funding_min=avg_yearly_funding_grants_min,
     )
 
+    # 5) require_one_grant narrows the basic_fields rows to EINs that had a
+    #    grant survive the avg_yearly_funding_grants_min filter above.
     if require_one_grant:
-        # Get the EINs that have grants and contributions over the minimums
-        eins_list = grants_funding_df['grantee_ein'].unique().tolist()
-    else:
-        eins_list = search_results['filerein'].unique().tolist()
-    ein_to_full_text = dict(search_results[['filerein', 'full_text']].values)
-    all_data_long = query_basic_fields_db_for_eins(client, eins_list, filter_yr=filter_yr)
+        kept = set(grants_funding_df['grantee_ein'].unique().tolist())
+        all_data_long = all_data_long[all_data_long['filerein'].isin(kept)]
 
     total_cash_contributions_df = filter_format_funding_data(
         all_data_long,
         column='total_cash_contributions',
-        avg_yearly_contributions_min=avg_yearly_contributions_min
+        avg_yearly_contributions_min=avg_yearly_contributions_min,
     )
 
     all_data_reformatted = reformat_basic_fields_data(
