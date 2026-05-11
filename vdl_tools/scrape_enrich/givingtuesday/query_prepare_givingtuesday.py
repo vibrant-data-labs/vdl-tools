@@ -1,9 +1,8 @@
 """Build the Giving Tuesday CB-shaped DataFrame for ed-tracker / similar pipelines.
 
-Cut over to gt_datamart via ``givingtuesday_datamart.client``: keyword search
-runs as Postgres FTS over ``public.nonprofit_text.text_tsv`` (replacing the
-S3 parquet + FlashText path), and the per-EIN basic-fields / grants reads go
-through the typed client surface.
+Keyword search runs as Postgres FTS over ``public.nonprofit_text.text_tsv``,
+and the per-EIN basic-fields / grants reads go through the typed
+``givingtuesday_datamart.client`` surface.
 """
 
 from dataclasses import asdict
@@ -82,7 +81,9 @@ def query_basic_fields_db_for_eins(
             'total_cash_contributions_no_gov',
         ])
     df = pd.DataFrame.from_records([asdict(r) for r in rows])
-    # Restore the old column names downstream pivot/reformat helpers expect.
+    # Downstream pivot/reformat helpers read the IRS 990 column names
+    # (``filerein``, ``filername1``, ``filerus1``, …) directly off the
+    # DataFrame, so map the client's clean field names onto those.
     df.rename(columns={
         'ein': 'filerein',
         'name': 'filername1',
@@ -326,10 +327,8 @@ def query_process_givingtuesday_data(
     # 2) Push the avg-contributions threshold into Postgres so we don't pull
     #    multi-year basic_fields rows for EINs we'll discard. With the default
     #    avg_yearly_contributions_min=300000 this typically prunes the EIN
-    #    universe ~5-10x. NOTE: this changes behavior vs. the prior LEFT-join
-    #    flow, where below-threshold EINs survived to output with NaN contribs
-    #    columns. They're now dropped — which appears to be the intent of the
-    #    threshold parameter.
+    #    universe ~5-10x. EINs whose avg falls below the threshold are
+    #    dropped from output entirely (not nulled out).
     if avg_yearly_contributions_min and avg_yearly_contributions_min > 0:
         eligible_eins = client.find_eins_with_min_avg_contributions(
             candidate_eins,
