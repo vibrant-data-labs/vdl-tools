@@ -30,7 +30,7 @@ from vdl_tools.scrape_enrich.netzero_insights.process_nzi.split_early_late_fundi
 from vdl_tools.shared_tools.funding_calcations import create_plot_get_metrics
 
 # Stages evaluated in the survival pipeline (maps to CB's seed → series_a → late_venture)
-NZI_SURVIVAL_STAGES = ["Seed", "Early VC", "Series B"]
+NZI_SURVIVAL_STAGES = ["Seed", "Series A", "Series B"]
 
 # Round types that count as being at "seed" level for cohort classification
 _SEED_LEVEL_TYPES = {"Accelerator/incubator", "Grant", "Pre-Seed", "Seed"}
