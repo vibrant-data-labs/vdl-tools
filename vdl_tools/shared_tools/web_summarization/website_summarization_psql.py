@@ -22,6 +22,7 @@ def summarize_scraped_df(
     scraped_df: pd.DataFrame,
     is_combined: bool = False,
     prompt_str: str = GENERIC_ORG_WEBSITE_PROMPT_TEXT,
+    prompt_name='generic_org_website',
     skip_existing: bool =True,
     n_per_commit: int = 50,
     max_workers: int = 5,
@@ -69,6 +70,7 @@ def summarize_scraped_df(
     with get_session() as session:
         cache = WebsiteSummarizationCache(session=session,
                                           prompt_str=prompt_str,
+                                          prompt_name=prompt_name,
                                           model=model)
         summaries = cache.bulk_get_cache_or_run(
             given_ids_texts,
