@@ -53,10 +53,9 @@ def _records_to_df(rows):
 def _pivot_year_col(long_df, ein_col, year_col, value_col, prefix):
     """Pivot ``(ein, year, value)`` long → wide ``{prefix}_{YYYY}`` + ``total_{prefix}``.
 
-    Uses ``aggfunc='sum'`` because ``basic_fields`` can have multiple rows
-    per ``(ein, taxyear)``; their values must be summed before pivoting,
-    matching the legacy semantic. For grant summaries (already one row per
-    EIN+year from the server-side aggregation) ``sum`` is a no-op.
+    Uses ``aggfunc='sum'`` so multiple rows per ``(ein, taxyear)`` collapse
+    into one cell rather than dropping all but one. Grant summaries already
+    arrive at one row per (ein, year) and pass through unchanged.
     """
     if long_df.empty:
         return pd.DataFrame(columns=[ein_col, f"total_{prefix}"])
@@ -88,13 +87,10 @@ def _assemble_cb_shape(hits, basic_long, grants_long, column_for_funding):
     """Merge the per-EIN identity row + pivoted year columns + synthetic fields."""
     logger.info("Assembling CB-shaped output")
 
-    # Identity frame: one row per EIN. Sort by taxyear DESC so dedup keeps
-    # the most recent return — deterministic, and makes the identity
-    # columns (Organization, Website_cb_cd, hq_address,
+    # Identity frame: one row per EIN, taken from its most recent filing
+    # year. The identity columns (Organization, Website_cb_cd, hq_address,
     # total_revenue_current_year, total_cash_contributions,
-    # total_cash_contributions_no_gov) reflect the latest filing. Legacy
-    # used keep='first' over un-ordered rows, picking whichever year
-    # Postgres happened to return first — non-deterministic between runs.
+    # total_cash_contributions_no_gov) come straight off this row.
     base = (
         basic_long.sort_values(["ein", "taxyear"], ascending=[True, False])
         .drop_duplicates(subset=["ein"], keep="first")
@@ -118,7 +114,7 @@ def _assemble_cb_shape(hits, basic_long, grants_long, column_for_funding):
             .reset_index()
         )
         grants_wide = grants_wide.merge(max_yr, on="ein", how="left")
-        # Union funder sets across years; server already deduped within each year.
+        # Union funder sets across years (each year already arrives deduped).
         funders = (
             grants_long.groupby("ein")
             .agg({
@@ -133,7 +129,7 @@ def _assemble_cb_shape(hits, basic_long, grants_long, column_for_funding):
     df = base.merge(contrib_wide, on="ein", how="left")
     df = df.merge(grants_wide, on="ein", how="left")
 
-    # Description comes from the FTS hit's text, not basic_fields.
+    # Description is the FTS hit text (not anything on basic_fields).
     description_by_ein = {h.ein: (h.unique_text or "") for h in hits}
     df["Description"] = df["ein"].map(description_by_ein)
 
@@ -168,9 +164,11 @@ def _assemble_cb_shape(hits, basic_long, grants_long, column_for_funding):
         inplace=True,
     )
 
-    # Mirror each ``{column_for_funding}_YYYY`` to ``Funding_YYYY`` (the CB
-    # consumer reads off the Funding_* family). Total_Funding_$ is the row
-    # sum; Last_Funding_Year is the max year present (broadcast scalar).
+    # Mirror each ``{column_for_funding}_YYYY`` to a ``Funding_YYYY``
+    # column — the CB-shaped consumer reads off the ``Funding_*`` family.
+    # ``Total_Funding_$`` is the row sum across those columns;
+    # ``Last_Funding_Year`` is the max year present (same scalar broadcast
+    # to every row).
     funding_year_cols = [
         c
         for c in df.columns
