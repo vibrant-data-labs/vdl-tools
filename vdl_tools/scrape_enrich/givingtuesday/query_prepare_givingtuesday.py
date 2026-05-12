@@ -204,17 +204,66 @@ def query_process_givingtuesday_data(
 ):
     """Return the Crunchbase-shaped DataFrame of grantee orgs matching ``search_terms``.
 
-    Eligibility (all server-side; see ``GtDatamartClient.search_nonprofits``):
-      - keyword match against ``nonprofit_text`` (FTS)
-      - avg yearly ``totacashcont`` since ``filter_yr`` ≥ ``min_avg_contributions``
-      - avg yearly grants received since ``filter_yr`` ≥ ``min_avg_grants``
-      - at least ``min_num_grants`` grants received since ``filter_yr``
+    Pipeline:
 
-    Pass ``None`` to disable any of the eligibility thresholds.
+    1. Postgres FTS over ``nonprofit_text`` for the supplied keywords,
+       intersected server-side with the eligibility filters below.
+    2. Bulk fetch of ``basic_fields`` and aggregated grant summaries for
+       the eligible EIN set.
+    3. Pivot per-year facts to wide columns and assemble the CB-shaped
+       output frame.
 
-    Output is the wide CB-shaped frame: identity columns + per-year
-    ``total_cash_contributions_YYYY`` / ``grant_YYYY`` / ``Funding_YYYY`` +
-    rollup totals + the standard static label columns.
+    Arguments:
+
+    * ``search_terms_list`` / ``search_terms_path`` — supply exactly one.
+      ``search_terms_path`` is a CSV with a single ``term`` column.
+    * ``search_mode`` — FTS matching strategy:
+        - ``"exact"`` (default): no stemming, multi-word inputs match as
+          a literal phrase. ``"needs based"`` only matches the contiguous
+          phrase. Best for precise term lookups.
+        - ``"stemmed"``: snowball stems and stopword-strips, tokens
+          AND-ed anywhere in the doc. ``"tutoring"`` matches ``tutor``,
+          ``tutored``, ``tutors``. Best for relevance-ranked discovery.
+    * ``filter_yr`` — lower bound (inclusive) on taxyear for both the
+      eligibility aggregations *and* the per-year facts pulled into the
+      output. Years before this are ignored.
+    * ``min_avg_contributions`` — keep only EINs whose mean yearly
+      ``totacashcont`` since ``filter_yr`` is at least this. Computed
+      as sum per (ein, taxyear) first, then mean across years; rows
+      with NULL/blank ``totacashcont`` are skipped (don't count as $0).
+    * ``min_avg_grants`` — same per-year-sum-then-mean shape over
+      grants received from ``unioned_grants``. NULL grant amounts
+      coalesce to $0 within their year so the EIN isn't silently dropped.
+    * ``min_num_grants`` — total grant-row count across the
+      ``filter_yr`` window must be at least this many. ``1`` filters
+      to "received at least one grant".
+    * Pass ``None`` to disable any of the three eligibility thresholds.
+    * ``column_for_funding`` — which ``basic_fields`` column gets
+      mirrored into the ``Funding_YYYY`` family on the output.
+      Defaults to ``total_cash_contributions``.
+    * ``return_full_text`` — when ``True``, populates the ``Description``
+      column from the org's deduped 990 text; ``False`` leaves it blank.
+    * ``proceessed_output_path`` — optional URI to write the result
+      parquet to (S3 supported). Returns the DataFrame either way.
+    * ``client`` — supply a pre-built ``GtDatamartClient`` to override
+      the default (built from vdl-tools postgres config).
+
+    Output columns (one row per eligible EIN):
+
+    * Identity: ``ein`` (``NN-NNNNNNN``), ``id`` (``givingtuesday_<ein>``),
+      ``Organization``, ``Website_cb_cd``, ``Description``, ``hq_address``.
+    * Latest-filing scalars: ``total_revenue_current_year``,
+      ``total_cash_contributions``, ``total_cash_contributions_no_gov``.
+    * Contributions per year: ``total_cash_contributions_YYYY`` (one
+      column per filing year present), ``total_total_cash_contributions``.
+    * Grants per year: ``grant_YYYY``, ``total_grants_amount``,
+      ``last_grant_year``, ``Funders``, ``Funder_Names``.
+    * CB-shaped funding aliases: ``Funding_YYYY`` (mirror of the
+      ``column_for_funding`` per-year columns), ``Total_Funding_$``,
+      ``Last_Funding_Year``.
+    * Static labels: ``Last_Funding_Type='Grant'``,
+      ``Funding Stage='Philanthropy'``, ``Philanthropy_vs_Venture='Philanthropy'``,
+      ``Data Source='Giving Tuesday'``, ``Org Type='Non Profit'``.
     """
     client = client or _make_default_client()
     keywords = _load_keywords(search_terms_list, search_terms_path)
