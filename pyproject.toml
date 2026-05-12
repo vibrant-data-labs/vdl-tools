@@ -93,6 +93,9 @@ docs = [
     "mkdocs-material>=9.0.0",
 ]
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.hatch.version]
 path = "vdl_tools/__init__.py"
 
