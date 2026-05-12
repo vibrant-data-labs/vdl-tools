@@ -4,6 +4,7 @@ from vdl_tools.scrape_enrich.netzero_insights.process_nzi.split_early_late_fundi
     SPLIT_AFTER_LAST_EARLY_ROUND,
     SPLIT_ON_FIRST_LATE_ROUND,
     divide_funding_rows,
+    divided_funding_rows_and_flatten,
 )
 
 
@@ -1059,3 +1060,145 @@ def test_no_boundary_rounds_defaults_to_early_with_split_after_last():
     assert middle is None
     assert late is None
     assert exit_rows is None
+
+
+# ── Flatten output: equity / non-equity split per stage ──────────────────
+
+
+def _row(client_id, date, round_type, financing_type, amount):
+    return {
+        "client_id_nzi": client_id,
+        "round_date_nzi": pd.Timestamp(date),
+        "round_type_nzi": round_type,
+        "financing_type_nzi": financing_type,
+        "round_amount_usd_nzi": amount,
+    }
+
+
+def test_flatten_equity_nonequity_split_per_stage():
+    # Company A: pre-B journey with grants/debt mixed in across stages.
+    # Company B: starts at Series A directly (no up_to_a; tests None vs 0.0).
+    rounds = pd.DataFrame([
+        # ── Company A ──
+        _row("A", "2018-01-01", "Pre-Seed", "Equity", 1_000_000),  # up_to_a equity
+        _row("A", "2018-06-01", "Grant",    "Grant",    250_000),  # up_to_a non-equity
+        _row("A", "2019-01-01", "Series A", "Equity", 5_000_000),  # a_to_b equity
+        _row("A", "2019-06-01", "Series A", "Equity", 2_000_000),  # a_to_b equity (secondary A)
+        _row("A", "2019-09-01", "Debt",     "Debt",     500_000),  # a_to_b non-equity
+        _row("A", "2020-01-01", "Series B", "Equity", 10_000_000), # middle equity (no non-equity)
+        # ── Company B ──
+        _row("B", "2021-01-01", "Series A", "Equity", 3_000_000),  # a_to_b equity only
+    ])
+
+    out = divided_funding_rows_and_flatten(rounds, id_col="client_id_nzi")
+    out_a = out[out["client_id_nzi"] == "A"].iloc[0]
+    out_b = out[out["client_id_nzi"] == "B"].iloc[0]
+
+    # Company A: up_to_a — Pre-Seed (equity) + Grant (non-equity)
+    assert out_a["up_to_a_equity_raised"] == 1_000_000
+    assert out_a["up_to_a_nonequity_raised"] == 250_000
+    assert out_a["up_to_a_n_rounds_nonequity"] == 1
+    assert out_a["up_to_a_nonequity_types"] == ["Grant"]
+    assert (
+        out_a["up_to_a_equity_raised"] + out_a["up_to_a_nonequity_raised"]
+        == out_a["up_to_a_amount_raised"]
+    )
+
+    # Company A: a_to_b — two Series A (equity, summed) + Debt (non-equity)
+    assert out_a["a_to_b_equity_raised"] == 7_000_000
+    assert out_a["a_to_b_nonequity_raised"] == 500_000
+    assert out_a["a_to_b_n_rounds_nonequity"] == 1
+    assert out_a["a_to_b_nonequity_types"] == ["Debt"]
+    assert (
+        out_a["a_to_b_equity_raised"] + out_a["a_to_b_nonequity_raised"]
+        == out_a["a_to_b_amount_raised"]
+    )
+
+    # Company A: middle — only Series B equity, no non-equity rounds.
+    assert out_a["middle_equity_raised"] == 10_000_000
+    assert out_a["middle_nonequity_raised"] == 0.0
+    assert out_a["middle_n_rounds_nonequity"] == 0
+    assert out_a["middle_nonequity_types"] == []
+
+    # Company B: no up_to_a bucket. Numeric columns become NaN through the
+    # DataFrame conversion (matches existing pattern for `amount_raised`);
+    # the list column stays as None.
+    assert pd.isna(out_b["up_to_a_equity_raised"])
+    assert pd.isna(out_b["up_to_a_nonequity_raised"])
+    assert pd.isna(out_b["up_to_a_n_rounds_nonequity"])
+    assert pd.isna(out_b["up_to_a_amount_raised"])  # sanity: same convention
+    assert out_b["up_to_a_nonequity_types"] is None
+
+    # Company B: a_to_b has only the Series A equity round.
+    assert out_b["a_to_b_equity_raised"] == 3_000_000
+    assert out_b["a_to_b_nonequity_raised"] == 0.0
+    assert out_b["a_to_b_n_rounds_nonequity"] == 0
+    assert out_b["a_to_b_nonequity_types"] == []
+
+    # late / exit buckets do NOT get the equity-split columns.
+    for absent in ("late_equity_raised", "exit_equity_raised",
+                   "late_nonequity_raised", "exit_nonequity_raised",
+                   "late_nonequity_types", "exit_nonequity_types"):
+        assert absent not in out.columns
+
+
+def test_flatten_per_stage_investor_lists():
+    # One company with two rounds in `up_to_a` (investors overlap across
+    # them — dedupe should kick in), one round in `a_to_b`, none in `middle`.
+    rounds = pd.DataFrame([
+        {
+            "client_id_nzi": "A",
+            "round_date_nzi": pd.Timestamp("2018-01-01"),
+            "round_type_nzi": "Pre-Seed",
+            "financing_type_nzi": "Equity",
+            "round_amount_usd_nzi": 500_000,
+            "round_investor_ids_nzi": [1, 2],
+        },
+        {
+            "client_id_nzi": "A",
+            "round_date_nzi": pd.Timestamp("2018-06-01"),
+            "round_type_nzi": "Seed",
+            "financing_type_nzi": "Equity",
+            "round_amount_usd_nzi": 1_000_000,
+            "round_investor_ids_nzi": [2, 3],  # 2 already seen
+        },
+        {
+            "client_id_nzi": "A",
+            "round_date_nzi": pd.Timestamp("2019-01-01"),
+            "round_type_nzi": "Series A",
+            "financing_type_nzi": "Equity",
+            "round_amount_usd_nzi": 4_000_000,
+            "round_investor_ids_nzi": [4, 99],  # 99 missing from investor df
+        },
+    ])
+    investors = pd.DataFrame([
+        {"investor_id_nzi": 1, "name_nzi": "Acme VC",       "primary_type_nzi": "Venture Capital"},
+        {"investor_id_nzi": 2, "name_nzi": "Green Fund",    "primary_type_nzi": "Foundation"},
+        {"investor_id_nzi": 3, "name_nzi": "Gov Grant Co.", "primary_type_nzi": "Government"},
+        {"investor_id_nzi": 4, "name_nzi": "Mega Capital",  "primary_type_nzi": "Venture Capital"},
+    ])
+
+    out = divided_funding_rows_and_flatten(
+        rounds, id_col="client_id_nzi", processed_investor_df=investors,
+    )
+    row = out[out["client_id_nzi"] == "A"].iloc[0]
+
+    # up_to_a: investors 1, 2, 3 (2 deduped), first-seen order preserved.
+    assert row["up_to_a_investors"] == [
+        {"id": 1, "name": "Acme VC",       "primary_type": "Venture Capital"},
+        {"id": 2, "name": "Green Fund",    "primary_type": "Foundation"},
+        {"id": 3, "name": "Gov Grant Co.", "primary_type": "Government"},
+    ]
+
+    # a_to_b: investor 4 plus the unknown id 99 (name/type None, not dropped).
+    assert row["a_to_b_investors"] == [
+        {"id": 4,  "name": "Mega Capital", "primary_type": "Venture Capital"},
+        {"id": 99, "name": None,           "primary_type": None},
+    ]
+
+    # No middle bucket → list column stays None.
+    assert row["middle_investors"] is None
+
+    # Without the investor df, the column should be absent entirely.
+    out_no_inv = divided_funding_rows_and_flatten(rounds, id_col="client_id_nzi")
+    assert "up_to_a_investors" not in out_no_inv.columns

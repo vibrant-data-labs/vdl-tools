@@ -45,13 +45,9 @@ from vdl_tools.scrape_enrich.netzero_insights.process_nzi.split_early_late_fundi
 #       → raising Series B means they succeeded past early stage
 
 STAGE_FAILURE_MAP = {
-    "Grant": {
-        "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed", "Seed"],
-        "graduation_stages": ["Series A", "Early VC"],
-    },
     "Pre-Seed": {
-        "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed", "Seed"],
-        "graduation_stages": ["Series A", "Early VC"],
+        "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed"],
+        "graduation_stages": ["Seed", "Series A", "Early VC"],
     },
     "Seed": {
         "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed", "Seed"],

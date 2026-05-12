@@ -244,10 +244,68 @@ def divide_funding_rows(
 # `middle` (so callers can study Series-B-stage investors as well).
 INVESTOR_COUNT_BUCKETS = {"up_to_a", "a_to_b", "middle"}
 
+# Buckets that get equity / non-equity split columns. Same pre-B focus as
+# INVESTOR_COUNT_BUCKETS — late and exit are excluded.
+EQUITY_SPLIT_BUCKETS = {"up_to_a", "a_to_b", "middle"}
+
+# Buckets that get a per-stage `{stage}_investors` list-of-dicts column.
+INVESTOR_LIST_BUCKETS = {"up_to_a", "a_to_b", "middle"}
+
+
+def _build_investor_lookup(processed_investor_df):
+    """Build {investor_id: {"id", "name", "primary_type"}} from the investor df.
+
+    Returns None if ``processed_investor_df`` is None, signalling that
+    per-stage investor lists should be skipped. Rows with a missing
+    ``investor_id_nzi`` are dropped from the lookup.
+    """
+    if processed_investor_df is None:
+        return None
+    lookup = {}
+    for _, row in processed_investor_df.iterrows():
+        inv_id = row.get("investor_id_nzi")
+        if pd.isna(inv_id):
+            continue
+        lookup[inv_id] = {
+            "id": inv_id,
+            "name": row.get("name_nzi"),
+            "primary_type": row.get("primary_type_nzi"),
+        }
+    return lookup
+
+
+def _bucket_investors(round_group_rounds, investor_lookup):
+    """Return a deduped list of investor dicts for one stage bucket.
+
+    Flattens ``round_investor_ids_nzi`` across all rounds in the bucket,
+    preserves first-seen order, and attaches name + primary_type from
+    ``investor_lookup``. Investor ids not present in the lookup still
+    show up as ``{"id": ..., "name": None, "primary_type": None}`` so no
+    data is silently dropped.
+    """
+    seen = set()
+    investors = []
+    if "round_investor_ids_nzi" not in round_group_rounds.columns:
+        return investors
+    for ids in round_group_rounds["round_investor_ids_nzi"]:
+        if not isinstance(ids, (list, tuple)):
+            continue
+        for inv_id in ids:
+            if pd.isna(inv_id) or inv_id in seen:
+                continue
+            seen.add(inv_id)
+            meta = investor_lookup.get(inv_id)
+            if meta is None:
+                investors.append({"id": inv_id, "name": None, "primary_type": None})
+            else:
+                investors.append(meta)
+    return investors
+
 
 def divided_funding_rows_and_flatten(
     processed_funding_rounds,
-    id_col="client_id_nzi"
+    id_col="client_id_nzi",
+    processed_investor_df=None,
 ):
     """Divide every company's funding rounds into stage buckets and flatten.
 
@@ -265,6 +323,13 @@ def divided_funding_rows_and_flatten(
     id_col : str, optional
         Column name used to group rows by company. Defaults to
         ``"client_id_nzi"``.
+    processed_investor_df : pandas.DataFrame, optional
+        Investor metadata (output of ``process_nzi_investors``) with
+        ``investor_id_nzi``, ``name_nzi``, and ``primary_type_nzi``. When
+        provided, each bucket in ``INVESTOR_LIST_BUCKETS`` gets a
+        ``{stage}_investors`` column containing a deduped list of
+        ``{"id", "name", "primary_type"}`` dicts. When ``None`` (default),
+        the column is omitted.
 
     Returns
     -------
@@ -273,7 +338,19 @@ def divided_funding_rows_and_flatten(
         ``up_to_a_first_round_date``, ``a_to_b_amount_raised``,
         ``middle_num_rounds``, ``exit_last_round_date``). Buckets in
         ``INVESTOR_COUNT_BUCKETS`` also get
-        ``*_has_<type>_investor_calced_nzi_count`` columns.
+        ``*_has_<type>_investor_calced_nzi_count`` columns. Buckets in
+        ``EQUITY_SPLIT_BUCKETS`` additionally get
+        ``*_equity_raised`` (sum of ``Equity`` financing-type rounds),
+        ``*_nonequity_raised`` (sum of all other rounds — grants, debt,
+        convertibles, etc.), ``*_n_rounds_nonequity`` (count of
+        non-equity rounds in the bucket), and ``*_nonequity_types``
+        (sorted list of unique ``round_type_nzi`` values among
+        non-equity rounds). When the bucket exists,
+        ``equity_raised + nonequity_raised == amount_raised``. When
+        ``processed_investor_df`` is provided, buckets in
+        ``INVESTOR_LIST_BUCKETS`` also get ``*_investors`` — a deduped
+        list of ``{"id", "name", "primary_type"}`` dicts covering every
+        investor across the bucket's rounds.
     """
     divided_rounds = processed_funding_rounds.groupby(id_col).apply(
         divide_funding_rows,
@@ -284,6 +361,9 @@ def divided_funding_rows_and_flatten(
         x for x in processed_funding_rounds.columns
         if x.startswith('has_') and x.endswith('_investor_calced_nzi')
     ]
+
+    investor_lookup = _build_investor_lookup(processed_investor_df)
+    include_investor_lists = investor_lookup is not None
 
     all_rows = []
     for company_id, company_divided_rounds in divided_rounds.items():
@@ -301,6 +381,14 @@ def divided_funding_rows_and_flatten(
             # Investor counts only for the two pre-B buckets.
             if round_name in INVESTOR_COUNT_BUCKETS:
                 round_group_dict.update({f"{col}_count": None for col in investor_type_columns})
+            # Equity / non-equity split only for pre-B buckets.
+            if round_name in EQUITY_SPLIT_BUCKETS:
+                round_group_dict["equity_raised"] = None
+                round_group_dict["nonequity_raised"] = None
+                round_group_dict["n_rounds_nonequity"] = None
+                round_group_dict["nonequity_types"] = None
+            if include_investor_lists and round_name in INVESTOR_LIST_BUCKETS:
+                round_group_dict["investors"] = None
 
             if round_group_rounds is None:
                 company_round_groups_parsed.append(round_group_dict)
@@ -312,6 +400,20 @@ def divided_funding_rows_and_flatten(
             if round_name in INVESTOR_COUNT_BUCKETS:
                 for investor_type_col in investor_type_columns:
                     round_group_dict[f"{investor_type_col}_count"] = round_group_rounds[investor_type_col].sum()
+            if round_name in EQUITY_SPLIT_BUCKETS:
+                is_equity = round_group_rounds['financing_type_nzi'] == "Equity"
+                equity_rows = round_group_rounds[is_equity]
+                nonequity_rows = round_group_rounds[~is_equity]
+                round_group_dict["equity_raised"] = float(equity_rows['round_amount_usd_nzi'].sum())
+                round_group_dict["nonequity_raised"] = float(nonequity_rows['round_amount_usd_nzi'].sum())
+                round_group_dict["n_rounds_nonequity"] = int(len(nonequity_rows))
+                round_group_dict["nonequity_types"] = sorted(
+                    nonequity_rows['round_type_nzi'].dropna().unique().tolist()
+                )
+            if include_investor_lists and round_name in INVESTOR_LIST_BUCKETS:
+                round_group_dict["investors"] = _bucket_investors(
+                    round_group_rounds, investor_lookup
+                )
             round_group_dict["all_funding_activity"] = round_group_rounds
             company_round_groups_parsed.append(round_group_dict)
 
