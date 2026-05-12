@@ -20,6 +20,7 @@ dependencies = [
     "geopy",
     "geotext",
     "GitPython",
+    "givingtuesday-datamart @ git+https://github.com/vibrant-data-labs/givingtuesday-datamart.git",
     "google-api-python-client>=2.100.0",
     "google-cloud-translate>=3.11.0",
     "google-auth-oauthlib>=1.0.0",
@@ -91,6 +92,9 @@ docs = [
     "mkdocs>=1.5.0",
     "mkdocs-material>=9.0.0",
 ]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.version]
 path = "vdl_tools/__init__.py"
