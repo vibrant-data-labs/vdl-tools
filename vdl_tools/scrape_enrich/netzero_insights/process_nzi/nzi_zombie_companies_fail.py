@@ -28,6 +28,7 @@ from vdl_tools.scrape_enrich.netzero_insights.process_nzi.split_early_late_fundi
     M_AND_A_SUCCESS_STAGE,
     TWO_YEARS_IN_DAYS,
     raised_equity_round,
+    EXIT_TYPES
 )
 
 
@@ -64,6 +65,10 @@ STAGE_FAILURE_MAP = {
     "Series B": {
         "at_stage_round_types": ["Series B", "Late VC"],
         "graduation_stages": ["Series C"],
+    },
+    "Series B_Exit": {
+        "at_stage_round_types": ["Series B", "Late VC"],
+        "graduation_stages": list(EXIT_TYPES),
     },
 }
 
