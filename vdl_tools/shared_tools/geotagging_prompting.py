@@ -12,7 +12,9 @@ from vdl_tools.shared_tools.tools.logger import logger
 
 def parse_results_to_dict(response):
     try:
-        cleaned_text = response['response_text'].strip("```json").strip("```").strip()
+        cleaned_text = response['response_text'].strip()
+        cleaned_text = cleaned_text.removeprefix('```json').removeprefix('```')
+        cleaned_text = cleaned_text.removesuffix('```').strip()
         # sometimes json is malformed with a trailing comma
         cleaned_text = cleaned_text.replace('"country": null,\n', '"country": null\n')
         response_locations = json.loads(cleaned_text)
