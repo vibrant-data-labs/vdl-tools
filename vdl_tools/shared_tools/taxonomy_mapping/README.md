@@ -1,0 +1,476 @@
+# Hierarchical taxonomy mapping — shared tools
+
+LLM-driven classifier and judge for mapping entities (organizations,
+projects, abstracts, …) onto an arbitrary hierarchical taxonomy.
+Used across at least four projects (One Earth, OE Levers of Change,
+Drawdown, hopper_dean) and designed to scale to a fifth taxonomy
+with a small per-project driver.
+
+This README covers:
+
+1. [What's in this folder](#components)
+2. [Project folder conventions](#project-folder-conventions)
+3. [The end-to-end iteration workflow](#iteration-workflow)
+4. [Lessons learned about prompt iteration](#lessons-learned)
+5. [Adding a new taxonomy](#adding-a-new-taxonomy)
+
+---
+
+## Components
+
+```
+vdl_tools/shared_tools/taxonomy_mapping/
+├── hierarchical_taxonomy_mapping.py     # classifier engine
+├── hierarchical_taxonomy_judge.py       # judge engine
+├── analyze_judge_results.py             # judge-results analyzer (Tier 1)
+├── oe_hierarchical_taxonomy_mapping.py  # OE-specific classifier wiring
+└── …                                    # other domain-agnostic helpers
+```
+
+**`hierarchical_taxonomy_mapping.py`** — domain-agnostic classifier
+engine. Walks any N-level taxonomy top-down per entity, prompting an
+LLM with candidate nodes at each level. Project drivers supply a
+level spec, domain intro, and modes; the engine handles
+classification, parallelism, and per-row / collapsed output writing.
+
+**`hierarchical_taxonomy_judge.py`** — domain-agnostic LLM-as-judge
+engine. Reads any per-row classification, scores each match
+(good / weak / bad with a one-sentence reason), produces a top-level
+alignment verdict per entity, writes standardized outputs (scored,
+verdicts, summary, per-entity, markdown report). Configured by a
+`JudgeConfig` dataclass that captures the variable parts (level
+spec, taxonomy intro, entity column conventions, etc.).
+
+**`analyze_judge_results.py`** — judge-output analyzer. Reads a
+scored xlsx (+ companion verdicts + per-row files when present)
+and produces a markdown report covering Pillar × Level errors, per
+Sub-Pillar breakdowns, top bad/weak nodes by level, failure-reason
+clustering, alignment verdicts, and NoMatch entity samples. The
+**cheap inner-iteration tool** — runs in milliseconds against
+already-judged data, no API spend.
+
+## Per-project drivers (live in each project, not here)
+
+Each project has a thin driver per role (classifier driver, judge
+driver). All drivers import from the engines above and supply only
+the project-specific config:
+
+| Project | Classifier driver | Judge driver |
+|---|---|---|
+| One Earth (CFT orgs) | `oneearth/scripts/run_oe_hierarchical_mapping.py` | `oneearth/scripts/evaluate_mapping_quality.py` |
+| OE Levers of Change | `oneearth/scripts/run_oe_loc_mapping.py` | `oneearth/scripts/evaluate_loc_mapping_quality.py` |
+| Drawdown (CFT orgs) | `drawdown/taxonomy/run_drawdown_hierarchical_mapping.py` | `drawdown/taxonomy/evaluate_drawdown_mapping_quality.py` |
+| hopper_dean (research grants) | `hopper_dean/query/project_taxonomy_mapping.py` | `hopper_dean/query/evaluate_oe_mapping_quality.py` |
+
+A driver is typically 100–200 lines: a `JudgeConfig` (for the
+judge) or level spec + system prompt parts (for the classifier),
+default paths, and an argparse `main()` that dispatches to the
+shared engine.
+
+---
+
+## Project folder conventions
+
+Each consuming project is its own git repo. The shared convention
+for what's tracked vs gitignored:
+
+| Folder | Tracked? | Contains |
+|---|---|---|
+| `taxonomy_mapping/` (or `taxonomy/`, `query/` — the production code dir) | ✓ committed | Production drivers, libraries, judges. The folder name varies by project (`oneearth/taxonomy_mapping/`, `drawdown/taxonomy/`, `hopper_dean/query/`) but the role is the same. |
+| `data/taxonomy/` (or `local/`) | ✓ committed | Small project-local taxonomy input xlsx. |
+| `data/reports/` | ✓ committed | Human-readable reports (markdown + HTML): analysis reports, judge-quality reports, full-pool summary reports. These ARE the artifacts you share with collaborators. |
+| `local_data/results/` | ✗ gitignored | Regenerable classifier and judge outputs (xlsx, csv). Large and reproducible from the prompt + taxonomy + sample seed, so we don't version them. |
+| `scripts/` | ✗ gitignored | Ad-hoc experiment scripts. Convention: anything in `scripts/` is throwaway / personal. Promote to the production folder when it stabilizes. |
+| `.env` / `config.ini` | ✗ gitignored | Secrets. |
+
+The split rationale: `data/` is for **inputs and curated outputs**;
+`local_data/` is for **regenerable bulk artifacts**. The semantic
+distinction "data the project depends on" vs "data the project
+produced" maps cleanly to "track in git" vs "don't".
+
+Genuinely cross-project resources (e.g., the OE main taxonomy that
+several projects use) live in a separate `shared-data/taxonomies/…`
+location, outside any project's repo.
+
+A standard `.gitignore` for any of these projects looks like:
+
+```gitignore
+# Folder conventions: data/ committed, local_data/ + scripts/ ignored
+local_data/
+scripts/
+
+# Secrets
+.env
+config.ini
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+*.egg-info/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Office app lock files
+~$*
+```
+
+---
+
+## Iteration workflow
+
+The work of refining a classifier or taxonomy follows a tight loop.
+Each pass is intentionally cheap so you can iterate often.
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                  Inner loop (≈ 5 minutes)                    │
+│                                                              │
+│  1. classify 200 sample  ──▶ 2. judge sample                 │
+│         (1 min)                  (1.5 min)                   │
+│                                       │                      │
+│                                       ▼                      │
+│  4. apply taxonomy / prompt    ◀──  3. analyze: find         │
+│     edit (dated successor or          where errors are       │
+│     prompt clause)                    concentrated           │
+│                                       (instant — analyzer)   │
+│                                                              │
+│  ─── re-run from 1 with the candidate, compare ───           │
+└──────────────────────────────────────────────────────────────┘
+                       │
+                       ▼  (when judge-only signal saturates)
+┌──────────────────────────────────────────────────────────────┐
+│                  Outer loop (≈ 30–60 minutes)                │
+│                                                              │
+│  5. classify full pool  ──▶ 6. find zero/low-match nodes,    │
+│     (20–45 min)              NoMatch patterns at scale,      │
+│                              targeted entity recheck         │
+│                                                              │
+│  ─── back to inner loop with new hypotheses ───              │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### Inner loop in detail
+
+**Step 1 — Classify 200 sample**:
+```bash
+python <project>/run_<x>_hierarchical_mapping.py --limit 200 --seed 42 --workers 32
+```
+Writes `*_sample200_seed42.xlsx` (per-row) and `*_collapsed.xlsx`.
+~1 min at `gpt-5.4-nano`.
+
+**Step 2 — Judge the sample**:
+```bash
+python <project>/evaluate_<x>_mapping_quality.py
+```
+Writes `*_quality_scored.xlsx` (per-match scores), `*_quality_pillar_verdicts.xlsx`
+(or `_sector_`), `*_quality_summary.xlsx`, `*_quality_per_entity.xlsx`, and
+`*_quality_report.md`. ~1.5 min at `gpt-4.1`.
+
+**Step 3 — Analyze where errors are concentrated**:
+```bash
+python vdl_tools/shared_tools/taxonomy_mapping/analyze_judge_results.py \
+    --scored <project>/.../sample200_seed42_quality_scored.xlsx \
+    --html
+```
+Writes `*_quality_analysis.{md,html}` with seven sections:
+
+1. **Top × Level error breakdown** — for each Pillar/Sector × each
+   level (Pillar / Sub-Pillar / Solution / Sub-Term), good/weak/bad
+   counts and mean score. Surfaces which pillar's leaves are weakest.
+2. **Per Sub-Pillar / SectorCluster breakdown** — sorted by mean
+   score. Quickly identifies the worst-performing buckets.
+3. **Top bad-firing nodes by level** — which specific Solutions /
+   Sub-Terms / etc. were scored "bad" most often, plus up to 3
+   sample reasons each. Where the next prompt-edit hypotheses
+   typically come from.
+4. **Top weak-firing nodes by level** — same shape for "weak".
+   Often where the most-bounded gains live.
+5. **Failure-reason clustering** — bucketing of the judge's bad-
+   match reasons by canonical complaint shape (`no_mention`,
+   `qualifier_mismatch`, `uses_not_provides`, etc.). Surfaces the
+   dominant failure modes.
+6. **Pillar / Sector alignment verdicts** — entity-level
+   correctness rate plus samples of wrong / mixed / `no_X_expected`.
+7. **NoMatch entities in the sample** — with description previews.
+
+The analyzer takes a few hundred ms to run; it's cheap to re-run
+after any prompt or taxonomy edit.
+
+**Step 4 — Apply edit, re-run**: change the prompt (in a project's
+classifier driver) or the taxonomy (save as a dated-successor xlsx
+in shared-data/taxonomies — see [lessons learned](#lessons-learned)).
+Re-run from step 1. The analyzer's deltas between iterations will
+show whether the change moved the right metrics.
+
+### Outer loop — when to step out
+
+The inner loop is enough when the judge surfaces actionable
+patterns. Step out to the full-pool classification when:
+
+- The 200-sample is too small to reveal a category (e.g., 1 zero-
+  match Solution doesn't reach the sample at all)
+- You suspect a Sub-Pillar redistribution effect that needs whole-
+  pool data to see
+- You want to verify a gap closure landed at scale (e.g., the 21
+  alt-protein orgs after Sustainable Rangelands definition revision)
+
+Full-pool classification:
+```bash
+python <project>/run_<x>_hierarchical_mapping.py --limit all --workers 64
+```
+20–45 min at the cheap classifier model. Don't judge the full pool
+— that's expensive and rarely yields insight beyond what the 200-
+sample judge already shows.
+
+### Comparing iterations
+
+After classifying + judging a candidate version, compare it to the
+prior baseline:
+
+1. Run the analyzer on both scored files
+2. Diff the two `_quality_analysis.md` reports manually (or use a
+   future `compare_judge_results.py`)
+
+Quick at-a-glance comparison from the headline numbers in each
+report's Provenance section:
+
+> Headline: **1554 matches scored** across **189 entities** →
+> 64.6% good, 23.9% weak, 11.5% bad, mean = **0.766**
+
+Movement on `good`, `weak`, and `bad` percentages is your top-line
+score. Movement on the Pillar × Level table tells you *where* the
+change took effect. Section 3 (top bad-firing nodes) lets you check
+whether the failure patterns you targeted actually decreased.
+
+### Promotion / revert
+
+After a candidate proves better:
+1. **Promote**: rename the candidate's per-row + collapsed files to
+   the canonical paths (overwriting the prior canonical), update any
+   downstream reports that cite numbers from the sample.
+2. **Revert**: undo the prompt / taxonomy edit, delete the
+   candidate's outputs.
+
+Keep prior canonical files for at least one iteration in case you
+need to compare; clean up older `_v<N>_*.xlsx` files periodically.
+
+---
+
+## Lessons learned
+
+These are non-obvious patterns that have repeatedly shown up in
+real iteration work. Reading them once will save you wrong turns.
+
+### 1. Use dated-successor taxonomy files, not in-place edits
+
+When editing taxonomy definitions (Pillar / Sub-Pillar / Solution
+definitions in the xlsx), save as a new dated file:
+
+```
+OE Solutions Terms 20250502_expanded_VDL.xlsx   (prior canonical)
+OE Solutions Terms 20260512_expanded_VDL.xlsx   (new, with revisions)
+```
+
+The classifier's `find_latest_taxonomy()` picks the latest by date.
+This gives you trivial rollback and keeps a chronological record.
+
+### 2. The "anchor effect" — categorical rule lists can backfire
+
+If you've discovered N concrete failure patterns ("alt-protein orgs
+miss Meat-free Proteins", "battery makers mis-routed to Renewable
+Power", etc.), it's tempting to add a long categorical rule listing
+all N with "REQUIRES X" framing. **This often backfires at cheap
+classifier models** (`gpt-5.4-nano` in our use). Listing N specific
+node names in the prompt makes the model more eager to fire those
+nodes, not more disciplined about them.
+
+In our experiments adding 5 ecosystem-named-node categorical rules
+to the LoC and OE prompts increased the bad-match rate by ~1pp
+across the board. Reverting to a tighter rule body with fewer
+specific anchors recovered the precision.
+
+What works better than long categorical rule lists:
+- Edit the **taxonomy definitions** instead. A Sub-Pillar definition
+  that enumerates its Solutions in plain language solves the gate-
+  closure problem (the walk reaches the right Solutions) without
+  loading the prompt with anchor terms.
+- One or two narrow categorical rules with concrete examples
+  ("Coastal Wetlands Solutions REQUIRE 'salt marsh', 'mangrove',
+  'seagrass', or 'tidal' explicitly") work fine. The threshold
+  appears to be around 3–4 categorical rules before the anchor
+  effect dominates.
+
+### 3. Trimming verbose definitions helps too
+
+Once you've added Sub-Pillar enumeration text to fix a gate
+problem, the resulting definitions can become bloated. Trim the
+scaffolding ("On the demand-side and infrastructure side, this
+includes…" → just list the items). Removing redundant climate-
+mechanism re-statements (already in the Pillar definition) and
+keeping the concrete Solution enumerations typically improves
+quality by 1–2pp.
+
+### 4. Generic-principle prompt rules don't help cheap models
+
+We tried twice to add general-principle prompt rules (e.g.,
+"Defining-noun lock: the description must support the node's
+defining noun explicitly"). Both times the cheap model ignored or
+mis-interpreted them, and quality regressed. **Cheap models need
+concrete, narrow categorical instructions, not general principles.**
+
+The exception: the **classifier engine's generic rule body** in
+`hierarchical_taxonomy_mapping.py` (`PROMPT_RULE_KEYS`,
+`_default_rule_bodies`) provides reasonable defaults that
+*together* set the expected behavior. Project drivers should
+override these rules with **domain-specific** language, not with
+new general principles.
+
+### 5. The user-vs-provider conflation is real and recurring
+
+Entities that *use* a technology often get mis-classified as
+*providers* of that technology. A solar developer gets tagged with
+"Solar VPP Aggregation"; a battery manufacturer gets tagged with
+"Electric Freight Trucks". The narrow categorical rule
+("Activities that name a deliverable require the entity to be the
+provider, not a user") works well when added to the cross-sector
+rule. Watch for this pattern; it shows up in every taxonomy.
+
+### 6. Pillar errors propagate to Sub-Pillar gates
+
+When the classifier mis-pillars an entity, it never visits the
+right Sub-Pillar's children. So a "1% bad Pillar rate" can show up
+as a "10% NoMatch rate" at the leaves. Always check Section 1 of
+the analyzer report (Pillar × Level) before drilling into specific
+nodes — Pillar-level errors are the most consequential.
+
+### 7. Walk depth is a useful proxy
+
+If a prompt edit increases the share of entities reaching
+SubTerm-level matches without changing the bad-match rate, it's a
+net positive (more entities classified more specifically with no
+quality loss). Section 1 of the analyzer report indirectly shows
+this — but the most direct view is the per-row file's
+`deepest_match` column distribution before vs after.
+
+### 8. The judge is a quality validator, not an oracle
+
+`gpt-4.1` as the judge model is stronger than the `gpt-5.4-nano`
+classifier, so judge agreement is a useful signal. But:
+
+- The judge is also stochastic at ~5% level even at `temperature=0`
+- It systematically penalizes loose-but-correct matches at the
+  Solution / Sub-Term level (the "weak" tier captures this)
+- It rarely catches systematic gate-closure bugs (Sub-Pillars that
+  never fire) — only full-pool analysis surfaces those
+
+Use the judge for iteration *between* methods on the same sample;
+use full-pool inspection for taxonomy-coverage gaps.
+
+---
+
+## Adding a new taxonomy
+
+To stand up a fifth taxonomy mapping (say, an adaptation
+framework):
+
+### 1. Write a classifier driver
+
+Pattern: copy an existing one (e.g.,
+`oneearth/scripts/run_oe_loc_mapping.py`) and adapt:
+
+```python
+import vdl_tools.shared_tools.taxonomy_mapping.hierarchical_taxonomy_mapping as _htm
+
+LEVELS = [
+    {"idx": 0, "name": "Pillar", "sheet": "Pillars", "key_col": "Pillar",
+     "output_col": "Pillar", "parent_filters": []},
+    {"idx": 1, "name": "Solution", ...},
+    ...
+]
+
+DOMAIN_INTRO = "You are classifying ... [domain framing]"
+MODES = [{"name": "direct", "definition": "..."}, ...]  # or omit for no-mode walk
+RULE_OVERRIDES = {"cross_sector": "...", "specificity": "..."}  # override specific rules
+
+SYSTEM_PROMPT = _htm.build_system_prompt(
+    levels=LEVELS, domain_intro=DOMAIN_INTRO,
+    modes=MODES, rules=RULE_OVERRIDES,
+)
+
+def load_taxonomy(path):
+    return _htm.load_taxonomy(path, LEVELS)
+
+def map_my_taxonomy(entities, ...):
+    return _htm.classify_entities(...)
+```
+
+### 2. Write a judge driver
+
+Pattern: copy `evaluate_loc_mapping_quality.py` or
+`evaluate_drawdown_mapping_quality.py`. Build a `JudgeConfig`:
+
+```python
+from vdl_tools.shared_tools.taxonomy_mapping.hierarchical_taxonomy_judge import (
+    JudgeConfig, run_judge_evaluation,
+)
+
+CONFIG = JudgeConfig(
+    levels=tuple(LEVELS),
+    taxonomy_label="My Taxonomy",
+    taxonomy_intro="...",
+    new_level_cols={lvl["name"]: lvl["output_col"] for lvl in LEVELS},
+    load_taxonomy_tables=lambda: load_taxonomy(MY_TAXONOMY_FILE),
+    taxonomy_label_path_fn=lambda: MY_TAXONOMY_FILE,
+    build_openai_client=my_build_openai_client,
+    # Override if your top-level isn't "Pillar":
+    # verdict_top_label="Sector",  # auto-derives sector_alignment / chosen_sectors
+    # Override if your entity isn't an organization:
+    # entity_id_col="abstract_id", entity_name_col="title",
+    # entity_description_col="abstract", entity_label_in_prompt="Project title",
+    # entity_label_plural="projects",
+    # scoring_rubric=MY_RESEARCH_RUBRIC,  # full replacement
+    # strictness=MY_RESEARCH_STRICTNESS,
+)
+
+if __name__ == "__main__":
+    # standard argparse → run_judge_evaluation(CONFIG, ...)
+    ...
+```
+
+### 3. Run the iteration loop
+
+The `analyze_judge_results.py` tool works on any project's output
+without configuration — just point it at the judge's scored xlsx.
+
+---
+
+## Quick command reference
+
+```bash
+# Classify a 200-sample (any project)
+python <project>/run_<x>_hierarchical_mapping.py --limit 200 --seed 42
+
+# Judge the sample
+python <project>/evaluate_<x>_mapping_quality.py
+
+# Analyze the judge results (cheap iteration tool)
+python vdl_tools/shared_tools/taxonomy_mapping/analyze_judge_results.py \
+    --scored <project>/.../sample200_seed42_quality_scored.xlsx --html
+
+# Full-pool classification (only when needed)
+python <project>/run_<x>_hierarchical_mapping.py --limit all --workers 64
+
+# Spot-check entities (ad hoc, no tool yet — use pandas one-liners)
+```
+
+For project-specific notes (taxonomy paths, output conventions),
+see each project's README or the driver docstrings.

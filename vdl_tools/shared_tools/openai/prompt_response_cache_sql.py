@@ -21,7 +21,7 @@ from more_itertools import chunked
 
 from vdl_tools.shared_tools.database_cache.database_models.prompt import Prompt, PromptResponse
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
-from vdl_tools.shared_tools.openai.openai_api_utils import get_completion
+from vdl_tools.shared_tools.openai.openai_api_utils import get_completion, get_context_window, get_num_tokens
 from vdl_tools.shared_tools.tools.logger import logger
 
 import logging
@@ -194,6 +194,13 @@ class PromptResponseCacheSQL():
         self.filter_by_model = filter_by_model
         self.model = model
         self.store_results = store_results
+
+        context_window, max_output_tokens = get_context_window(self.model)
+        if context_window:
+            prompt_tokens = get_num_tokens(self.prompt.prompt_str, self.model)
+            self.max_text_tokens = context_window - prompt_tokens - max_output_tokens
+        else:
+            self.max_text_tokens = None
 
     def _set_prompt_obj(
         self, prompt, prompt_str, prompt_id, prompt_name, prompt_description):
@@ -509,6 +516,7 @@ class PromptResponseCacheSQL():
             prompt=prompt_str,
             text=text,
             model=self.model,
+            max_text_tokens=self.max_text_tokens,
             **kwargs,
         )
 
