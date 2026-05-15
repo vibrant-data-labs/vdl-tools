@@ -28,6 +28,8 @@ from vdl_tools.scrape_enrich.netzero_insights.process_nzi.split_early_late_fundi
     M_AND_A_SUCCESS_STAGE,
     TWO_YEARS_IN_DAYS,
     raised_equity_round,
+    LATE_STAGE_TYPES,
+    EXIT_TYPES,
 )
 
 
@@ -38,20 +40,16 @@ from vdl_tools.scrape_enrich.netzero_insights.process_nzi.split_early_late_fundi
 #   - which round types count as "having reached that stage" (at_stage_round_types)
 #   - which round types prove they graduated past it (graduation_stages)
 #
-# Example: at_stage="Early VC"
-#   at_stage_round_types = ["Series A", "Early VC", "Grant", "Pre-Seed", "Seed"]
+# Example: at_stage="Series A"
+#   at_stage_round_types = ["Series A", "Early VC"]
 #       → any of these mean the company was in the early stage
 #   graduation_stages = ["Series B"]
 #       → raising Series B means they succeeded past early stage
 
 STAGE_FAILURE_MAP = {
-    "Grant": {
-        "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed", "Seed"],
-        "graduation_stages": ["Series A", "Early VC"],
-    },
     "Pre-Seed": {
-        "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed", "Seed"],
-        "graduation_stages": ["Series A", "Early VC"],
+        "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed"],
+        "graduation_stages": ["Seed", "Series A", "Early VC"],
     },
     "Seed": {
         "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed", "Seed"],
@@ -68,6 +66,10 @@ STAGE_FAILURE_MAP = {
     "Series B": {
         "at_stage_round_types": ["Series B", "Late VC"],
         "graduation_stages": ["Series C"],
+    },
+    "Late_Exit": {
+        "at_stage_round_types": list(LATE_STAGE_TYPES) + ['Late VC'],
+        "graduation_stages": list(EXIT_TYPES),
     },
 }
 
