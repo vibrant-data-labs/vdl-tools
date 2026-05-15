@@ -208,8 +208,10 @@ def divide_funding_rows(
     ValueError
         If ``split_strategy`` is not a recognised value.
     """
+    empty_split = {"up_to_a": None, "a_to_b": None, "middle": None, "late": None, "exit": None}
+
     if not raised_equity_round(company_funding_rows):
-        split = [None, None, None, None, None]
+        return empty_split
 
     company_funding_rows = company_funding_rows.copy()
     company_funding_rows = company_funding_rows[company_funding_rows['round_date_nzi'].notna()]
@@ -217,7 +219,7 @@ def divide_funding_rows(
     company_funding_rows = company_funding_rows.reset_index(drop=True)
 
     if len(company_funding_rows) == 0:
-        split = [None, None, None, None, None]
+        return empty_split
 
     stages = company_funding_rows['round_type_nzi'].map(_get_effective_stage)
 
@@ -252,8 +254,29 @@ EQUITY_SPLIT_BUCKETS = {"up_to_a", "a_to_b", "middle"}
 INVESTOR_LIST_BUCKETS = {"up_to_a", "a_to_b", "middle"}
 
 
+def _collect_investor_types(primary, secondary):
+    """Return a deduped list of investor types from primary + secondary.
+
+    Primary type comes first (when present), then any secondary types not
+    already in the list. Non-string / empty values are ignored. NZI stores
+    ``secondary_types_nzi`` as a list, but it can also be NaN / missing.
+    """
+    types = []
+    if isinstance(primary, str) and primary:
+        types.append(primary)
+    if isinstance(secondary, (list, tuple)):
+        for t in secondary:
+            if isinstance(t, str) and t and t not in types:
+                types.append(t)
+    return types
+
+
 def _build_investor_lookup(processed_investor_df):
-    """Build {investor_id: {"id", "name", "primary_type"}} from the investor df.
+    """Build {investor_id: {"id", "name", "investor_types"}} from the investor df.
+
+    ``investor_types`` is a deduped list combining ``primary_type_nzi`` and
+    ``secondary_types_nzi`` — an investor classified as both Venture Capital
+    (primary) and Foundation (secondary) shows up under both labels.
 
     Returns None if ``processed_investor_df`` is None, signalling that
     per-stage investor lists should be skipped. Rows with a missing
@@ -269,7 +292,10 @@ def _build_investor_lookup(processed_investor_df):
         lookup[inv_id] = {
             "id": inv_id,
             "name": row.get("name_nzi"),
-            "primary_type": row.get("primary_type_nzi"),
+            "investor_types": _collect_investor_types(
+                row.get("primary_type_nzi"),
+                row.get("secondary_types_nzi"),
+            ),
         }
     return lookup
 
@@ -278,9 +304,9 @@ def _bucket_investors(round_group_rounds, investor_lookup):
     """Return a deduped list of investor dicts for one stage bucket.
 
     Flattens ``round_investor_ids_nzi`` across all rounds in the bucket,
-    preserves first-seen order, and attaches name + primary_type from
+    preserves first-seen order, and attaches name + investor_types from
     ``investor_lookup``. Investor ids not present in the lookup still
-    show up as ``{"id": ..., "name": None, "primary_type": None}`` so no
+    show up as ``{"id": ..., "name": None, "investor_types": []}`` so no
     data is silently dropped.
     """
     seen = set()
@@ -296,7 +322,7 @@ def _bucket_investors(round_group_rounds, investor_lookup):
             seen.add(inv_id)
             meta = investor_lookup.get(inv_id)
             if meta is None:
-                investors.append({"id": inv_id, "name": None, "primary_type": None})
+                investors.append({"id": inv_id, "name": None, "investor_types": []})
             else:
                 investors.append(meta)
     return investors
@@ -325,11 +351,13 @@ def divided_funding_rows_and_flatten(
         ``"client_id_nzi"``.
     processed_investor_df : pandas.DataFrame, optional
         Investor metadata (output of ``process_nzi_investors``) with
-        ``investor_id_nzi``, ``name_nzi``, and ``primary_type_nzi``. When
-        provided, each bucket in ``INVESTOR_LIST_BUCKETS`` gets a
-        ``{stage}_investors`` column containing a deduped list of
-        ``{"id", "name", "primary_type"}`` dicts. When ``None`` (default),
-        the column is omitted.
+        ``investor_id_nzi``, ``name_nzi``, ``primary_type_nzi``, and
+        ``secondary_types_nzi``. When provided, each bucket in
+        ``INVESTOR_LIST_BUCKETS`` gets a ``{stage}_investors`` column
+        containing a deduped list of
+        ``{"id", "name", "investor_types"}`` dicts (``investor_types``
+        merges primary + secondary types). When ``None`` (default), the
+        column is omitted.
 
     Returns
     -------
@@ -349,7 +377,7 @@ def divided_funding_rows_and_flatten(
         ``equity_raised + nonequity_raised == amount_raised``. When
         ``processed_investor_df`` is provided, buckets in
         ``INVESTOR_LIST_BUCKETS`` also get ``*_investors`` — a deduped
-        list of ``{"id", "name", "primary_type"}`` dicts covering every
+        list of ``{"id", "name", "investor_types"}`` dicts covering every
         investor across the bucket's rounds.
     """
     divided_rounds = processed_funding_rounds.groupby(id_col).apply(
@@ -597,9 +625,15 @@ def _split_on_first_late_round(company_funding_rows, stages):
     up_to_a_end = first_elevated - 1 if first_elevated is not None else last_idx
 
     # Only emit up_to_a if there's at least one Pre-Seed/Seed round in
-    # the range. Otherwise, leading non-equity rows (debt, convertible) get
-    # absorbed into a_to_b — matching the old behavior where a convertible
-    # before Series A bundled into the same bucket as the A.
+    # the range. Otherwise, leading non-equity rows (debt, convertible):
+    #   - are absorbed into a_to_b when a Series A round exists, matching
+    #     the old behavior where a convertible before Series A bundled
+    #     into the same bucket as the A.
+    #   - are dropped when no Series A exists either (e.g.
+    #     [Debt, Late VC, IPO]). Intentional: the old behavior
+    #     over-counted these outliers by bundling leading debt rounds
+    #     into the late bucket, inflating late totals by ~$1B across
+    #     the dataset.
     has_up_to_a = up_to_a_end >= 0 and _has_stage_in_range(stages, "up_to_a", 0, up_to_a_end)
     up_to_a = _slice_or_none(company_funding_rows, 0, up_to_a_end) if has_up_to_a else None
 

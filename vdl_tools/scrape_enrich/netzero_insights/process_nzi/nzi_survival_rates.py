@@ -168,6 +168,13 @@ def _precompute_company_classifications(
     )
     grouped = funding_rounds_df.groupby(company_id_col)
 
+    # Pre-build the at-stage round-type set for each stage so we don't
+    # rebuild it on every (company × stage) iteration below.
+    at_stage_round_types_by_stage = {
+        stage: set(STAGE_FAILURE_MAP[stage]["at_stage_round_types"])
+        for stage in stages
+    }
+
     classifications = {}
     current_stages = {}
 
@@ -188,8 +195,7 @@ def _precompute_company_classifications(
             # `did_company_fail` already checks this internally (line 362 of
             # nzi_zombie_companies_fail.py); we replicate the same gate here
             # for the success side so the two flags are symmetric.
-            at_stage_round_types = set(mapping["at_stage_round_types"])
-            is_at_stage = bool(at_stage_round_types.intersection(company_round_types))
+            is_at_stage = bool(at_stage_round_types_by_stage[stage].intersection(company_round_types))
 
             if is_at_stage:
                 succeeded = did_company_succeed(

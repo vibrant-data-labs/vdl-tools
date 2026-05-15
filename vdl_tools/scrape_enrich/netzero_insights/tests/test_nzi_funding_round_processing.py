@@ -1172,10 +1172,13 @@ def test_flatten_per_stage_investor_lists():
         },
     ])
     investors = pd.DataFrame([
-        {"investor_id_nzi": 1, "name_nzi": "Acme VC",       "primary_type_nzi": "Venture Capital"},
-        {"investor_id_nzi": 2, "name_nzi": "Green Fund",    "primary_type_nzi": "Foundation"},
-        {"investor_id_nzi": 3, "name_nzi": "Gov Grant Co.", "primary_type_nzi": "Government"},
-        {"investor_id_nzi": 4, "name_nzi": "Mega Capital",  "primary_type_nzi": "Venture Capital"},
+        # Acme VC: primary VC, also a Corporate VC (secondary) — both types should appear.
+        {"investor_id_nzi": 1, "name_nzi": "Acme VC",       "primary_type_nzi": "Venture Capital", "secondary_types_nzi": ["Corporate Venture Capital"]},
+        # Green Fund: only primary type (secondary missing).
+        {"investor_id_nzi": 2, "name_nzi": "Green Fund",    "primary_type_nzi": "Foundation",      "secondary_types_nzi": None},
+        # Gov: secondary repeats the primary — should dedupe.
+        {"investor_id_nzi": 3, "name_nzi": "Gov Grant Co.", "primary_type_nzi": "Government",      "secondary_types_nzi": ["Government", "Public Agency"]},
+        {"investor_id_nzi": 4, "name_nzi": "Mega Capital",  "primary_type_nzi": "Venture Capital", "secondary_types_nzi": []},
     ])
 
     out = divided_funding_rows_and_flatten(
@@ -1184,16 +1187,17 @@ def test_flatten_per_stage_investor_lists():
     row = out[out["client_id_nzi"] == "A"].iloc[0]
 
     # up_to_a: investors 1, 2, 3 (2 deduped), first-seen order preserved.
+    # investor_types merges primary + secondary, deduped, primary first.
     assert row["up_to_a_investors"] == [
-        {"id": 1, "name": "Acme VC",       "primary_type": "Venture Capital"},
-        {"id": 2, "name": "Green Fund",    "primary_type": "Foundation"},
-        {"id": 3, "name": "Gov Grant Co.", "primary_type": "Government"},
+        {"id": 1, "name": "Acme VC",       "investor_types": ["Venture Capital", "Corporate Venture Capital"]},
+        {"id": 2, "name": "Green Fund",    "investor_types": ["Foundation"]},
+        {"id": 3, "name": "Gov Grant Co.", "investor_types": ["Government", "Public Agency"]},
     ]
 
-    # a_to_b: investor 4 plus the unknown id 99 (name/type None, not dropped).
+    # a_to_b: investor 4 plus the unknown id 99 (name/types empty, not dropped).
     assert row["a_to_b_investors"] == [
-        {"id": 4,  "name": "Mega Capital", "primary_type": "Venture Capital"},
-        {"id": 99, "name": None,           "primary_type": None},
+        {"id": 4,  "name": "Mega Capital", "investor_types": ["Venture Capital"]},
+        {"id": 99, "name": None,           "investor_types": []},
     ]
 
     # No middle bucket → list column stays None.
@@ -1202,3 +1206,107 @@ def test_flatten_per_stage_investor_lists():
     # Without the investor df, the column should be absent entirely.
     out_no_inv = divided_funding_rows_and_flatten(rounds, id_col="client_id_nzi")
     assert "up_to_a_investors" not in out_no_inv.columns
+
+
+# ── Leading non-equity drop / happy-path bucket boundaries ──────────────
+
+
+def test_leading_debt_dropped_when_no_pre_seed_and_no_series_a():
+    # [Debt, Late VC] — no Pre-Seed/Seed (so no up_to_a) and no Series A
+    # (so no a_to_b). The leading Debt row is intentionally dropped rather
+    # than absorbed into middle/late. See split_early_late_funding_rounds.py
+    # comment around line 599.
+    company_funding_rows = make_company_funding_rows([
+        {
+            "round_date_nzi": pd.Timestamp("2019-01-01"),
+            "round_type_nzi": "Debt",
+            "financing_type_nzi": "Debt",
+        },
+        {
+            "round_date_nzi": pd.Timestamp("2020-01-01"),
+            "round_type_nzi": "Late VC",
+            "financing_type_nzi": "Equity",
+        },
+    ])
+
+    buckets = divide_funding_rows(
+        company_funding_rows,
+        split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
+    )
+
+    # Leading Debt is dropped — middle starts at Late VC.
+    assert buckets["up_to_a"] is None
+    assert buckets["a_to_b"] is None
+    assert buckets["middle"]["round_type_nzi"].tolist() == ["Late VC"]
+    assert buckets["late"] is None
+    assert buckets["exit"] is None
+
+
+def test_leading_debt_dropped_with_interleaved_debt_and_ipo():
+    # [Debt × 4, Late VC, Debt × 3, IPO] — the 4 leading Debt rounds have
+    # no equity boundary before them, so they're dropped. The 3 Debt rounds
+    # between Late VC and IPO get absorbed chronologically into the middle
+    # bucket (which extends through exit_start - 1).
+    company_funding_rows = make_company_funding_rows([
+        {"round_date_nzi": pd.Timestamp("2015-01-01"), "round_type_nzi": "Debt",    "financing_type_nzi": "Debt"},
+        {"round_date_nzi": pd.Timestamp("2015-06-01"), "round_type_nzi": "Debt",    "financing_type_nzi": "Debt"},
+        {"round_date_nzi": pd.Timestamp("2016-01-01"), "round_type_nzi": "Debt",    "financing_type_nzi": "Debt"},
+        {"round_date_nzi": pd.Timestamp("2016-06-01"), "round_type_nzi": "Debt",    "financing_type_nzi": "Debt"},
+        {"round_date_nzi": pd.Timestamp("2017-01-01"), "round_type_nzi": "Late VC", "financing_type_nzi": "Equity"},
+        {"round_date_nzi": pd.Timestamp("2017-06-01"), "round_type_nzi": "Debt",    "financing_type_nzi": "Debt"},
+        {"round_date_nzi": pd.Timestamp("2018-01-01"), "round_type_nzi": "Debt",    "financing_type_nzi": "Debt"},
+        {"round_date_nzi": pd.Timestamp("2018-06-01"), "round_type_nzi": "Debt",    "financing_type_nzi": "Debt"},
+        {"round_date_nzi": pd.Timestamp("2019-01-01"), "round_type_nzi": "IPO",     "financing_type_nzi": "Equity"},
+    ])
+
+    buckets = divide_funding_rows(
+        company_funding_rows,
+        split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
+    )
+
+    assert buckets["up_to_a"] is None
+    assert buckets["a_to_b"] is None
+    # Middle = Late VC + the 3 trailing Debts that fall between Late VC and IPO.
+    assert buckets["middle"]["round_type_nzi"].tolist() == [
+        "Late VC", "Debt", "Debt", "Debt",
+    ]
+    assert buckets["late"] is None
+    assert buckets["exit"]["round_type_nzi"].tolist() == ["IPO"]
+
+
+def test_happy_path_bucket_boundaries_pre_seed_through_series_b():
+    # Canonical journey: one round per stage from Pre-Seed through Series B.
+    # Locks down the up_to_a / a_to_b / middle boundaries.
+    company_funding_rows = make_company_funding_rows([
+        {
+            "round_date_nzi": pd.Timestamp("2018-01-01"),
+            "round_type_nzi": "Pre-Seed",
+            "financing_type_nzi": "Equity",
+        },
+        {
+            "round_date_nzi": pd.Timestamp("2019-01-01"),
+            "round_type_nzi": "Seed",
+            "financing_type_nzi": "Equity",
+        },
+        {
+            "round_date_nzi": pd.Timestamp("2020-01-01"),
+            "round_type_nzi": "Series A",
+            "financing_type_nzi": "Equity",
+        },
+        {
+            "round_date_nzi": pd.Timestamp("2021-01-01"),
+            "round_type_nzi": "Series B",
+            "financing_type_nzi": "Equity",
+        },
+    ])
+
+    buckets = divide_funding_rows(
+        company_funding_rows,
+        split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
+    )
+
+    assert buckets["up_to_a"]["round_type_nzi"].tolist() == ["Pre-Seed", "Seed"]
+    assert buckets["a_to_b"]["round_type_nzi"].tolist() == ["Series A"]
+    assert buckets["middle"]["round_type_nzi"].tolist() == ["Series B"]
+    assert buckets["late"] is None
+    assert buckets["exit"] is None
