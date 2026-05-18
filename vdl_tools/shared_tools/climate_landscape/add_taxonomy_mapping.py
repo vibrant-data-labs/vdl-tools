@@ -555,6 +555,7 @@ def add_one_earth_taxonomy(
     levers_results_path=None,
     max_depth=2,
     n_embeddings_per_commit=1500,
+    run_primary_category_selection=False,
 ):
     paths = paths or pc.get_paths()
     taxonomy_path = taxonomy_path or paths.get("one_earth_taxonomy", None)
@@ -595,6 +596,7 @@ def add_one_earth_taxonomy(
         force_parents=force_parents,
         mapping_name=mapping_name,
         max_distr_funding_level=max_depth,
+        run_primary_category_selection=run_primary_category_selection,
     )
 
     # reduce the number of columns in the output
