@@ -101,7 +101,7 @@ def add_investor_boolean_flags(
     keep_suffix: str = '_nzi',
 ) -> pd.DataFrame:
     investor_df = investor_df.copy()
-    investor_df[f'is_{column_name}_investor_calced{keep_suffix}'] = investor_df[column_name].astype(bool)
+    investor_df[f'is_{column_name.lower()}_investor_calced{keep_suffix}'] = investor_df[column_name].astype(bool)
     return investor_df
 
 
@@ -109,16 +109,20 @@ INVESTOR_TYPES_TO_ADD = [
     'Government',
     'Private Equity',
     'Venture Capital',
-    'Non-Profit Organisation',
-    'Commercial Banks',
-    'Investment Bank',
     'Bank',
+    'Commercial Banks',  # to remove later (combined with Bank)
+    'Investment Bank',  # to remove later (combined with Bank)
+    "Lender/Debt Provider",  # update later to "Non-Bank Lender / Debt Provider"
+    'Non-Profit Organisation',  # to remove later (combined with Foundation)
     'Foundation',
     'Corporation',
+    'Infrastructure',
+    'Real Estate',
 ]
 
 INVESTOR_BOOLEAN_FLAGS_TO_ADD = [
     'strategic',
+    'growthInvestor',
 ]
 
 
