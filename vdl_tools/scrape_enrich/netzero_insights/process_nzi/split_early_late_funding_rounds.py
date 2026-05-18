@@ -82,7 +82,7 @@ A_TO_B_TYPES = {
 
 MIDDLE_STAGE_TYPES = {
     "Series B",
-    "Late VC",
+    "Late VC",  # TODO: check if this should move to Late_Stage_Types??
 }
 
 LATE_STAGE_TYPES = {
