@@ -19,7 +19,6 @@ from vdl_tools.scrape_enrich.netzero_insights.process_nzi.nzi_zombie_companies_f
     did_company_succeed,
 )
 from vdl_tools.scrape_enrich.netzero_insights.process_nzi.split_early_late_funding_rounds import (
-    EARLY_STAGE_TYPES,
     EXIT_TYPES,
     LATE_STAGE_TYPES,
     LATE_VC_CUTOFF,
@@ -29,7 +28,12 @@ from vdl_tools.scrape_enrich.netzero_insights.process_nzi.split_early_late_fundi
 )
 from vdl_tools.shared_tools.funding_calcations import create_plot_get_metrics
 
-# Stages evaluated in the survival pipeline (maps to CB's seed → series_a → late_venture)
+# Stages evaluated in the survival pipeline (maps to CB's seed → series_a → late_venture).
+# Each stage uses STAGE_FAILURE_MAP[<stage>]["at_stage_round_types"] as the
+# membership gate: a company is only in a stage's cohort if it actually had
+# a round of one of those types. With "Series A" (rather than "Early VC"),
+# only companies that raised a Series A or Early VC round count as A-stage
+# members — seed-only companies are excluded from `series_a_*` flags.
 NZI_SURVIVAL_STAGES = ["Seed", "Series A", "Series B"]
 
 # Round types that count as being at "seed" level for cohort classification
@@ -164,31 +168,54 @@ def _precompute_company_classifications(
     )
     grouped = funding_rounds_df.groupby(company_id_col)
 
+    # Pre-build the at-stage round-type set for each stage so we don't
+    # rebuild it on every (company × stage) iteration below.
+    at_stage_round_types_by_stage = {
+        stage: set(STAGE_FAILURE_MAP[stage]["at_stage_round_types"])
+        for stage in stages
+    }
+
     classifications = {}
     current_stages = {}
 
     for company_id, company_funding_rows in grouped:
         company_status = company_lookup.get(company_id, None)
         current_stages[company_id] = _classify_company_current_stage(company_funding_rows)
+        company_round_types = set(company_funding_rows['round_type_nzi'].values)
 
         per_stage = {}
         for stage in stages:
             mapping = STAGE_FAILURE_MAP[stage]
-            succeeded = did_company_succeed(
-                company_funding_rows,
-                company_status,
-                graduation_stages=mapping["graduation_stages"],
-                late_venture_cutoff=late_venture_cutoff,
-                m_and_a_success_stage=m_and_a_success_stage,
-            )
-            failed = did_company_fail(
-                company_funding_rows,
-                company_status,
-                at_stage=stage,
-                outlier_time=outlier_time,
-                late_venture_cutoff=late_venture_cutoff,
-                m_and_a_success_stage=m_and_a_success_stage,
-            )
+
+            # At-stage gate: a company can only be classified "succeeded" or
+            # "failed" at this stage if it actually had a round of one of the
+            # stage's `at_stage_round_types`. Otherwise both flags are False —
+            # this company isn't a member of this stage's cohort at all.
+            #
+            # `did_company_fail` already checks this internally (line 362 of
+            # nzi_zombie_companies_fail.py); we replicate the same gate here
+            # for the success side so the two flags are symmetric.
+            is_at_stage = bool(at_stage_round_types_by_stage[stage].intersection(company_round_types))
+
+            if is_at_stage:
+                succeeded = did_company_succeed(
+                    company_funding_rows,
+                    company_status,
+                    graduation_stages=mapping["graduation_stages"],
+                    late_venture_cutoff=late_venture_cutoff,
+                    m_and_a_success_stage=m_and_a_success_stage,
+                )
+                failed = did_company_fail(
+                    company_funding_rows,
+                    company_status,
+                    at_stage=stage,
+                    outlier_time=outlier_time,
+                    late_venture_cutoff=late_venture_cutoff,
+                    m_and_a_success_stage=m_and_a_success_stage,
+                )
+            else:
+                succeeded = False
+                failed = False
             per_stage[stage] = {"succeeded": succeeded, "failed": failed}
         classifications[company_id] = per_stage
 
@@ -380,15 +407,13 @@ def _compute_expected_survivals(failure_rates, n_seed, n_early_vc, stages):
 
     Models the funding pipeline as a sequential funnel:
     Seed → Early VC → Series B.  At each stage, a fraction of companies
-    survive (1 - failure_rate).  The "expected survived" count at each stage
+    survived (1 - failure_rate).  The "expected survived" count at each stage
     feeds into the next stage's input.
 
     The funnel logic:
       - ``expected_survived_seed = (1 - seed_failure_rate) * n_seed``
-      - ``expected_survived_early_vc = (1 - early_vc_failure_rate) *
-        (n_early_vc + expected_survived_seed)``
-      - ``expected_survived_series_b = (1 - series_b_failure_rate) *
-        expected_survived_early_vc``
+      - ``expected_survived_early_vc = (1 - early_vc_failure_rate) * (n_early_vc + expected_survived_seed)``
+      - ``expected_survived_series_b = (1 - series_b_failure_rate) * expected_survived_early_vc``
       - ``overall_rate = expected_survived_series_b / (n_seed + n_early_vc)``
 
     Parameters

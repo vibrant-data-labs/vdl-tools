@@ -28,6 +28,8 @@ from vdl_tools.scrape_enrich.netzero_insights.process_nzi.split_early_late_fundi
     M_AND_A_SUCCESS_STAGE,
     TWO_YEARS_IN_DAYS,
     raised_equity_round,
+    LATE_STAGE_TYPES,
+    EXIT_TYPES,
 )
 
 
@@ -38,20 +40,16 @@ from vdl_tools.scrape_enrich.netzero_insights.process_nzi.split_early_late_fundi
 #   - which round types count as "having reached that stage" (at_stage_round_types)
 #   - which round types prove they graduated past it (graduation_stages)
 #
-# Example: at_stage="Early VC"
-#   at_stage_round_types = ["Series A", "Early VC", "Grant", "Pre-Seed", "Seed"]
+# Example: at_stage="Series A"
+#   at_stage_round_types = ["Series A", "Early VC"]
 #       → any of these mean the company was in the early stage
 #   graduation_stages = ["Series B"]
 #       → raising Series B means they succeeded past early stage
 
 STAGE_FAILURE_MAP = {
-    "Grant": {
-        "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed", "Seed"],
-        "graduation_stages": ["Series A", "Early VC"],
-    },
     "Pre-Seed": {
-        "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed", "Seed"],
-        "graduation_stages": ["Series A", "Early VC"],
+        "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed"],
+        "graduation_stages": ["Seed", "Series A", "Early VC"],
     },
     "Seed": {
         "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed", "Seed"],
@@ -66,8 +64,14 @@ STAGE_FAILURE_MAP = {
         "graduation_stages": ["Series B"],
     },
     "Series B": {
-        "at_stage_round_types": ["Series B", "Late VC"],
-        "graduation_stages": ["Series C"],
+        "at_stage_round_types": ["Series B"],
+        "graduation_stages": ["Late VC", "Series C"],
+    },
+    "Late_Exit": {
+        "at_stage_round_types": list(LATE_STAGE_TYPES) + ['Late VC'],
+        # M&A names are handled separately by `_has_successful_manda` and are
+        # not in DISCLOSED_STAGES_ORDERED, so exclude them here.
+        "graduation_stages": sorted(EXIT_TYPES - set(M_AND_A_NAMES)),
     },
 }
 
@@ -150,10 +154,19 @@ def raised_stage_or_earlier(company_funding_rows, stages=["Series A", "Early VC"
     if set(stages).intersection(round_types):
         return True
 
-    # Check for any earlier stage
-    earliest_idx = min(
-        DISCLOSED_STAGES_ORDERED.index(stage) for stage in stages
-    )
+    # Find the earliest position in DISCLOSED_STAGES_ORDERED among `stages`.
+    # Ignore stages that aren't in the disclosed ordering (e.g. "Growth equity",
+    # or synthetic STAGE_FAILURE_MAP keys like "Late_Exit") — those have no
+    # position to compare against.
+    ordered_indices = [
+        DISCLOSED_STAGES_ORDERED.index(stage)
+        for stage in stages
+        if stage in DISCLOSED_STAGES_ORDERED
+    ]
+    if not ordered_indices:
+        return False
+
+    earliest_idx = min(ordered_indices)
     earlier_stages = set(DISCLOSED_STAGES_ORDERED[:earliest_idx])
     return bool(earlier_stages.intersection(round_types))
 
@@ -343,10 +356,6 @@ def did_company_fail(
     if not raised_equity_round(company_funding_rows):
         return False
 
-    # Gate: must have raised at or before this stage
-    if not raised_stage_or_earlier(company_funding_rows, [at_stage]):
-        return False
-
     # Look up the stage mapping
     if at_stage in STAGE_FAILURE_MAP:
         mapping = STAGE_FAILURE_MAP[at_stage]
@@ -356,6 +365,13 @@ def did_company_fail(
         at_stage_round_types = [at_stage]
         stage_idx = DISCLOSED_STAGES_ORDERED.index(at_stage)
         graduation_stages = DISCLOSED_STAGES_ORDERED[stage_idx + 1:]
+
+    # Gate: must have raised at or before this stage.
+    # Use at_stage_round_types (real stage names) rather than at_stage, since
+    # at_stage may be a synthetic STAGE_FAILURE_MAP key (e.g. "Late_Exit")
+    # that is not present in DISCLOSED_STAGES_ORDERED.
+    if not raised_stage_or_earlier(company_funding_rows, at_stage_round_types):
+        return False
 
     # Must have actually reached the evaluation stage
     round_types = set(company_funding_rows['round_type_nzi'].values)
