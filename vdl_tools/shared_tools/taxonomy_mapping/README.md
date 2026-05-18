@@ -10,8 +10,8 @@ This README covers:
 
 1. [What's in this folder](#components)
 2. [Project folder conventions](#project-folder-conventions)
-3. [The end-to-end iteration workflow](#iteration-workflow)
-4. [Lessons learned about prompt iteration](#lessons-learned)
+3. [The end-to-end iteration workflow](#iteration-workflow) — including the [two levers](#two-levers-prompt-edits-vs-taxonomy-definition-edits)
+4. [Lessons learned about prompt and taxonomy iteration](#lessons-learned)
 5. [Adding a new taxonomy](#adding-a-new-taxonomy)
 
 ---
@@ -130,6 +130,45 @@ __pycache__/
 The work of refining a classifier or taxonomy follows a tight loop.
 Each pass is intentionally cheap so you can iterate often.
 
+### Two levers: prompt edits vs taxonomy definition edits
+
+Quality improvement has two co-equal levers, and the right choice
+depends on the shape of the error you're fixing:
+
+- **Prompt edits** — the project driver's `DOMAIN_INTRO`, `MODES`,
+  and `RULE_OVERRIDES` (passed through `build_system_prompt`).
+  These apply uniformly to every per-level decision. Best for
+  **cross-cutting matching algorithm logic**: evidence-only,
+  qualifier lock, specificity, user-vs-provider, mode-of-operation
+  framing. A prompt rule is the right tool when an error pattern
+  repeats across many nodes (e.g., users mis-tagged as providers
+  in every Solution).
+
+- **Taxonomy definition edits** — the `Definition` /
+  `expanded_definition` cells in the taxonomy xlsx, saved as a
+  dated-successor file (see Lesson #1). The classifier reads the
+  candidate definitions at every level decision, so per-node text
+  hits the LLM at the exact per-decision point. Best for **per-node
+  positive scope, negative scope, sibling disambiguation, and
+  exclusionary rules**. A definition edit is the right tool when
+  an error concentrates on one or two specific nodes.
+
+**When the taxonomy is read-only** (e.g., a third-party reference
+framework you don't own), prompt rules are the only lever. See
+Lesson #2 for the anchor-effect trap that affects prompt-only
+iteration with cheap classifier models.
+
+**Where taxonomy edits have the highest leverage**: at the **Pillar
+and Sub-Pillar levels**, where errors propagate through the engine's
+gating walk. A wrong Pillar match means the entity never visits the
+right Sub-Pillar's children, and a Sub-Pillar with stretched scope
+mis-routes a whole branch of descendants. The ed_tracker
+`Learning & School Models` case (a +22pp Sub-Pillar quality jump
+from one paragraph rewrite + one Exclusionary Rule extension —
+Lesson #9) is the canonical example. See `check_taxonomy_coherence.py`
+for the audit that catches the failure modes safe definition edits
+must avoid (coverage / completeness / cohesion).
+
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │                  Inner loop (≈ 5 minutes)                    │
@@ -208,6 +247,26 @@ after any prompt or taxonomy edit.
 **Step 4 — Apply edit, re-run**: change the prompt (in a project's
 classifier driver) or the taxonomy (save as a dated-successor xlsx
 in shared-data/taxonomies — see [lessons learned](#lessons-learned)).
+Use the analyzer's output to decide which lever to pull:
+
+- Errors concentrated on **one or two specific nodes** (Section 3
+  dominated by a single node, or Section 1 showing one Sub-Pillar's
+  branch with much weaker mean than its siblings), and the taxonomy
+  is editable → **tighten that node's definition**. Especially when
+  the node is a Pillar or Sub-Pillar, since the error gates every
+  descendant.
+- Errors **systematic across many nodes following the same pattern**
+  (e.g., user-vs-provider conflation showing up in many Solutions,
+  same failure-reason cluster from Section 5 across multiple nodes)
+  → **prompt rule override**. Add or sharpen a `RULE_OVERRIDES` entry
+  in the project driver.
+- A whole Sub-Pillar mis-firing with the same wrong-direction
+  pattern → run `check_taxonomy_coherence.py` on that parent first
+  (look at the coverage / completeness / cohesion gaps), then
+  decide. A cohesion gap usually signals that the right fix is
+  structural (split / rename / move a child) rather than a wording
+  patch.
+
 Re-run from step 1. The analyzer's deltas between iterations will
 show whether the change moved the right metrics.
 
@@ -374,6 +433,57 @@ classifier, so judge agreement is a useful signal. But:
 
 Use the judge for iteration *between* methods on the same sample;
 use full-pool inspection for taxonomy-coverage gaps.
+
+### 9. Prompt edits vs taxonomy definition edits — when to use which
+
+The decision principle that emerges from a year of iteration work:
+
+- **Per-node scope** (what *this node* covers, what it excludes,
+  how it differs from its siblings) → taxonomy definition edit.
+  The classifier reads candidate definitions at every per-level
+  decision, so per-node text is the exact context the LLM uses
+  when deciding "does this entity belong here or at the sibling
+  node?". Prompt rules are awkward at expressing per-node scope.
+- **Cross-cutting matching algorithm logic** (how every match
+  decision should be made, regardless of which node is involved) →
+  prompt rule override. Examples: evidence-only ("the name is not
+  evidence"), qualifier lock ("Offshore in the name means the
+  description must say offshore"), specificity ("don't go deeper
+  than the description supports"), user-vs-provider.
+
+The canonical case is the ed_tracker `Learning & School Models`
+Sub-Pillar: a +22pp Sub-Pillar quality jump (75.0% → 97.2% good in
+a 200-entity judge run) came entirely from two surgical taxonomy
+edits — rewriting the L&SM first paragraph to honestly span both
+its scopes, and adding an accreditee exclusion to Governance &
+Accountability. Zero prompt changes. A prompt rule could not have
+expressed "L&SM covers school models AND OST, not just school
+models" cleanly; the taxonomy definition can.
+
+**Use the cohesion guard.** Prior LLM-driven revision passes can
+satisfy *completeness* (every child signposted by the parent) by
+stretching a parent's scope across heterogeneous children — gluing
+in a second scope paragraph for a child that doesn't fit the
+parent's primary frame. This breaks *cohesion* (the parent + its
+children no longer describe a single coherent category) and
+silently degrades downstream classification. The third check in
+`check_taxonomy_coherence.py` (Cohesion) catches this pattern, and
+revision passes that respect a `cohesion_blocker` field refuse to
+auto-glue rather than producing a confused parent.
+
+**Mind the truncation cap.** The judge truncates each definition at
+600 characters when scoring matches. If you're encoding per-node
+scope in the taxonomy, make sure the load-bearing scope text lands
+in the first ~600 chars of the expanded definition — don't bury an
+exclusionary rule or a dual-scope statement past the cap, or the
+judge will score against the unrevised opening.
+
+**Read-only taxonomies.** When you cannot edit the taxonomy (third-
+party reference framework, frozen domain-authority definitions),
+prompt rules are the only lever. Lesson #2 (anchor effect) is the
+relevant guidance there: keep the rule body tight, prefer one or
+two narrow categorical rules with concrete examples over long lists
+of node-name anchors.
 
 ---
 
