@@ -83,6 +83,36 @@ def reformat_ein(filerein):
     return reformatted_ein[:2] + "-" + reformatted_ein[2:]
 
 
+def _format_address_parts(
+    addr_line_1=None,
+    addr_line_2:str =None,
+    city:str =None,
+    state:str =None,
+    zip:str =None,
+):
+    """
+    Format the address parts into a single string.
+    """
+    address = ""
+    if addr_line_1:
+        address += f"{addr_line_1} "
+
+    if addr_line_2:
+        address += f"{addr_line_2} "
+
+    if city:
+        address += f"{city} "
+
+    if state:
+        address += f"{state} "
+
+    if zip:
+        address += f"{zip} "
+
+    return address.strip()
+
+
+
 def _assemble_cb_shape(hits, basic_long, grants_long, column_for_funding):
     """Merge the per-EIN identity row + pivoted year columns + synthetic fields."""
     logger.info("Assembling CB-shaped output")
@@ -134,7 +164,7 @@ def _assemble_cb_shape(hits, basic_long, grants_long, column_for_funding):
     df["Description"] = df["ein"].map(description_by_ein)
 
     df["hq_address"] = df.apply(
-        lambda x: f"{x['addr_line_1']} {x['addr_line_2']} {x['city']}, {x['state']} {x['zip']}",
+        lambda x: _format_address_parts(x['addr_line_1'], x['addr_line_2'], x['city'], x['state'], x['zip']),
         axis=1,
     )
     df["Last_Funding_Type"] = "Grant"
