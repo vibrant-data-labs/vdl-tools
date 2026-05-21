@@ -39,8 +39,8 @@ DISCLOSED_STAGES_ORDERED = [
     "Early VC",
     "Series A",
     "Series B",
-    "Late VC",
     "Series C",
+    "Late VC",
     "Series D",
     "Series E",
     "Series F",
@@ -82,10 +82,11 @@ A_TO_B_TYPES = {
 
 MIDDLE_STAGE_TYPES = {
     "Series B",
-    "Late VC",
+    # "Late VC",  # moved to late stage - usually follows C or is synonymous with C
 }
 
 LATE_STAGE_TYPES = {
+    "Late VC",
     "Series C",
     "Series D",
     "Series E",
@@ -370,11 +371,13 @@ def divided_funding_rows_and_flatten(
         ``EQUITY_SPLIT_BUCKETS`` additionally get
         ``*_equity_raised`` (sum of ``Equity`` financing-type rounds),
         ``*_nonequity_raised`` (sum of all other rounds — grants, debt,
-        convertibles, etc.), ``*_n_rounds_nonequity`` (count of
-        non-equity rounds in the bucket), and ``*_nonequity_types``
-        (sorted list of unique ``round_type_nzi`` values among
-        non-equity rounds). When the bucket exists,
-        ``equity_raised + nonequity_raised == amount_raised``. When
+        convertibles, etc.), ``*_n_rounds_equity`` / ``*_n_rounds_nonequity``
+        (counts of equity vs. non-equity rounds in the bucket), and
+        ``*_nonequity_types`` (sorted list of unique ``round_type_nzi``
+        values among non-equity rounds). When the bucket exists,
+        ``equity_raised + nonequity_raised == amount_raised`` (ignoring
+        the NaN guard, which fires when every round of a given type in
+        the bucket was undisclosed). When
         ``processed_investor_df`` is provided, buckets in
         ``INVESTOR_LIST_BUCKETS`` also get ``*_investors`` — a deduped
         list of ``{"id", "name", "investor_types"}`` dicts covering every
@@ -413,6 +416,7 @@ def divided_funding_rows_and_flatten(
             if round_name in EQUITY_SPLIT_BUCKETS:
                 round_group_dict["equity_raised"] = None
                 round_group_dict["nonequity_raised"] = None
+                round_group_dict["n_rounds_equity"] = None
                 round_group_dict["n_rounds_nonequity"] = None
                 round_group_dict["nonequity_types"] = None
             if include_investor_lists and round_name in INVESTOR_LIST_BUCKETS:
@@ -423,8 +427,15 @@ def divided_funding_rows_and_flatten(
                 continue
             round_group_dict["first_round_date"] = round_group_rounds['round_date_nzi'].min()
             round_group_dict["last_round_date"] = round_group_rounds['round_date_nzi'].max()
+            # Sum dollars across the bucket's rounds. Pandas .sum() skips NaN
+            # by default, so this is the sum of the *disclosed* portion only.
             round_group_dict["amount_raised"] = round_group_rounds['round_amount_usd_nzi'].sum()
             round_group_dict["num_rounds"] = round_group_rounds['round_type_nzi'].count()
+            # Undisclosed-amount guard: a 0 sum combined with >0 rounds means
+            # every round in the bucket had an undisclosed amount. Flip to NaN
+            # so downstream means treat the bucket as missing, not as $0.
+            if round_group_dict["num_rounds"] > 0 and round_group_dict["amount_raised"] == 0:
+                round_group_dict["amount_raised"] = float("nan")
             if round_name in INVESTOR_COUNT_BUCKETS:
                 for investor_type_col in investor_type_columns:
                     round_group_dict[f"{investor_type_col}_count"] = round_group_rounds[investor_type_col].sum()
@@ -434,10 +445,20 @@ def divided_funding_rows_and_flatten(
                 nonequity_rows = round_group_rounds[~is_equity]
                 round_group_dict["equity_raised"] = float(equity_rows['round_amount_usd_nzi'].sum())
                 round_group_dict["nonequity_raised"] = float(nonequity_rows['round_amount_usd_nzi'].sum())
+                round_group_dict["n_rounds_equity"] = int(len(equity_rows))
                 round_group_dict["n_rounds_nonequity"] = int(len(nonequity_rows))
                 round_group_dict["nonequity_types"] = sorted(
                     nonequity_rows['round_type_nzi'].dropna().unique().tolist()
                 )
+                # Per-split undisclosed-amount guard. Gate each split by its
+                # own round count so true zeros survive (e.g. equity_raised=0
+                # for a company with only nonequity rounds stays 0, not NaN),
+                # but splits where every round of that type was undisclosed
+                # become NaN.
+                if round_group_dict["n_rounds_equity"] > 0 and round_group_dict["equity_raised"] == 0:
+                    round_group_dict["equity_raised"] = float("nan")
+                if round_group_dict["n_rounds_nonequity"] > 0 and round_group_dict["nonequity_raised"] == 0:
+                    round_group_dict["nonequity_raised"] = float("nan")
             if include_investor_lists and round_name in INVESTOR_LIST_BUCKETS:
                 round_group_dict["investors"] = _bucket_investors(
                     round_group_rounds, investor_lookup

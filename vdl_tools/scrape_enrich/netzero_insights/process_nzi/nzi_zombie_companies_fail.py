@@ -73,6 +73,12 @@ STAGE_FAILURE_MAP = {
         # not in DISCLOSED_STAGES_ORDERED, so exclude them here.
         "graduation_stages": sorted(EXIT_TYPES - set(M_AND_A_NAMES)),
     },
+    "Seed_Exit": {
+        "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed", "Seed"],
+        # M&A names are handled separately by `_has_successful_manda` and are
+        # not in DISCLOSED_STAGES_ORDERED, so exclude them here.
+        "graduation_stages": sorted(EXIT_TYPES - set(M_AND_A_NAMES)),
+    },
 }
 
 
