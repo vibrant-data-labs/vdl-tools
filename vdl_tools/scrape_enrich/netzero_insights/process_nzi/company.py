@@ -4,7 +4,6 @@ import pandas as pd
 
 from vdl_tools.shared_tools.tools.text_cleaning import camel_to_snake
 from vdl_tools.shared_tools.tools.falsey_checks import coerced_bool
-from vdl_tools.scrape_enrich.netzero_insights.process_nzi.investor import INVESTOR_TYPES_TO_ADD, INVESTOR_BOOLEAN_FLAGS_TO_ADD
 from vdl_tools.scrape_enrich.netzero_insights.process_nzi.funding_round import (
     add_acquisition_indicators,
     add_project_finance_indicators,
@@ -212,11 +211,13 @@ def filter_format_columns(
 def add_investor_type_flag(
     companies_df: pd.DataFrame,
     processed_funding_round_df: pd.DataFrame,
-    keep_suffix: str = '_nzi',
-    investor_type: str = 'Government',
+    has_investor_type_flag_col_name: str,
 ) -> pd.DataFrame:
-
-    has_investor_type_flag_col_name = f'has_{investor_type.lower()}_investor_calced{keep_suffix}'
+    """Per company, set ``has_<stem>_investor_calced<suffix>`` True if ANY of
+    its funding rounds had that investor type. The column name comes from
+    auto-discovery on the funding-round DataFrame (see
+    `process_nzi_companies_details`).
+    """
     has_investor_type_flag_df = (
         processed_funding_round_df.groupby('client_id_nzi')
         .agg({has_investor_type_flag_col_name: 'sum'})
@@ -293,12 +294,20 @@ def process_nzi_companies_details(
         tag_col=tag_col,
         tag_suffix=tag_suffix
     )
-    for investor_type in INVESTOR_TYPES_TO_ADD + INVESTOR_BOOLEAN_FLAGS_TO_ADD:
+    # Auto-discover the per-round `has_*_investor_calced{keep_suffix}` columns
+    # produced by `process_nzi_funding_rounds`, and lift them to per-company
+    # booleans. No type list is maintained here — adding a new mapped type
+    # upstream automatically flows through.
+    has_flag_suffix = f'_investor_calced{keep_suffix}'
+    has_flag_cols = [
+        c for c in processed_funding_round_df.columns
+        if c.startswith('has_') and c.endswith(has_flag_suffix)
+    ]
+    for has_col in has_flag_cols:
         companies_df = add_investor_type_flag(
             companies_df,
             processed_funding_round_df,
-            keep_suffix=keep_suffix,
-            investor_type=investor_type
+            has_investor_type_flag_col_name=has_col,
         )
 
     companies_df = add_company_project_finance_indicators(

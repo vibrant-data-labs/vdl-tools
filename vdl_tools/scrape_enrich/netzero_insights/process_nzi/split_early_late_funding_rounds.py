@@ -121,24 +121,25 @@ def _get_effective_stage(round_type):
     Returns
     -------
     str or None
-        One of ``"up_to_a"``, ``"a_to_b"``, ``"middle"``, ``"late"``,
+        One of ``"up_to_a"``, ``"a_to_b"``, ``"b_to_late"``, ``"late_to_exit"``,
         ``"exit"``, or ``None`` if the round type does not define a stage
-        boundary.
+        boundary. (Names: ``b_to_late`` = first Series B up to first late-stage
+        round; ``late_to_exit`` = first late-stage round up to first exit.)
     """
     if round_type in UP_TO_A_TYPES:
         return "up_to_a"
     if round_type in A_TO_B_TYPES:
         return "a_to_b"
     if round_type in MIDDLE_STAGE_TYPES:
-        return "middle"
+        return "b_to_late"
     if round_type in LATE_STAGE_TYPES:
-        return "late"
+        return "late_to_exit"
     if round_type in EXIT_TYPES:
         return "exit"
     return None
 
 
-STAGE_ORDER = {"up_to_a": 0, "a_to_b": 1, "middle": 2, "late": 3, "exit": 4}
+STAGE_ORDER = {"up_to_a": 0, "a_to_b": 1, "b_to_late": 2, "late_to_exit": 3, "exit": 4}
 
 
 def raised_equity_round(company_funding_rows):
@@ -199,17 +200,20 @@ def divide_funding_rows(
     Returns
     -------
     dict of {str: pandas.DataFrame or None}
-        Keys are ``"up_to_a"``, ``"a_to_b"``, ``"middle"``, ``"late"``,
+        Keys are ``"up_to_a"``, ``"a_to_b"``, ``"b_to_late"``, ``"late_to_exit"``,
         and ``"exit"``. Values are the corresponding DataFrames, or ``None``
-        if the bucket has no rounds. Exit includes IPO/SPAC/Post-IPO as
-        well as M&A events (Acquisition, Merger, Buyout).
+        if the bucket has no rounds. ``b_to_late`` captures rounds from the
+        first Series B up to (but not including) the first late-stage round
+        (Series C/D/E/.../Late VC/Growth equity). ``late_to_exit`` then runs
+        from that first late-stage round up to the first exit. Exit includes
+        IPO/SPAC/Post-IPO as well as M&A events (Acquisition, Merger, Buyout).
 
     Raises
     ------
     ValueError
         If ``split_strategy`` is not a recognised value.
     """
-    empty_split = {"up_to_a": None, "a_to_b": None, "middle": None, "late": None, "exit": None}
+    empty_split = {"up_to_a": None, "a_to_b": None, "b_to_late": None, "late_to_exit": None, "exit": None}
 
     if not raised_equity_round(company_funding_rows):
         return empty_split
@@ -237,22 +241,22 @@ def divide_funding_rows(
     return {
         "up_to_a": split[0],
         "a_to_b":  split[1],
-        "middle":  split[2],
-        "late":    split[3],
+        "b_to_late":  split[2],
+        "late_to_exit":    split[3],
         "exit":    split[4],
     }
 
 # Buckets that get per-investor-type count columns. Pre-Series-B funding is
 # the analytical focus, so we count investors in the two pre-B buckets plus
-# `middle` (so callers can study Series-B-stage investors as well).
-INVESTOR_COUNT_BUCKETS = {"up_to_a", "a_to_b", "middle"}
+# `b_to_late` (so callers can study Series-B-stage investors as well).
+INVESTOR_COUNT_BUCKETS = {"up_to_a", "a_to_b", "b_to_late"}
 
 # Buckets that get equity / non-equity split columns. Same pre-B focus as
-# INVESTOR_COUNT_BUCKETS — late and exit are excluded.
-EQUITY_SPLIT_BUCKETS = {"up_to_a", "a_to_b", "middle"}
+# INVESTOR_COUNT_BUCKETS — late_to_exit and exit are excluded.
+EQUITY_SPLIT_BUCKETS = {"up_to_a", "a_to_b", "b_to_late"}
 
 # Buckets that get a per-stage `{stage}_investors` list-of-dicts column.
-INVESTOR_LIST_BUCKETS = {"up_to_a", "a_to_b", "middle"}
+INVESTOR_LIST_BUCKETS = {"up_to_a", "a_to_b", "b_to_late"}
 
 
 def _collect_investor_types(primary, secondary):
@@ -365,7 +369,7 @@ def divided_funding_rows_and_flatten(
     pandas.DataFrame
         One row per company with columns prefixed by stage name (e.g.
         ``up_to_a_first_round_date``, ``a_to_b_amount_raised``,
-        ``middle_num_rounds``, ``exit_last_round_date``). Buckets in
+        ``b_to_late_num_rounds``, ``exit_last_round_date``). Buckets in
         ``INVESTOR_COUNT_BUCKETS`` also get
         ``*_has_<type>_investor_calced_nzi_count`` columns. Buckets in
         ``EQUITY_SPLIT_BUCKETS`` additionally get
@@ -412,13 +416,24 @@ def divided_funding_rows_and_flatten(
             # Investor counts only for the two pre-B buckets.
             if round_name in INVESTOR_COUNT_BUCKETS:
                 round_group_dict.update({f"{col}_count": None for col in investor_type_columns})
-            # Equity / non-equity split only for pre-B buckets.
+            # Equity / non-equity split only for pre-B buckets. The
+            # debt / grant / project-finance entries are extra line items
+            # carved out of the nonequity rows so analyses can pull them
+            # out separately (not a re-bucketing).
             if round_name in EQUITY_SPLIT_BUCKETS:
                 round_group_dict["equity_raised"] = None
                 round_group_dict["nonequity_raised"] = None
                 round_group_dict["n_rounds_equity"] = None
                 round_group_dict["n_rounds_nonequity"] = None
                 round_group_dict["nonequity_types"] = None
+                round_group_dict["debt_raised"] = None
+                round_group_dict["grant_raised"] = None
+                round_group_dict["project_finance_raised"] = None
+                round_group_dict["convertible_note_raised"] = None
+                round_group_dict["n_rounds_debt"] = None
+                round_group_dict["n_rounds_grant"] = None
+                round_group_dict["n_rounds_project_finance"] = None
+                round_group_dict["n_rounds_convertible_note"] = None
             if include_investor_lists and round_name in INVESTOR_LIST_BUCKETS:
                 round_group_dict["investors"] = None
 
@@ -459,6 +474,41 @@ def divided_funding_rows_and_flatten(
                     round_group_dict["equity_raised"] = float("nan")
                 if round_group_dict["n_rounds_nonequity"] > 0 and round_group_dict["nonequity_raised"] == 0:
                     round_group_dict["nonequity_raised"] = float("nan")
+
+                # Surface debt / grant / project-finance / convertible-note separately
+                # so analyses can pull them out of the broader nonequity bucket. These
+                # four are all subsets of the nonequity rows just summed — adding line
+                # items, not re-bucketing.
+                #   - debt and grant use financing_type_nzi (symmetric with equity).
+                #   - project finance + convertible note use round_type_nzi because
+                #     their financing_type is "Other" (NZI's catch-all), so they
+                #     aren't distinguishable at the financing-type level.
+                is_debt = round_group_rounds['financing_type_nzi'] == "Debt"
+                is_grant = round_group_rounds['financing_type_nzi'] == "Grant"
+                is_pf = round_group_rounds['round_type_nzi'] == "Project Finance"
+                is_cn = round_group_rounds['round_type_nzi'] == "Convertible note"
+                debt_rows = round_group_rounds[is_debt]
+                grant_rows = round_group_rounds[is_grant]
+                pf_rows = round_group_rounds[is_pf]
+                cn_rows = round_group_rounds[is_cn]
+                round_group_dict["debt_raised"]  = float(debt_rows['round_amount_usd_nzi'].sum())
+                round_group_dict["grant_raised"] = float(grant_rows['round_amount_usd_nzi'].sum())
+                round_group_dict["project_finance_raised"] = float(pf_rows['round_amount_usd_nzi'].sum())
+                round_group_dict["convertible_note_raised"] = float(cn_rows['round_amount_usd_nzi'].sum())
+                round_group_dict["n_rounds_debt"]  = int(len(debt_rows))
+                round_group_dict["n_rounds_grant"] = int(len(grant_rows))
+                round_group_dict["n_rounds_project_finance"] = int(len(pf_rows))
+                round_group_dict["n_rounds_convertible_note"] = int(len(cn_rows))
+                # Same undisclosed-amount NaN guard as equity/nonequity above.
+                # Gate each split by its own count so true zeros survive.
+                for _amt_key, _n_key in (
+                    ("debt_raised", "n_rounds_debt"),
+                    ("grant_raised", "n_rounds_grant"),
+                    ("project_finance_raised", "n_rounds_project_finance"),
+                    ("convertible_note_raised", "n_rounds_convertible_note"),
+                ):
+                    if round_group_dict[_n_key] > 0 and round_group_dict[_amt_key] == 0:
+                        round_group_dict[_amt_key] = float("nan")
             if include_investor_lists and round_name in INVESTOR_LIST_BUCKETS:
                 round_group_dict["investors"] = _bucket_investors(
                     round_group_rounds, investor_lookup
@@ -489,8 +539,8 @@ def _find_first_index_at_or_above(stages, min_stage):
         Effective stage labels (values from ``_get_effective_stage``) indexed
         to match the funding-rows DataFrame.
     min_stage : str
-        Minimum stage to match, one of ``"early"``, ``"middle"``, ``"late"``,
-        ``"exit"``.
+        Minimum stage to match, one of ``"up_to_a"``, ``"a_to_b"``,
+        ``"b_to_late"``, ``"late_to_exit"``, ``"exit"``.
 
     Returns
     -------
@@ -605,10 +655,10 @@ def _split_on_first_late_round(company_funding_rows, stages):
     """Split funding rounds so each bucket starts at the first occurrence of its stage.
 
     Boundaries are drawn at the first round whose effective stage is
-    ``"a_to_b"``, ``"middle"``, ``"late"``, or ``"exit"``. Everything before
-    the first a_to_b round is up_to_a; from first a_to_b to first middle is
-    a_to_b; and so on. Non-boundary round types (debt, convertible) are
-    absorbed into whichever bucket they fall into chronologically.
+    ``"a_to_b"``, ``"b_to_late"``, ``"late_to_exit"``, or ``"exit"``. Everything
+    before the first a_to_b round is up_to_a; from first a_to_b to first
+    b_to_late is a_to_b; and so on. Non-boundary round types (debt, convertible)
+    are absorbed into whichever bucket they fall into chronologically.
 
     Parameters
     ----------
@@ -622,9 +672,9 @@ def _split_on_first_late_round(company_funding_rows, stages):
     Returns
     -------
     tuple of (pandas.DataFrame or None)
-        ``(up_to_a, a_to_b, middle, late, exit)``. If no boundary-defining
-        rounds exist but the company passed the equity gate, all rows are
-        returned as the up_to_a bucket.
+        ``(up_to_a, a_to_b, b_to_late, late_to_exit, exit)``. If no
+        boundary-defining rounds exist but the company passed the equity
+        gate, all rows are returned as the up_to_a bucket.
     """
     n = len(company_funding_rows)
     last_idx = n - 1
@@ -638,8 +688,8 @@ def _split_on_first_late_round(company_funding_rows, stages):
     # IPO]: first_a_to_b is None but first_elevated points to the Late VC row.
     first_a_to_b   = _find_first_index_at_stage(stages, "a_to_b")
     first_elevated = _find_first_index_at_or_above(stages, "a_to_b")
-    middle_start   = _find_first_index_at_or_above(stages, "middle")
-    late_start     = _find_first_index_at_or_above(stages, "late")
+    b_to_late_start   = _find_first_index_at_or_above(stages, "b_to_late")
+    late_to_exit_start     = _find_first_index_at_or_above(stages, "late_to_exit")
     exit_start     = _find_first_index_at_or_above(stages, "exit")
 
     # up_to_a window: rows before the first elevated row.
@@ -653,7 +703,7 @@ def _split_on_first_late_round(company_funding_rows, stages):
     #   - are dropped when no Series A exists either (e.g.
     #     [Debt, Late VC, IPO]). Intentional: the old behavior
     #     over-counted these outliers by bundling leading debt rounds
-    #     into the late bucket, inflating late totals by ~$1B across
+    #     into the late_to_exit bucket, inflating late_to_exit totals by ~$1B across
     #     the dataset.
     has_up_to_a = up_to_a_end >= 0 and _has_stage_in_range(stages, "up_to_a", 0, up_to_a_end)
     up_to_a = _slice_or_none(company_funding_rows, 0, up_to_a_end) if has_up_to_a else None
@@ -664,35 +714,35 @@ def _split_on_first_late_round(company_funding_rows, stages):
     if first_a_to_b is not None:
         a_to_b_actual_start = first_a_to_b if has_up_to_a else 0
         a_to_b_end = last_idx
-        if middle_start is not None:
-            a_to_b_end = middle_start - 1
-        elif late_start is not None:
-            a_to_b_end = late_start - 1
+        if b_to_late_start is not None:
+            a_to_b_end = b_to_late_start - 1
+        elif late_to_exit_start is not None:
+            a_to_b_end = late_to_exit_start - 1
         elif exit_start is not None:
             a_to_b_end = exit_start - 1
         a_to_b = _slice_or_none(company_funding_rows, a_to_b_actual_start, a_to_b_end)
     else:
         a_to_b = None
 
-    # middle bucket
-    if middle_start is not None:
-        middle_end = last_idx
-        if late_start is not None:
-            middle_end = late_start - 1
+    # b_to_late bucket
+    if b_to_late_start is not None:
+        b_to_late_end = last_idx
+        if late_to_exit_start is not None:
+            b_to_late_end = late_to_exit_start - 1
         elif exit_start is not None:
-            middle_end = exit_start - 1
-        middle = _slice_or_none(company_funding_rows, middle_start, middle_end)
+            b_to_late_end = exit_start - 1
+        b_to_late = _slice_or_none(company_funding_rows, b_to_late_start, b_to_late_end)
     else:
-        middle = None
+        b_to_late = None
 
-    # late bucket
-    if late_start is not None:
-        late_end = last_idx
+    # late_to_exit bucket
+    if late_to_exit_start is not None:
+        late_to_exit_end = last_idx
         if exit_start is not None:
-            late_end = exit_start - 1
-        late = _slice_or_none(company_funding_rows, late_start, late_end)
+            late_to_exit_end = exit_start - 1
+        late_to_exit = _slice_or_none(company_funding_rows, late_to_exit_start, late_to_exit_end)
     else:
-        late = None
+        late_to_exit = None
 
     # exit bucket
     exit = _slice_or_none(company_funding_rows, exit_start, last_idx) if exit_start is not None else None
@@ -701,13 +751,14 @@ def _split_on_first_late_round(company_funding_rows, stages):
     # the equity gate, treat all rows as up_to_a — these companies have
     # equity/grant funding through non-standard types (e.g. Equity crowdfunding,
     # Accelerator) and never reached a named venture round.
-    if up_to_a is None and a_to_b is None and middle is None and late is None and exit is None:
+    if (up_to_a is None and a_to_b is None and b_to_late is None
+            and late_to_exit is None and exit is None):
         has_any_boundary = stages.notna().any()
         if not has_any_boundary:
             return company_funding_rows, None, None, None, None
         return None, None, None, None, None
 
-    return up_to_a, a_to_b, middle, late, exit
+    return up_to_a, a_to_b, b_to_late, late_to_exit, exit
 
 
 def _split_after_last_early_round(company_funding_rows, stages):
@@ -716,9 +767,10 @@ def _split_after_last_early_round(company_funding_rows, stages):
 
     Unlike ``_split_on_first_late_round``, the a_to_b bucket here includes
     everything from the first a_to_b-or-later row up to and including the
-    **last** a_to_b round (even if middle / late rounds are interleaved
-    in between). Middle begins immediately after the last a_to_b; late and
-    exit boundaries are still drawn at the first occurrence of those stages.
+    **last** a_to_b round (even if b_to_late / late_to_exit rounds are
+    interleaved in between). b_to_late begins immediately after the last
+    a_to_b; late_to_exit and exit boundaries are still drawn at the first
+    occurrence of those stages.
 
     Parameters
     ----------
@@ -730,7 +782,7 @@ def _split_after_last_early_round(company_funding_rows, stages):
     Returns
     -------
     tuple of (pandas.DataFrame or None)
-        ``(up_to_a, a_to_b, middle, late, exit)``. If no boundary-defining
+        ``(up_to_a, a_to_b, b_to_late, late_to_exit, exit)``. If no boundary-defining
         rounds exist but the company passed the equity gate, all rows are
         returned as the up_to_a bucket.
     """
@@ -739,14 +791,14 @@ def _split_after_last_early_round(company_funding_rows, stages):
 
     last_a_to_b = _find_last_index_at_stage(stages, "a_to_b")
     a_to_b_start_at_or_above = _find_first_index_at_or_above(stages, "a_to_b")
-    late_start = _find_first_index_at_or_above(stages, "late")
+    late_to_exit_start = _find_first_index_at_or_above(stages, "late_to_exit")
     exit_start = _find_first_index_at_or_above(stages, "exit")
 
-    # up_to_a window: rows before first a_to_b / middle / late / exit row.
+    # up_to_a window: rows before first a_to_b / b_to_late / late_to_exit / exit row.
     if a_to_b_start_at_or_above is not None:
         up_to_a_end = a_to_b_start_at_or_above - 1
-    elif late_start is not None:
-        up_to_a_end = late_start - 1
+    elif late_to_exit_start is not None:
+        up_to_a_end = late_to_exit_start - 1
     elif exit_start is not None:
         up_to_a_end = exit_start - 1
     else:
@@ -755,44 +807,45 @@ def _split_after_last_early_round(company_funding_rows, stages):
     has_up_to_a = up_to_a_end >= 0 and _has_stage_in_range(stages, "up_to_a", 0, up_to_a_end)
     up_to_a = _slice_or_none(company_funding_rows, 0, up_to_a_end) if has_up_to_a else None
 
-    # a_to_b: extends through last_a_to_b round (interleaved middle stays in a_to_b).
+    # a_to_b: extends through last_a_to_b round (interleaved b_to_late stays in a_to_b).
     if last_a_to_b is not None:
         a_to_b_start = a_to_b_start_at_or_above if has_up_to_a else 0
         a_to_b = _slice_or_none(company_funding_rows, a_to_b_start, last_a_to_b)
-        middle_start = last_a_to_b + 1
+        b_to_late_start = last_a_to_b + 1
     else:
         a_to_b = None
-        # No a_to_b stage — fall back to first-late semantics for middle.
-        first_middle = _find_first_index_at_or_above(stages, "middle")
-        middle_start = first_middle  # may be None
+        # No a_to_b stage — fall back to first-late semantics for b_to_late.
+        first_b_to_late = _find_first_index_at_or_above(stages, "b_to_late")
+        b_to_late_start = first_b_to_late  # may be None
 
-    # Middle bucket
-    if middle_start is not None and middle_start <= last_idx:
-        middle_end = last_idx
-        if late_start is not None and late_start > middle_start:
-            middle_end = late_start - 1
-        elif exit_start is not None and exit_start > middle_start:
-            middle_end = exit_start - 1
-        middle = _slice_or_none(company_funding_rows, middle_start, middle_end)
+    # b_to_late bucket
+    if b_to_late_start is not None and b_to_late_start <= last_idx:
+        b_to_late_end = last_idx
+        if late_to_exit_start is not None and late_to_exit_start > b_to_late_start:
+            b_to_late_end = late_to_exit_start - 1
+        elif exit_start is not None and exit_start > b_to_late_start:
+            b_to_late_end = exit_start - 1
+        b_to_late = _slice_or_none(company_funding_rows, b_to_late_start, b_to_late_end)
     else:
-        middle = None
+        b_to_late = None
 
-    # Late bucket
-    if late_start is not None:
-        late_end = last_idx
+    # late_to_exit bucket
+    if late_to_exit_start is not None:
+        late_to_exit_end = last_idx
         if exit_start is not None:
-            late_end = exit_start - 1
-        late = _slice_or_none(company_funding_rows, late_start, late_end)
+            late_to_exit_end = exit_start - 1
+        late_to_exit = _slice_or_none(company_funding_rows, late_to_exit_start, late_to_exit_end)
     else:
-        late = None
+        late_to_exit = None
 
     # Exit bucket
     exit = _slice_or_none(company_funding_rows, exit_start, last_idx) if exit_start is not None else None
 
-    if up_to_a is None and a_to_b is None and middle is None and late is None and exit is None:
+    if (up_to_a is None and a_to_b is None and b_to_late is None
+            and late_to_exit is None and exit is None):
         has_any_boundary = stages.notna().any()
         if not has_any_boundary:
             return company_funding_rows, None, None, None, None
         return None, None, None, None, None
 
-    return up_to_a, a_to_b, middle, late, exit
+    return up_to_a, a_to_b, b_to_late, late_to_exit, exit

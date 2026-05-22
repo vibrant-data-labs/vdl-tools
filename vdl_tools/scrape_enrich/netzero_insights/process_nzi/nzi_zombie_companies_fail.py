@@ -68,7 +68,7 @@ STAGE_FAILURE_MAP = {
         "graduation_stages": ["Late VC", "Series C"],
     },
     "Late_Exit": {
-        "at_stage_round_types": list(LATE_STAGE_TYPES) + ['Late VC'],
+        "at_stage_round_types": list(LATE_STAGE_TYPES),
         # M&A names are handled separately by `_has_successful_manda` and are
         # not in DISCLOSED_STAGES_ORDERED, so exclude them here.
         "graduation_stages": sorted(EXIT_TYPES - set(M_AND_A_NAMES)),
