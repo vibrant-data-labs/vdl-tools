@@ -24,7 +24,7 @@ def __validate_crunchbase_args(
     company_ids=None
 ):
     if not search_terms_list and not search_terms_path and not company_ids:
-        raise ValueError('Must provide either search_terms_list or search_terms_path')
+        raise ValueError('Must provide one of search_terms_list, search_terms_path, or company_ids')
 
     if search_terms_list and search_terms_path:
         raise ValueError('Cannot provide both search_terms_list and search_terms_path')
@@ -252,15 +252,17 @@ def query_crunchbase_raw_data(
         read into a list and used the same way as ``search_terms_list``.
         Mutually exclusive with ``search_terms_list``.
     filter_yr : int, optional
-        Filter the data to only include companies that were last funded in the given year.
+        Filter the data to only include companies whose ``last_funding_at`` is
+        on or after ``01/01/{filter_yr}``.
     usa_only : bool, optional
-        Filter the data to only include companies that are located in the United States.
+        Restrict results to companies with ``location_identifiers`` including
+        ``united-states``.
     active_only : bool, optional
-        Filter the data to only include companies that are operating status is 'active'.
-    force_query : bool, default False
-        Passed through to ``query_companies_extended``. When ``True``, refresh
+        Restrict results to companies whose ``operating_status`` is ``active``.
+    use_cache : bool, default True
+        Passed through to ``query_companies_extended``. When ``False``, refresh
         organization results from the API instead of reusing the query-level
-        cache where possible.
+        cache.
     save_to_uri : str | None, optional
         Optional destination URI passed through to
         ``query_companies_extended``. When provided, the raw Crunchbase result
@@ -517,7 +519,7 @@ def process_crunchbase_raw_data_from_parquet(
     filter_yr: int = 2016,
     filter_to_companies: bool = True,
     save_cleaned: bool = True,
-    cleaned_filename: str = "cb_companies_cleaned.parquet",
+    cleaned_filename: str | None = None,
     *,
     tables: dict[str, pd.DataFrame] | None = None,
     use_cache: bool = True,
@@ -532,20 +534,22 @@ def process_crunchbase_raw_data_from_parquet(
         # zero-round-trip pipeline
         raw = query_companies_extended(items_list=..., save_to_uri="s3://X")
         cleaned = process_crunchbase_raw_data_from_parquet(
-            dir_uri="s3://X",   # still needed as the save destination
-            tables=raw,         # read from memory, not S3
+            tables=raw,
+            cleaned_filename="s3://X/cb_companies_cleaned.parquet",
         )
 
         # pure reader (no prior query in this process)
-        cleaned = process_crunchbase_raw_data_from_parquet(dir_uri="s3://X")
+        cleaned = process_crunchbase_raw_data_from_parquet(
+            dir_uri="s3://X",
+            cleaned_filename="s3://X/cb_companies_cleaned.parquet",
+        )
 
     Parameters
     ----------
     dir_uri
-        URI of the directory-like container. Required when ``tables`` is not
-        provided (used as the read source) OR when ``save_cleaned=True``
-        (used as the write destination). Accepts a local directory path,
-        ``file://`` URI, or full ``s3://`` URI including bucket
+        URI of the directory-like container to read the raw tables from.
+        Required when ``tables`` is not provided. Accepts a local directory
+        path, ``file://`` URI, or full ``s3://`` URI including bucket
         (e.g. ``s3://shared-data-clone/cb_raw/fisheries``).
     tables
         Pre-loaded raw tables keyed by table name
@@ -557,13 +561,16 @@ def process_crunchbase_raw_data_from_parquet(
     filter_to_companies
         If True, restrict to companies (drop investors etc.).
     save_cleaned
-        If True (default), write the cleaned DataFrame to
-        ``{dir_uri}/{cleaned_filename}.parquet``. Pass False to skip the
-        write and only return in memory.
+        If True (default), write the cleaned DataFrame to ``cleaned_filename``.
+        Pass False to skip the write and only return in memory.
     cleaned_filename
-        Full path to the cleaned output file.
-    use_cache, cache_dir, check_remote
-        Read-cache controls, only relevant when ``tables`` is not provided.
+        Full URI to write the cleaned output file to (passed straight to
+        ``write_dataframe``). Accepts a local path, ``file://`` URI, or full
+        ``s3://`` URI. The default writes ``cb_companies_cleaned.parquet`` to
+        the current working directory — pass an explicit URI to write
+        elsewhere (e.g. ``s3://shared-data-clone/cb_raw/fisheries/cb_companies_cleaned.parquet``).
+    use_cache
+        Read-cache control, only relevant when ``tables`` is not provided.
         See :func:`load_search_results_from_parquet`.
 
     Notes
@@ -572,7 +579,8 @@ def process_crunchbase_raw_data_from_parquet(
     last writer wins. Parquet handles column/type drift between writers
     gracefully (schema is per-file), so different cleaning conventions will
     not error; they will simply overwrite each other. If your team's cleaning
-    diverges materially, use ``cleaned_filename`` to namespace your output.
+    diverges materially, use ``cleaned_filename`` to namespace your output
+    (e.g. ``s3://.../cb_companies_cleaned__zein.parquet``).
     """
     if tables is None and not dir_uri:
         raise ValueError("Must provide either tables= (in-memory) or dir_uri= (storage).")
