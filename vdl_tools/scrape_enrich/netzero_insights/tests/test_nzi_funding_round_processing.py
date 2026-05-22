@@ -208,7 +208,7 @@ def test_seed_is_early_stage():
 
 
 def test_company_starting_at_series_b():
-    """Companies with no early rounds should still get middle/late buckets."""
+    """Companies with no early rounds should still get b_to_late/late_to_exit buckets."""
     company_funding_rows = make_company_funding_rows([
         {
             "round_date_nzi": pd.Timestamp("2018-10-18"),
@@ -620,7 +620,7 @@ def test_early_to_spac_skipping_middle_and_late():
 
 def test_early_skips_to_late_with_series_c():
     """Based on Company 50: Seed/Series A/Early VC then jumps to Series C and SPAC.
-    No Series B means no middle bucket."""
+    No Series B means no b_to_late bucket."""
     company_funding_rows = make_company_funding_rows([
         {
             "round_date_nzi": pd.Timestamp("2018-02-14"),
@@ -1114,11 +1114,11 @@ def test_flatten_equity_nonequity_split_per_stage():
         == out_a["a_to_b_amount_raised"]
     )
 
-    # Company A: middle — only Series B equity, no non-equity rounds.
-    assert out_a["middle_equity_raised"] == 10_000_000
-    assert out_a["middle_nonequity_raised"] == 0.0
-    assert out_a["middle_n_rounds_nonequity"] == 0
-    assert out_a["middle_nonequity_types"] == []
+    # Company A: b_to_late — only Series B equity, no non-equity rounds.
+    assert out_a["b_to_late_equity_raised"] == 10_000_000
+    assert out_a["b_to_late_nonequity_raised"] == 0.0
+    assert out_a["b_to_late_n_rounds_nonequity"] == 0
+    assert out_a["b_to_late_nonequity_types"] == []
 
     # Company B: no up_to_a bucket. Numeric columns become NaN through the
     # DataFrame conversion (matches existing pattern for `amount_raised`);
@@ -1135,10 +1135,10 @@ def test_flatten_equity_nonequity_split_per_stage():
     assert out_b["a_to_b_n_rounds_nonequity"] == 0
     assert out_b["a_to_b_nonequity_types"] == []
 
-    # late / exit buckets do NOT get the equity-split columns.
-    for absent in ("late_equity_raised", "exit_equity_raised",
-                   "late_nonequity_raised", "exit_nonequity_raised",
-                   "late_nonequity_types", "exit_nonequity_types"):
+    # late_to_exit / exit buckets do NOT get the equity-split columns.
+    for absent in ("late_to_exit_equity_raised", "exit_equity_raised",
+                   "late_to_exit_nonequity_raised", "exit_nonequity_raised",
+                   "late_to_exit_nonequity_types", "exit_nonequity_types"):
         assert absent not in out.columns
 
 
@@ -1200,8 +1200,8 @@ def test_flatten_per_stage_investor_lists():
         {"id": 99, "name": None,           "investor_types": []},
     ]
 
-    # No middle bucket → list column stays None.
-    assert row["middle_investors"] is None
+    # No b_to_late bucket → list column stays None.
+    assert row["b_to_late_investors"] is None
 
     # Without the investor df, the column should be absent entirely.
     out_no_inv = divided_funding_rows_and_flatten(rounds, id_col="client_id_nzi")
@@ -1237,8 +1237,8 @@ def test_leading_debt_dropped_when_no_pre_seed_and_no_series_a():
     # Leading Debt is dropped — middle starts at Late VC.
     assert buckets["up_to_a"] is None
     assert buckets["a_to_b"] is None
-    assert buckets["middle"]["round_type_nzi"].tolist() == ["Late VC"]
-    assert buckets["late"] is None
+    assert buckets["b_to_late"]["round_type_nzi"].tolist() == ["Late VC"]
+    assert buckets["late_to_exit"] is None
     assert buckets["exit"] is None
 
 
@@ -1267,10 +1267,10 @@ def test_leading_debt_dropped_with_interleaved_debt_and_ipo():
     assert buckets["up_to_a"] is None
     assert buckets["a_to_b"] is None
     # Middle = Late VC + the 3 trailing Debts that fall between Late VC and IPO.
-    assert buckets["middle"]["round_type_nzi"].tolist() == [
+    assert buckets["b_to_late"]["round_type_nzi"].tolist() == [
         "Late VC", "Debt", "Debt", "Debt",
     ]
-    assert buckets["late"] is None
+    assert buckets["late_to_exit"] is None
     assert buckets["exit"]["round_type_nzi"].tolist() == ["IPO"]
 
 
@@ -1307,6 +1307,6 @@ def test_happy_path_bucket_boundaries_pre_seed_through_series_b():
 
     assert buckets["up_to_a"]["round_type_nzi"].tolist() == ["Pre-Seed", "Seed"]
     assert buckets["a_to_b"]["round_type_nzi"].tolist() == ["Series A"]
-    assert buckets["middle"]["round_type_nzi"].tolist() == ["Series B"]
-    assert buckets["late"] is None
+    assert buckets["b_to_late"]["round_type_nzi"].tolist() == ["Series B"]
+    assert buckets["late_to_exit"] is None
     assert buckets["exit"] is None

@@ -1,6 +1,5 @@
 import pandas as pd
 from vdl_tools.shared_tools.tools.text_cleaning import camel_to_snake
-from vdl_tools.scrape_enrich.netzero_insights.process_nzi.investor import INVESTOR_TYPES_TO_ADD, INVESTOR_BOOLEAN_FLAGS_TO_ADD
 
 
 
@@ -65,11 +64,22 @@ def filter_format_columns(
 def add_investor_type_flag(
     funding_round_df: pd.DataFrame,
     processed_investor_df: pd.DataFrame,
+    is_investor_type_flag_col_name: str,
     keep_suffix: str = '_nzi',
-    investor_type: str = 'Government',
 ) -> pd.DataFrame:
+    """Per round, emit ``has_<stem>_investor_calced<suffix>`` from the matching
+    per-investor ``is_<stem>_investor_calced<suffix>`` column.
 
-    investor_type_lower = investor_type.lower()
+    The column stem (e.g. ``foundation_non_profit``) is determined by what
+    `process_nzi_investors` emitted upstream; we don't need a separate
+    type-list constant here, because we read the column names off the
+    processed-investor DataFrame directly (see `process_nzi_funding_rounds`).
+    Per round: explode `roundInvestorIDs`, join to investors, sum the per-
+    investor `is_*` flag across investors in the round, set True iff > 0.
+    """
+    # Derive the matching `has_*` column name by swapping the prefix.
+    assert is_investor_type_flag_col_name.startswith('is_'), is_investor_type_flag_col_name
+    has_investor_type_flag_col_name = 'has_' + is_investor_type_flag_col_name[len('is_'):]
 
     round_id_to_investor_id = []
     for _, row in funding_round_df.iterrows():
@@ -77,9 +87,6 @@ def add_investor_type_flag(
             round_id_to_investor_id.append((row['coFundingRoundID'], investor_id))
 
     round_id_to_investor_id = pd.DataFrame(round_id_to_investor_id, columns=['coFundingRoundID', 'investorId'])
-
-    is_investor_type_flag_col_name = f'is_{investor_type_lower}_investor_calced{keep_suffix}'
-    has_investor_type_flag_col_name = f'has_{investor_type_lower}_investor_calced{keep_suffix}'
 
     round_id_to_has_investor_type_flag = (
         round_id_to_investor_id.merge(
@@ -184,13 +191,27 @@ def process_nzi_funding_rounds(
     processed_investor_df: pd.DataFrame,
     keep_suffix: str = '_nzi',
 ) -> pd.DataFrame:
+    """Emit one `has_<stem>_investor_calced_nzi` per round per investor-type
+    column found upstream.
 
-    for investor_type in INVESTOR_TYPES_TO_ADD + INVESTOR_BOOLEAN_FLAGS_TO_ADD:
+    We auto-discover the per-investor `is_*_investor_calced{keep_suffix}`
+    columns on `processed_investor_df` — those are produced by
+    `process_nzi_investors` and cover both the Excel-mapped types and the
+    boolean-flag types (`strategic`, `growthInvestor`). No separate list
+    of types is maintained at this layer, so adding a new mapped type
+    upstream automatically propagates here.
+    """
+    is_flag_suffix = f'_investor_calced{keep_suffix}'
+    is_flag_cols = [
+        c for c in processed_investor_df.columns
+        if c.startswith('is_') and c.endswith(is_flag_suffix)
+    ]
+    for is_col in is_flag_cols:
         funding_round_df = add_investor_type_flag(
             funding_round_df,
             processed_investor_df,
+            is_investor_type_flag_col_name=is_col,
             keep_suffix=keep_suffix,
-            investor_type=investor_type
         )
 
     funding_round_df = filter_format_columns(funding_round_df, keep_suffix=keep_suffix)
