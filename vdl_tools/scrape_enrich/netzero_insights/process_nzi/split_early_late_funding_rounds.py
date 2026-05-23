@@ -1,6 +1,17 @@
 import datetime as dt
 import pandas as pd
 
+from vdl_tools.scrape_enrich.netzero_insights.process_nzi.stage_constants import (
+    A_TO_B_TYPES,
+    EXIT_TYPES,
+    LATE_STAGE_TYPES,
+    MIDDLE_STAGE_TYPES,
+    SPLIT_AFTER_LAST_EARLY_ROUND,
+    SPLIT_ON_FIRST_LATE_ROUND,
+    STAGE_ORDER,
+    UP_TO_A_TYPES,
+)
+
 
 def did_raise_venture(company_funding_rows):
     """Check whether a company has raised venture (equity) funding.
@@ -17,96 +28,6 @@ def did_raise_venture(company_funding_rows):
         True if any row has ``financing_type_nzi == "Equity"``.
     """
     return "Equity" in company_funding_rows['financing_type_nzi'].values
-
-
-M_AND_A_SUCCESS_STAGE = "Series A"
-
-EARLY_VC_STAGES = [
-    "Early VC",
-    "Pre-Seed",
-    "Seed",
-    "Series A",
-]
-
-# Anything Series B or later is considered a late venture round
-LATE_VC_CUTOFF = "Series B"
-
-DISCLOSED_STAGES_ORDERED = [
-    "Accelerator/incubator",
-    "Grant",
-    "Pre-Seed",
-    "Seed",
-    "Early VC",
-    "Series A",
-    "Series B",
-    "Series C",
-    "Late VC",
-    "Series D",
-    "Series E",
-    "Series F",
-    "Series G",
-    "Series H",
-    "Series I",
-    "Series J",
-    "IPO",
-    "SPAC",
-    "Post IPO",
-    "Post IPO - Equity",
-]
-
-M_AND_A_NAMES = [
-    "Merger",
-    "Acquisition",
-    "Buyout",
-]
-
-SPLIT_ON_FIRST_LATE_ROUND = "first_late_round"
-SPLIT_AFTER_LAST_EARLY_ROUND = "after_last_early_round"
-
-
-TWO_YEARS_IN_DAYS = 365 * 2
-
-# Stage classification sets — only equity venture rounds define boundaries.
-# The pre-Series-B window is split into two finer buckets:
-#   up_to_a = rounds before the first Series A or Early VC round
-#   a_to_b  = rounds from first Series A / Early VC up to first Series B
-UP_TO_A_TYPES = {
-    "Pre-Seed",
-    "Seed",
-}
-
-A_TO_B_TYPES = {
-    "Series A",
-    "Early VC",
-}
-
-MIDDLE_STAGE_TYPES = {
-    "Series B",
-    # "Late VC",  # moved to late stage - usually follows C or is synonymous with C
-}
-
-LATE_STAGE_TYPES = {
-    "Late VC",
-    "Series C",
-    "Series D",
-    "Series E",
-    "Series F",
-    "Series G",
-    "Series H",
-    "Series I",
-    "Series J",
-    "Growth equity",
-}
-
-EXIT_TYPES = {
-    "IPO",
-    "SPAC",
-    "Post IPO",
-    "Post IPO - Equity",
-    "Merger",
-    "Acquisition",
-    "Buyout",
-}
 
 
 def _get_effective_stage(round_type):
@@ -137,9 +58,6 @@ def _get_effective_stage(round_type):
     if round_type in EXIT_TYPES:
         return "exit"
     return None
-
-
-STAGE_ORDER = {"up_to_a": 0, "a_to_b": 1, "b_to_late": 2, "late_to_exit": 3, "exit": 4}
 
 
 def raised_equity_round(company_funding_rows):

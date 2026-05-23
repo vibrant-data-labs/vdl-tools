@@ -22,64 +22,16 @@ Key inputs:
 import datetime as dt
 
 from vdl_tools.scrape_enrich.netzero_insights.process_nzi.split_early_late_funding_rounds import (
+    raised_equity_round,
+)
+from vdl_tools.scrape_enrich.netzero_insights.process_nzi.stage_constants import (
     DISCLOSED_STAGES_ORDERED,
     LATE_VC_CUTOFF,
     M_AND_A_NAMES,
     M_AND_A_SUCCESS_STAGE,
+    STAGE_FAILURE_MAP,
     TWO_YEARS_IN_DAYS,
-    raised_equity_round,
-    LATE_STAGE_TYPES,
-    EXIT_TYPES,
 )
-
-
-# ---------------------------------------------------------------------------
-# Stage mapping for failure evaluation
-# ---------------------------------------------------------------------------
-# When evaluating failure "at_stage", we need to know:
-#   - which round types count as "having reached that stage" (at_stage_round_types)
-#   - which round types prove they graduated past it (graduation_stages)
-#
-# Example: at_stage="Series A"
-#   at_stage_round_types = ["Series A", "Early VC"]
-#       → any of these mean the company was in the early stage
-#   graduation_stages = ["Series B"]
-#       → raising Series B means they succeeded past early stage
-
-STAGE_FAILURE_MAP = {
-    "Pre-Seed": {
-        "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed"],
-        "graduation_stages": ["Seed", "Series A", "Early VC"],
-    },
-    "Seed": {
-        "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed", "Seed"],
-        "graduation_stages": ["Series A", "Early VC"],
-    },
-    "Series A": {
-        "at_stage_round_types": ["Series A", "Early VC"],
-        "graduation_stages": ["Series B"],
-    },
-    "Early VC": {
-        "at_stage_round_types": ["Series A", "Early VC", "Accelerator/incubator", "Grant", "Pre-Seed", "Seed"],
-        "graduation_stages": ["Series B"],
-    },
-    "Series B": {
-        "at_stage_round_types": ["Series B"],
-        "graduation_stages": ["Late VC", "Series C"],
-    },
-    "Late_Exit": {
-        "at_stage_round_types": list(LATE_STAGE_TYPES),
-        # M&A names are handled separately by `_has_successful_manda` and are
-        # not in DISCLOSED_STAGES_ORDERED, so exclude them here.
-        "graduation_stages": sorted(EXIT_TYPES - set(M_AND_A_NAMES)),
-    },
-    "Seed_Exit": {
-        "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed", "Seed"],
-        # M&A names are handled separately by `_has_successful_manda` and are
-        # not in DISCLOSED_STAGES_ORDERED, so exclude them here.
-        "graduation_stages": sorted(EXIT_TYPES - set(M_AND_A_NAMES)),
-    },
-}
 
 
 def _get_graduation_and_later_stages(graduation_stages, late_venture_cutoff):

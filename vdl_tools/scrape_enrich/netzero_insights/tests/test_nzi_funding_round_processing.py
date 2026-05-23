@@ -1,10 +1,12 @@
 import pandas as pd
 
 from vdl_tools.scrape_enrich.netzero_insights.process_nzi.split_early_late_funding_rounds import (
-    SPLIT_AFTER_LAST_EARLY_ROUND,
-    SPLIT_ON_FIRST_LATE_ROUND,
     divide_funding_rows,
     divided_funding_rows_and_flatten,
+)
+from vdl_tools.scrape_enrich.netzero_insights.process_nzi.stage_constants import (
+    SPLIT_AFTER_LAST_EARLY_ROUND,
+    SPLIT_ON_FIRST_LATE_ROUND,
 )
 
 

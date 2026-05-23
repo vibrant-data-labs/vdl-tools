@@ -8,7 +8,6 @@ import pandas as pd
 import pytest
 
 from vdl_tools.scrape_enrich.netzero_insights.process_nzi.nzi_survival_rates import (
-    NZI_SURVIVAL_STAGES,
     _classify_company_current_stage,
     _precompute_company_classifications,
     _aggregate_from_precomputed,
@@ -18,6 +17,9 @@ from vdl_tools.scrape_enrich.netzero_insights.process_nzi.nzi_survival_rates imp
     calculate_failure_rate,
     calculate_expected_survivals,
     compare_survival_rates,
+)
+from vdl_tools.scrape_enrich.netzero_insights.process_nzi.stage_constants import (
+    NZI_SURVIVAL_STAGES,
 )
 
 

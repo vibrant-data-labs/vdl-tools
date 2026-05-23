@@ -14,33 +14,22 @@ import numpy as np
 import pandas as pd
 
 from vdl_tools.scrape_enrich.netzero_insights.process_nzi.nzi_zombie_companies_fail import (
-    STAGE_FAILURE_MAP,
     did_company_fail,
     did_company_succeed,
 )
-from vdl_tools.scrape_enrich.netzero_insights.process_nzi.split_early_late_funding_rounds import (
+from vdl_tools.scrape_enrich.netzero_insights.process_nzi.stage_constants import (
+    A_TO_B_TYPES,
     EXIT_TYPES,
     LATE_STAGE_TYPES,
     LATE_VC_CUTOFF,
     M_AND_A_SUCCESS_STAGE,
     MIDDLE_STAGE_TYPES,
+    NZI_SURVIVAL_STAGES,
+    SEED_COHORT_TYPES,
+    STAGE_FAILURE_MAP,
     TWO_YEARS_IN_DAYS,
 )
 from vdl_tools.shared_tools.funding_calcations import create_plot_get_metrics
-
-# Stages evaluated in the survival pipeline (maps to CB's seed → series_a → late_venture).
-# Each stage uses STAGE_FAILURE_MAP[<stage>]["at_stage_round_types"] as the
-# membership gate: a company is only in a stage's cohort if it actually had
-# a round of one of those types. With "Series A" (rather than "Early VC"),
-# only companies that raised a Series A or Early VC round count as A-stage
-# members — seed-only companies are excluded from `series_a_*` flags.
-NZI_SURVIVAL_STAGES = ["Seed", "Series A", "Series B"]
-
-# Round types that count as being at "seed" level for cohort classification
-_SEED_LEVEL_TYPES = {"Accelerator/incubator", "Grant", "Pre-Seed", "Seed"}
-
-# Round types that indicate early VC level (Series A / Early VC)
-_EARLY_VC_LEVEL_TYPES = {"Series A", "Early VC"}
 
 
 # ---------------------------------------------------------------------------
@@ -52,8 +41,7 @@ def _classify_company_current_stage(company_funding_rows):
 
     Examines the ``round_type_nzi`` values in the company's funding rounds
     and returns the highest stage bucket the company has reached, using
-    the module-level ``_SEED_LEVEL_TYPES``, ``_EARLY_VC_LEVEL_TYPES``, and
-    the stage sets from ``split_early_late_funding_rounds``.
+    the stage sets from ``stage_constants``.
 
     Parameters
     ----------
@@ -75,9 +63,9 @@ def _classify_company_current_stage(company_funding_rows):
 
     if round_types & (MIDDLE_STAGE_TYPES | LATE_STAGE_TYPES | EXIT_TYPES):
         return "series_b+"
-    if round_types & _EARLY_VC_LEVEL_TYPES:
+    if round_types & A_TO_B_TYPES:
         return "early_vc"
-    if round_types & _SEED_LEVEL_TYPES:
+    if round_types & SEED_COHORT_TYPES:
         return "seed"
     return None
 
