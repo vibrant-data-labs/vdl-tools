@@ -591,6 +591,10 @@ def run_pipeline(
             use_cached_results=True,
             max_workers=max_workers,
             force_parents=True,
+            add_intersectional=False,
+            add_falsesolns=False,
+            add_levers_of_change=False,
+            run_primary_category_selection=False,
         )
 
     # PROCESS DIVERSITY TAGS
