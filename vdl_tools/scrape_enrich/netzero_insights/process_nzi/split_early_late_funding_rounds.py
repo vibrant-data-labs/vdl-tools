@@ -12,6 +12,15 @@ from vdl_tools.scrape_enrich.netzero_insights.process_nzi.stage_constants import
     UP_TO_A_TYPES,
 )
 
+# Buckets that get per-investor-type count columns. ("exit" is excluded)
+INVESTOR_COUNT_BUCKETS = {"up_to_a", "a_to_b", "b_to_late", "late_to_exit"}
+
+# Buckets that get equity / non-equity split columns. ("exit" is excluded)
+EQUITY_SPLIT_BUCKETS = {"up_to_a", "a_to_b", "b_to_late", "late_to_exit"}
+
+# Buckets that get a per-stage `{stage}_investors` list-of-dicts column.
+INVESTOR_LIST_BUCKETS = {"up_to_a", "a_to_b", "b_to_late", "late_to_exit"}
+
 
 def did_raise_venture(company_funding_rows):
     """Check whether a company has raised venture (equity) funding.
@@ -163,18 +172,6 @@ def divide_funding_rows(
         "late_to_exit":    split[3],
         "exit":    split[4],
     }
-
-# Buckets that get per-investor-type count columns. Pre-Series-B funding is
-# the analytical focus, so we count investors in the two pre-B buckets plus
-# `b_to_late` (so callers can study Series-B-stage investors as well).
-INVESTOR_COUNT_BUCKETS = {"up_to_a", "a_to_b", "b_to_late"}
-
-# Buckets that get equity / non-equity split columns. Same pre-B focus as
-# INVESTOR_COUNT_BUCKETS — late_to_exit and exit are excluded.
-EQUITY_SPLIT_BUCKETS = {"up_to_a", "a_to_b", "b_to_late"}
-
-# Buckets that get a per-stage `{stage}_investors` list-of-dicts column.
-INVESTOR_LIST_BUCKETS = {"up_to_a", "a_to_b", "b_to_late"}
 
 
 def _collect_investor_types(primary, secondary):

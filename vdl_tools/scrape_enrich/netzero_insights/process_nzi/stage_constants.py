@@ -154,9 +154,8 @@ SPLIT_AFTER_LAST_EARLY_ROUND = "after_last_early_round"
 # ---------------------------------------------------------------------------
 # 7. Timing thresholds
 # ---------------------------------------------------------------------------
-# A company with no funding for this many days is flagged as a "zombie"
-# (stale) failure by `did_company_fail`. Also used downstream in
-# elemental-catalytic-capital as the OUTLIER_TIME cutoff.
+# A company with no funding for this many days is flagged as a "zombie" (stale) failure by `did_company_fail`.
+# Also used downstream in elemental-catalytic-capital as the OUTLIER_TIME cutoff.
 TWO_YEARS_IN_DAYS = 365 * 2
 
 
