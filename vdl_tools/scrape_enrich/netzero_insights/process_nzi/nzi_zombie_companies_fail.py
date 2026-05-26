@@ -74,9 +74,14 @@ def _get_graduation_and_later_stages(graduation_stages, late_venture_cutoff):
         Stage names that define the graduation threshold (e.g. ``["Series B"]``).
         Must all be present in ``DISCLOSED_STAGES_ORDERED``.
     late_venture_cutoff : str
-        The stage at or after which rounds are considered "late venture".
-        Used to decide whether the ``"Late VC"`` / ``"Growth equity"`` aliases
-        should be included.  Comes from ``stage_constants.LATE_VC_CUTOFF``.
+        Graduation-set inclusion floor: if ``graduation_stages`` overlaps the
+        slice ``DISCLOSED_STAGES_ORDERED[idx(late_venture_cutoff):]``, the
+        catch-all ``"Late VC"`` / ``"Growth equity"`` labels are appended.
+        Comes from ``stage_constants.LATE_VC_CUTOFF`` (default ``"Series B"``).
+        Despite the name, this is NOT a taxonomic definition of "where late
+        venture begins" — it's the threshold at which a cohort's graduation
+        set should include late-VC catch-alls. See ``stage_constants.py`` for
+        the contrast with ``MIDDLE_STAGE_TYPES``.
 
     Returns
     -------

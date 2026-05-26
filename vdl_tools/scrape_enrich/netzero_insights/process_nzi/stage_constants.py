@@ -124,7 +124,29 @@ EXIT_TYPES = {
 # ---------------------------------------------------------------------------
 # 4. Stage boundaries
 # ---------------------------------------------------------------------------
-# Anything Series B or later is considered a late venture round.
+# Graduation-set inclusion floor used by ``_get_graduation_and_later_stages``
+# in ``nzi_zombie_companies_fail.py``: if a cohort's ``graduation_stages``
+# overlap the slice ``DISCLOSED_STAGES_ORDERED[idx(LATE_VC_CUTOFF):]``, the
+# catch-all venture labels ``"Late VC"`` and ``"Growth equity"`` are appended
+# to the graduation set. Set to ``"Series B"`` so that a Series A cohort
+# (graduation_stages = ["Series B"]) sweeps in those catch-alls — a company
+# with ``[Series A → Late VC]`` or ``[Series A → Growth equity]`` then
+# correctly counts as graduated past Series A.
+#
+# NOTE: do NOT confuse this with ``MIDDLE_STAGE_TYPES = {"Series B"}`` (which
+# answers a different question: what BUCKET does a Series B round land in?
+# Answer: the middle / b_to_late bucket, not a late one). The two constants
+# encode different decisions:
+#
+#   - ``MIDDLE_STAGE_TYPES`` is taxonomic: where does Series B sit in the
+#     funding-round bucket ordering? Middle.
+#   - ``LATE_VC_CUTOFF`` is a graduation-set trigger threshold: at which
+#     graduation level should we start treating Late VC / Growth equity as
+#     plausible graduation outcomes? Series B graduation → yes.
+#
+# Both are correct for what they're asking. Renaming has been discussed but
+# left for a wider naming pass to avoid ripple through three modules; the
+# docstring here is the authoritative description of the constant's role.
 LATE_VC_CUTOFF = "Series B"
 
 # Earliest stage at which an M&A event counts as a success rather than an
