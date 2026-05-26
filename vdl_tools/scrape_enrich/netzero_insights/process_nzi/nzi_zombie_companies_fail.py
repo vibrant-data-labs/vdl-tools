@@ -26,6 +26,7 @@ from vdl_tools.scrape_enrich.netzero_insights.process_nzi.split_early_late_fundi
 )
 from vdl_tools.scrape_enrich.netzero_insights.process_nzi.stage_constants import (
     DISCLOSED_STAGES_ORDERED,
+    EXIT_TYPES,
     LATE_VC_CUTOFF,
     M_AND_A_NAMES,
     M_AND_A_SUCCESS_STAGE,
@@ -54,6 +55,19 @@ def _get_graduation_and_later_stages(graduation_stages, late_venture_cutoff):
         (sometimes alone, sometimes after Series A/B/C). Treated as graduation
         anywhere late venture or Series A+ would count.
 
+    Exit-cohort suppression
+    -----------------------
+    When ``graduation_stages`` consists entirely of exit types (IPO / SPAC /
+    Post IPO / Post IPO - Equity), as for the ``Late_Exit`` and ``Seed_Exit``
+    cohorts, NO catch-all is appended. Late VC and Growth equity are
+    late-venture rounds, not exits — appending them to the graduation set of
+    an exit cohort would silently classify any company that raised a late
+    venture round (without actually exiting) as "succeeded at exit", inflating
+    the Late_Exit / Seed_Exit success rate. The IPO / M&A paths in
+    ``did_company_succeed`` handle real exits separately; the suppression here
+    just keeps the catch-all auto-append from over-extending the graduation
+    set for cohorts whose graduation is genuinely "did they exit?".
+
     Parameters
     ----------
     graduation_stages : list[str]
@@ -69,17 +83,25 @@ def _get_graduation_and_later_stages(graduation_stages, late_venture_cutoff):
     list[str]
         All stage names at or after the earliest graduation stage, potentially
         with one or more of ``"Late VC"``, ``"Growth equity"``, ``"Early VC"``
-        appended.
+        appended (none appended for exit cohorts).
 
     Examples
     --------
     >>> _get_graduation_and_later_stages(["Series B"], "Series B")
     ["Series B", "Series C", ..., "Post IPO - Equity", "Late VC", "Growth equity"]
+    >>> _get_graduation_and_later_stages(
+    ...     ["IPO", "Post IPO", "Post IPO - Equity", "SPAC"], "Series B")
+    ["IPO", "SPAC", "Post IPO", "Post IPO - Equity"]   # NO catch-all
     """
     earliest_graduation_idx = min(
         DISCLOSED_STAGES_ORDERED.index(stage) for stage in graduation_stages
     )
     stages_at_or_after = DISCLOSED_STAGES_ORDERED[earliest_graduation_idx:]
+
+    # Suppress the catch-all auto-append for exit cohorts (Late_Exit, Seed_Exit).
+    # See the "Exit-cohort suppression" section in the docstring for why.
+    if set(graduation_stages).issubset(set(EXIT_TYPES)):
+        return stages_at_or_after
 
     late_venture_stages = DISCLOSED_STAGES_ORDERED[
         DISCLOSED_STAGES_ORDERED.index(late_venture_cutoff):

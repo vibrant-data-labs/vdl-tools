@@ -347,17 +347,23 @@ class TestGetGraduationAndLaterStages:
         assert "Early VC" in result
         assert "Growth equity" in result   # new
 
-    def test_exit_graduation_still_includes_late_vc_and_growth_equity(self):
-        # Late_Exit's threshold = exit types. Late VC and Growth equity are
-        # still appended (the auto-append fires whenever graduation overlaps
-        # late_venture_stages). Note: this is a known over-inclusion for the
-        # Late_Exit cohort that flags as a separate cleanup.
+    def test_exit_graduation_suppresses_catch_all_auto_append(self):
+        # Late_Exit / Seed_Exit graduation = exit types only. NO catch-all
+        # auto-append should fire — Late VC and Growth equity are late-venture
+        # rounds, not exits. Appending them to an exit-cohort graduation set
+        # would silently classify late-venture companies that never actually
+        # exited as "succeeded at exit". The auto-append suppression keeps the
+        # graduation set strictly exit-typed.
         result = _get_graduation_and_later_stages(
             ["IPO", "Post IPO", "Post IPO - Equity", "SPAC"], "Series B",
         )
         assert "IPO" in result
-        assert "Late VC" in result
-        assert "Growth equity" in result
+        assert "SPAC" in result
+        assert "Post IPO" in result
+        assert "Post IPO - Equity" in result
+        assert "Late VC" not in result
+        assert "Growth equity" not in result
+        assert "Early VC" not in result
 
 
 # ===========================================================================
