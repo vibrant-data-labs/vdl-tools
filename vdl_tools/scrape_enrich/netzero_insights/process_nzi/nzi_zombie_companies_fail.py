@@ -39,9 +39,20 @@ def _get_graduation_and_later_stages(graduation_stages, late_venture_cutoff):
 
     Given a list of graduation stages, returns those stages plus every stage
     that comes after them in ``DISCLOSED_STAGES_ORDERED``.  Also appends the
-    catch-all labels ``"Late VC"`` or ``"Early VC"`` when the graduation
-    threshold overlaps their range, since those labels are not part of the
-    natural ordering but can appear in funding round data.
+    catch-all labels ``"Late VC"``, ``"Growth equity"``, or ``"Early VC"`` when
+    the graduation threshold overlaps their range, since those labels are not
+    part of the natural ordering but can appear in funding round data.
+
+    Empirical context for the catch-alls:
+
+      - ``"Early VC"`` ≈ Series A: NZI uses them interchangeably for the same
+        funding event (see Elemental skill's gotcha #1).
+      - ``"Late VC"`` ≈ Series C+ without a specific letter; almost always
+        appears alongside at least one numbered late series.
+      - ``"Growth equity"`` is structurally different — large equity infusion
+        for a growth-stage company, used across many funnel positions
+        (sometimes alone, sometimes after Series A/B/C). Treated as graduation
+        anywhere late venture or Series A+ would count.
 
     Parameters
     ----------
@@ -50,19 +61,20 @@ def _get_graduation_and_later_stages(graduation_stages, late_venture_cutoff):
         Must all be present in ``DISCLOSED_STAGES_ORDERED``.
     late_venture_cutoff : str
         The stage at or after which rounds are considered "late venture".
-        Used to decide whether the ``"Late VC"`` alias should be included.
-        Comes from ``split_early_late_funding_rounds.LATE_VC_CUTOFF``.
+        Used to decide whether the ``"Late VC"`` / ``"Growth equity"`` aliases
+        should be included.  Comes from ``stage_constants.LATE_VC_CUTOFF``.
 
     Returns
     -------
     list[str]
         All stage names at or after the earliest graduation stage, potentially
-        with ``"Late VC"`` or ``"Early VC"`` appended.
+        with one or more of ``"Late VC"``, ``"Growth equity"``, ``"Early VC"``
+        appended.
 
     Examples
     --------
     >>> _get_graduation_and_later_stages(["Series B"], "Series B")
-    ["Series B", "Series C", ..., "Post IPO - Equity", "Late VC"]
+    ["Series B", "Series C", ..., "Post IPO - Equity", "Late VC", "Growth equity"]
     """
     earliest_graduation_idx = min(
         DISCLOSED_STAGES_ORDERED.index(stage) for stage in graduation_stages
@@ -73,12 +85,16 @@ def _get_graduation_and_later_stages(graduation_stages, late_venture_cutoff):
         DISCLOSED_STAGES_ORDERED.index(late_venture_cutoff):
     ]
 
-    # "Late VC" and "Early VC" are catch-all labels not in DISCLOSED_STAGES_ORDERED's
-    # natural position — include them when the graduation threshold overlaps their range
+    # ``Late VC`` / ``Growth equity`` / ``Early VC`` are catch-all labels not in
+    # DISCLOSED_STAGES_ORDERED's natural position — include them when the
+    # graduation threshold overlaps their range. ``Growth equity`` is appended
+    # wherever ``Late VC`` would be (it's a late-stage equity instrument, see
+    # docstring), so that a company with [Series A, Growth equity] correctly
+    # counts as graduated past Series A.
     if set(graduation_stages).intersection(late_venture_stages):
-        return stages_at_or_after + ["Late VC"]
+        return stages_at_or_after + ["Late VC", "Growth equity"]
     if set(graduation_stages).intersection(["Series A", "Early VC"]):
-        return stages_at_or_after + ["Early VC"]
+        return stages_at_or_after + ["Early VC", "Growth equity"]
 
     return stages_at_or_after
 
