@@ -387,6 +387,28 @@ def has_any_matches(matches: dict[str, list[tuple[str, str]]]) -> bool:
 # Judge call
 # ---------------------------------------------------------------------------
 
+#: Per-match taxonomy-definition truncation cap (characters). Definitions
+#: longer than this are truncated with an ellipsis before being shown to
+#: the judge. The cap exists for two reasons:
+#:
+#:   (1) Token-budget hygiene. A multi-match judge call shows N definitions
+#:       in one prompt; without a cap a single 6K-char definition can
+#:       dominate the prompt.
+#:   (2) Attention discipline. LLMs attend disproportionately to early
+#:       tokens in any document. A hard cap forces taxonomy authors to
+#:       put load-bearing content (scope, exclusionary rules, sibling-
+#:       disambiguation) at the FRONT of each ``expanded_definition``.
+#:
+#: Raised from the original 600 to 1500 (May 2026): with modern context
+#: windows the budget argument is largely obsolete, and 1500 chars
+#: comfortably covers a node's opening scope statement plus one or two
+#: supporting paragraphs of detail. The attention-discipline argument
+#: still applies — load-bearing content should still live in the first
+#: ~1000 chars regardless of the cap, since that is where effective
+#: attention reliably holds.
+DEFINITION_TRUNCATE_CHARS = 1500
+
+
 def _format_method_block(matches: dict[str, list[tuple[str, str]]]) -> str:
     lines: list[str] = []
     for label, items in matches.items():
@@ -394,10 +416,8 @@ def _format_method_block(matches: dict[str, list[tuple[str, str]]]) -> str:
             continue
         lines.append(f"  {label}:")
         for name, defn in items:
-            # Cap definition length so we don't blow the prompt budget
-            # on very long taxonomy text.
-            if len(defn) > 600:
-                defn = defn[:600] + "..."
+            if len(defn) > DEFINITION_TRUNCATE_CHARS:
+                defn = defn[:DEFINITION_TRUNCATE_CHARS] + "..."
             lines.append(f"    - {name}: {defn}")
     return "\n".join(lines) if lines else "  (no matches)"
 

@@ -471,12 +471,22 @@ silently degrades downstream classification. The third check in
 revision passes that respect a `cohesion_blocker` field refuse to
 auto-glue rather than producing a confused parent.
 
-**Mind the truncation cap.** The judge truncates each definition at
-600 characters when scoring matches. If you're encoding per-node
-scope in the taxonomy, make sure the load-bearing scope text lands
-in the first ~600 chars of the expanded definition — don't bury an
-exclusionary rule or a dual-scope statement past the cap, or the
-judge will score against the unrevised opening.
+**Front-load the load-bearing scope content.** The judge truncates
+each per-match taxonomy definition at `DEFINITION_TRUNCATE_CHARS`
+(currently 1500 chars; see
+`hierarchical_taxonomy_judge.py`) when assembling its prompt. The
+cap was originally 600, raised in May 2026 because modern context
+windows make the token-budget rationale obsolete. The attention-
+discipline rationale still applies: LLMs attend disproportionately
+to early tokens in any document, so even with a generous cap,
+load-bearing content (positive scope, exclusionary rules, sibling-
+disambiguation) should live in the **first ~1000 characters** of
+the `expanded_definition`. Don't bury an exclusionary rule or a
+dual-scope statement deep in the body — it will technically fit
+within the cap but the judge's effective attention may not reach
+it. (See Lessons #3 and the L&SM / Traditional Schools cases
+above for what happens when load-bearing content sits past the
+effective-attention boundary.)
 
 **Read-only taxonomies.** When you cannot edit the taxonomy (third-
 party reference framework, frozen domain-authority definitions),

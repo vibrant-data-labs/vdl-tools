@@ -110,7 +110,7 @@ def _find_companion_paths(scored_path: Path) -> tuple[Path | None, Path | None, 
 # Possible id / name column names across the four known projects.
 # Listed in priority order — first match wins.
 ID_COL_CANDIDATES = ("uid", "abstract_id")
-NAME_COL_CANDIDATES = ("Name", "title")
+NAME_COL_CANDIDATES = ("Name", "title", "profile_name")
 DESCRIPTION_COL_CANDIDATES = ("Description", "abstract")
 
 
@@ -656,6 +656,7 @@ def build_report(
             "qualifier-lock violations; `uses_not_provides` indicates "
             "the user-vs-provider conflation pattern._\n"
         )
+
 
     # ----- Section 5b: Failure-reason clustering for weak -----
     parts.append("## 5b. Failure-reason clustering (weak matches)\n")
