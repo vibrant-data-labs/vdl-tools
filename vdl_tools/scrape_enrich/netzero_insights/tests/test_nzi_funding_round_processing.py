@@ -1,10 +1,12 @@
 import pandas as pd
 
 from vdl_tools.scrape_enrich.netzero_insights.process_nzi.split_early_late_funding_rounds import (
-    SPLIT_AFTER_LAST_EARLY_ROUND,
-    SPLIT_ON_FIRST_LATE_ROUND,
     divide_funding_rows,
     divided_funding_rows_and_flatten,
+)
+from vdl_tools.scrape_enrich.netzero_insights.process_nzi.stage_constants import (
+    SPLIT_AFTER_LAST_EARLY_ROUND,
+    SPLIT_ON_FIRST_LATE_ROUND,
 )
 
 
@@ -1135,10 +1137,12 @@ def test_flatten_equity_nonequity_split_per_stage():
     assert out_b["a_to_b_n_rounds_nonequity"] == 0
     assert out_b["a_to_b_nonequity_types"] == []
 
-    # late_to_exit / exit buckets do NOT get the equity-split columns.
-    for absent in ("late_to_exit_equity_raised", "exit_equity_raised",
-                   "late_to_exit_nonequity_raised", "exit_nonequity_raised",
-                   "late_to_exit_nonequity_types", "exit_nonequity_types"):
+    # ``late_to_exit`` now gets the per-financing-type breakdown (it's in
+    # PERIODS_WITH_FINANCING_TYPE_COLS); ``exit`` remains intentionally narrow.
+    for present in ("late_to_exit_equity_raised", "late_to_exit_nonequity_raised",
+                    "late_to_exit_nonequity_types"):
+        assert present in out.columns
+    for absent in ("exit_equity_raised", "exit_nonequity_raised", "exit_nonequity_types"):
         assert absent not in out.columns
 
 

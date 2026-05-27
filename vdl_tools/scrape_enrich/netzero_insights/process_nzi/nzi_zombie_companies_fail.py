@@ -22,64 +22,17 @@ Key inputs:
 import datetime as dt
 
 from vdl_tools.scrape_enrich.netzero_insights.process_nzi.split_early_late_funding_rounds import (
+    raised_equity_round,
+)
+from vdl_tools.scrape_enrich.netzero_insights.process_nzi.stage_constants import (
     DISCLOSED_STAGES_ORDERED,
+    EXIT_TYPES,
     LATE_VC_CUTOFF,
     M_AND_A_NAMES,
     M_AND_A_SUCCESS_STAGE,
+    STAGE_FAILURE_MAP,
     TWO_YEARS_IN_DAYS,
-    raised_equity_round,
-    LATE_STAGE_TYPES,
-    EXIT_TYPES,
 )
-
-
-# ---------------------------------------------------------------------------
-# Stage mapping for failure evaluation
-# ---------------------------------------------------------------------------
-# When evaluating failure "at_stage", we need to know:
-#   - which round types count as "having reached that stage" (at_stage_round_types)
-#   - which round types prove they graduated past it (graduation_stages)
-#
-# Example: at_stage="Series A"
-#   at_stage_round_types = ["Series A", "Early VC"]
-#       → any of these mean the company was in the early stage
-#   graduation_stages = ["Series B"]
-#       → raising Series B means they succeeded past early stage
-
-STAGE_FAILURE_MAP = {
-    "Pre-Seed": {
-        "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed"],
-        "graduation_stages": ["Seed", "Series A", "Early VC"],
-    },
-    "Seed": {
-        "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed", "Seed"],
-        "graduation_stages": ["Series A", "Early VC"],
-    },
-    "Series A": {
-        "at_stage_round_types": ["Series A", "Early VC"],
-        "graduation_stages": ["Series B"],
-    },
-    "Early VC": {
-        "at_stage_round_types": ["Series A", "Early VC", "Accelerator/incubator", "Grant", "Pre-Seed", "Seed"],
-        "graduation_stages": ["Series B"],
-    },
-    "Series B": {
-        "at_stage_round_types": ["Series B"],
-        "graduation_stages": ["Late VC", "Series C"],
-    },
-    "Late_Exit": {
-        "at_stage_round_types": list(LATE_STAGE_TYPES),
-        # M&A names are handled separately by `_has_successful_manda` and are
-        # not in DISCLOSED_STAGES_ORDERED, so exclude them here.
-        "graduation_stages": sorted(EXIT_TYPES - set(M_AND_A_NAMES)),
-    },
-    "Seed_Exit": {
-        "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed", "Seed"],
-        # M&A names are handled separately by `_has_successful_manda` and are
-        # not in DISCLOSED_STAGES_ORDERED, so exclude them here.
-        "graduation_stages": sorted(EXIT_TYPES - set(M_AND_A_NAMES)),
-    },
-}
 
 
 def _get_graduation_and_later_stages(graduation_stages, late_venture_cutoff):
@@ -87,9 +40,33 @@ def _get_graduation_and_later_stages(graduation_stages, late_venture_cutoff):
 
     Given a list of graduation stages, returns those stages plus every stage
     that comes after them in ``DISCLOSED_STAGES_ORDERED``.  Also appends the
-    catch-all labels ``"Late VC"`` or ``"Early VC"`` when the graduation
-    threshold overlaps their range, since those labels are not part of the
-    natural ordering but can appear in funding round data.
+    catch-all labels ``"Late VC"``, ``"Growth equity"``, or ``"Early VC"`` when
+    the graduation threshold overlaps their range, since those labels are not
+    part of the natural ordering but can appear in funding round data.
+
+    Empirical context for the catch-alls:
+
+      - ``"Early VC"`` ≈ Series A: NZI uses them interchangeably for the same
+        funding event (see Elemental skill's gotcha #1).
+      - ``"Late VC"`` ≈ Series C+ without a specific letter; almost always
+        appears alongside at least one numbered late series.
+      - ``"Growth equity"`` is structurally different — large equity infusion
+        for a growth-stage company, used across many funnel positions
+        (sometimes alone, sometimes after Series A/B/C). Treated as graduation
+        anywhere late venture or Series A+ would count.
+
+    Exit-cohort suppression
+    -----------------------
+    When ``graduation_stages`` consists entirely of exit types (IPO / SPAC /
+    Post IPO / Post IPO - Equity), as for the ``Late_Exit`` and ``Seed_Exit``
+    cohorts, NO catch-all is appended. Late VC and Growth equity are
+    late-venture rounds, not exits — appending them to the graduation set of
+    an exit cohort would silently classify any company that raised a late
+    venture round (without actually exiting) as "succeeded at exit", inflating
+    the Late_Exit / Seed_Exit success rate. The IPO / M&A paths in
+    ``did_company_succeed`` handle real exits separately; the suppression here
+    just keeps the catch-all auto-append from over-extending the graduation
+    set for cohorts whose graduation is genuinely "did they exit?".
 
     Parameters
     ----------
@@ -97,36 +74,54 @@ def _get_graduation_and_later_stages(graduation_stages, late_venture_cutoff):
         Stage names that define the graduation threshold (e.g. ``["Series B"]``).
         Must all be present in ``DISCLOSED_STAGES_ORDERED``.
     late_venture_cutoff : str
-        The stage at or after which rounds are considered "late venture".
-        Used to decide whether the ``"Late VC"`` alias should be included.
-        Comes from ``split_early_late_funding_rounds.LATE_VC_CUTOFF``.
+        Graduation-set inclusion floor: if ``graduation_stages`` overlaps the
+        slice ``DISCLOSED_STAGES_ORDERED[idx(late_venture_cutoff):]``, the
+        catch-all ``"Late VC"`` / ``"Growth equity"`` labels are appended.
+        Comes from ``stage_constants.LATE_VC_CUTOFF`` (default ``"Series B"``).
+        Despite the name, this is NOT a taxonomic definition of "where late
+        venture begins" — it's the threshold at which a cohort's graduation
+        set should include late-VC catch-alls. See ``stage_constants.py`` for
+        the contrast with ``MIDDLE_STAGE_TYPES``.
 
     Returns
     -------
     list[str]
         All stage names at or after the earliest graduation stage, potentially
-        with ``"Late VC"`` or ``"Early VC"`` appended.
+        with one or more of ``"Late VC"``, ``"Growth equity"``, ``"Early VC"``
+        appended (none appended for exit cohorts).
 
     Examples
     --------
     >>> _get_graduation_and_later_stages(["Series B"], "Series B")
-    ["Series B", "Series C", ..., "Post IPO - Equity", "Late VC"]
+    ["Series B", "Series C", ..., "Post IPO - Equity", "Late VC", "Growth equity"]
+    >>> _get_graduation_and_later_stages(
+    ...     ["IPO", "Post IPO", "Post IPO - Equity", "SPAC"], "Series B")
+    ["IPO", "SPAC", "Post IPO", "Post IPO - Equity"]   # NO catch-all
     """
     earliest_graduation_idx = min(
         DISCLOSED_STAGES_ORDERED.index(stage) for stage in graduation_stages
     )
     stages_at_or_after = DISCLOSED_STAGES_ORDERED[earliest_graduation_idx:]
 
+    # Suppress the catch-all auto-append for exit cohorts (Late_Exit, Seed_Exit).
+    # See the "Exit-cohort suppression" section in the docstring for why.
+    if set(graduation_stages).issubset(set(EXIT_TYPES)):
+        return stages_at_or_after
+
     late_venture_stages = DISCLOSED_STAGES_ORDERED[
         DISCLOSED_STAGES_ORDERED.index(late_venture_cutoff):
     ]
 
-    # "Late VC" and "Early VC" are catch-all labels not in DISCLOSED_STAGES_ORDERED's
-    # natural position — include them when the graduation threshold overlaps their range
+    # ``Late VC`` / ``Growth equity`` / ``Early VC`` are catch-all labels not in
+    # DISCLOSED_STAGES_ORDERED's natural position — include them when the
+    # graduation threshold overlaps their range. ``Growth equity`` is appended
+    # wherever ``Late VC`` would be (it's a late-stage equity instrument, see
+    # docstring), so that a company with [Series A, Growth equity] correctly
+    # counts as graduated past Series A.
     if set(graduation_stages).intersection(late_venture_stages):
-        return stages_at_or_after + ["Late VC"]
+        return stages_at_or_after + ["Late VC", "Growth equity"]
     if set(graduation_stages).intersection(["Series A", "Early VC"]):
-        return stages_at_or_after + ["Early VC"]
+        return stages_at_or_after + ["Early VC", "Growth equity"]
 
     return stages_at_or_after
 
