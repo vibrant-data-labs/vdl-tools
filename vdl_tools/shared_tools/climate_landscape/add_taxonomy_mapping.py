@@ -542,10 +542,10 @@ def add_one_earth_taxonomy(
     paths=None,
     max_workers=3,
     force_parents=True,
-    add_intersectional=True,
-    add_falsesolns=True,
+    add_intersectional=False,
+    add_falsesolns=False,
     add_geo_engineering=False,
-    add_levers_of_change=True,
+    add_levers_of_change=False,
     mapping_name="one_earth_category",
     taxonomy_path=None,
     oe_solution_textattr='Definition',  # or "ExpandedText"

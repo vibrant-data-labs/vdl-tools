@@ -273,6 +273,9 @@ def prepare_for_relevance_model(df, max_workers=MAX_WORKERS, description_col='De
 
     # TO DO: Fix what happens when there is no website text
     # LinkedIn text? 990?
+
+    logger.info(f"Dropping organizations with missing descriptions: {df['text_for_relevance_model'].isnull().sum()}")
+    df = df[df['text_for_relevance_model'].notnull()].copy()
     return df
 
 
@@ -451,7 +454,6 @@ def run_pipeline(
 
     log_major_step("Preparing DF for relevance model")
     df_cb_cd = prepare_for_relevance_model(df_cb_cd, max_workers=max_workers)
-
     # Run Model for CB
     log_major_step("Running relevance model")
     df_cb_cd, df_cb_cd_errors = run_relevance_model(
@@ -589,6 +591,10 @@ def run_pipeline(
             use_cached_results=True,
             max_workers=max_workers,
             force_parents=True,
+            add_intersectional=False,
+            add_falsesolns=False,
+            add_levers_of_change=False,
+            run_primary_category_selection=False,
         )
 
     # PROCESS DIVERSITY TAGS
