@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 from vdl_tools.scrape_enrich.netzero_insights.process_nzi.nzi_zombie_companies_fail import (
+    _get_graduation_and_later_stages,
     did_company_fail,
     did_company_succeed,
     raised_stage_or_earlier,
@@ -155,6 +156,27 @@ RECENT_SEED_ONLY = make_rows([
     {"round_date_nzi": pd.Timestamp("2024-06-01"), "round_type_nzi": "Seed", "financing_type_nzi": "Equity"},
 ])
 
+# ---- Growth equity fixtures ----
+# "Growth equity" is a catch-all NZI label for late-stage equity rounds without a
+# specific Series letter. It is NOT in DISCLOSED_STAGES_ORDERED but is treated as
+# graduation alongside Late VC / Early VC catch-alls. These fixtures cover the
+# combinations that broke pre-fix (cf reports/2026-05-25 in elemental-catalytic-capital).
+
+SERIES_A_TO_GROWTH_EQUITY = make_rows([
+    {"round_date_nzi": pd.Timestamp("2018-01-01"), "round_type_nzi": "Series A",      "financing_type_nzi": "Equity"},
+    {"round_date_nzi": pd.Timestamp("2020-01-01"), "round_type_nzi": "Growth equity", "financing_type_nzi": "Equity"},
+])
+
+SEED_TO_GROWTH_EQUITY = make_rows([
+    {"round_date_nzi": pd.Timestamp("2018-01-01"), "round_type_nzi": "Seed",          "financing_type_nzi": "Equity"},
+    {"round_date_nzi": pd.Timestamp("2020-01-01"), "round_type_nzi": "Growth equity", "financing_type_nzi": "Equity"},
+])
+
+SERIES_B_TO_GROWTH_EQUITY = make_rows([
+    {"round_date_nzi": pd.Timestamp("2018-01-01"), "round_type_nzi": "Series B",      "financing_type_nzi": "Equity"},
+    {"round_date_nzi": pd.Timestamp("2020-01-01"), "round_type_nzi": "Growth equity", "financing_type_nzi": "Equity"},
+])
+
 
 # ---------------------------------------------------------------------------
 # Ensemble operating-status fixtures
@@ -274,6 +296,74 @@ class TestDidCompanySucceed:
     def test_shut_down_does_not_make_success(self):
         # Shut Down status alone doesn't make a company succeed
         assert did_company_succeed(SEED_ONLY_STALE, COMPANY_SHUT_DOWN) is False
+
+    def test_growth_equity_counts_as_graduation_past_series_a(self):
+        # Series A → Growth equity (no Series B+). "Growth equity" is a
+        # catch-all late-stage equity label outside DISCLOSED_STAGES_ORDERED,
+        # but it counts as graduation past Series A.
+        assert did_company_succeed(
+            SERIES_A_TO_GROWTH_EQUITY, COMPANY_OPERATING,
+            graduation_stages=("Series B",),
+        ) is True
+
+    def test_growth_equity_counts_as_graduation_past_seed(self):
+        # Seed → Growth equity (no Series A / Early VC). Growth equity is
+        # late-stage; raising it counts as graduation past Seed.
+        assert did_company_succeed(
+            SEED_TO_GROWTH_EQUITY, COMPANY_OPERATING,
+            graduation_stages=("Series A", "Early VC"),
+        ) is True
+
+    def test_growth_equity_counts_as_graduation_past_series_b(self):
+        # Series B → Growth equity (no Late VC / Series C+). Growth equity
+        # counts as graduation past Series B.
+        assert did_company_succeed(
+            SERIES_B_TO_GROWTH_EQUITY, COMPANY_OPERATING,
+            graduation_stages=("Late VC", "Series C"),
+        ) is True
+
+
+# ===========================================================================
+# _get_graduation_and_later_stages tests
+# ===========================================================================
+
+class TestGetGraduationAndLaterStages:
+    def test_series_b_graduation_includes_late_catch_alls(self):
+        # Series A's success threshold = ["Series B"]. The returned list
+        # should include Series B-and-later from DISCLOSED_STAGES_ORDERED
+        # PLUS the catch-all Late VC / Growth equity labels.
+        result = _get_graduation_and_later_stages(["Series B"], "Series B")
+        assert "Series B" in result
+        assert "Series C" in result
+        assert "Late VC" in result
+        assert "Growth equity" in result   # new
+
+    def test_series_a_graduation_includes_late_catch_alls(self):
+        # Seed's success threshold = ["Series A", "Early VC"]. Hits the
+        # second auto-append branch — returns Early VC + Growth equity.
+        result = _get_graduation_and_later_stages(["Series A", "Early VC"], "Series B")
+        assert "Series A" in result
+        assert "Series B" in result
+        assert "Early VC" in result
+        assert "Growth equity" in result   # new
+
+    def test_exit_graduation_suppresses_catch_all_auto_append(self):
+        # Late_Exit / Seed_Exit graduation = exit types only. NO catch-all
+        # auto-append should fire — Late VC and Growth equity are late-venture
+        # rounds, not exits. Appending them to an exit-cohort graduation set
+        # would silently classify late-venture companies that never actually
+        # exited as "succeeded at exit". The auto-append suppression keeps the
+        # graduation set strictly exit-typed.
+        result = _get_graduation_and_later_stages(
+            ["IPO", "Post IPO", "Post IPO - Equity", "SPAC"], "Series B",
+        )
+        assert "IPO" in result
+        assert "SPAC" in result
+        assert "Post IPO" in result
+        assert "Post IPO - Equity" in result
+        assert "Late VC" not in result
+        assert "Growth equity" not in result
+        assert "Early VC" not in result
 
 
 # ===========================================================================
