@@ -457,16 +457,58 @@ class FewShotCache(InstructorPRC):
 
         return response
 
+    def _build_success_row(self, given_id, text, response):
+        """Override: JSON-encode dict text and use IsRelevant serialization.
+
+        Differs from the base class by:
+        - ``input_text``: ``json.dumps(text)`` because text is a dict.
+        - ``response_full``: ``response.model_dump()`` (dict, stored in JSONB).
+        - ``response_text``: JSON-serialized ``output_parsed`` model dump,
+          so downstream ``json.loads(response_text)`` yields the
+          IsRelevant dict directly.
+        - ``num_errors``: 0 (vs base's None) to match historical behavior.
+        """
+        text_json = json.dumps(text)
+        text_id = PromptResponse.create_text_id(text_json)
+        return {
+            "prompt_id": self.prompt.id,
+            "given_id": str(given_id),
+            "model_name": self.model,
+            "text_id": text_id,
+            "input_text": text_json,
+            "response_full": response.model_dump(),
+            "response_text": json.dumps(response.output_parsed.model_dump()),
+            "num_errors": 0,
+        }
+
+    def _build_error_row(self, given_id, text, response_full):
+        """Override: JSON-encode dict text for the error row, preserving
+        the historical ``model_name`` (the base error-row also includes it,
+        which was missing from the legacy single-row ``store_error`` path).
+        """
+        text_json = json.dumps(text)
+        text_id = PromptResponse.create_text_id(text_json)
+        return {
+            "prompt_id": self.prompt.id,
+            "given_id": str(given_id),
+            "model_name": self.model,
+            "text_id": text_id,
+            "input_text": text_json,
+            "response_full": response_full,
+            "num_errors": 1,
+        }
+
     def store_item(
         self,
         given_id: str,
         text,
         response,
     ):
-        """Store a successful relevance response in the cache.
+        """Store a successful relevance response in the cache (single-row path).
 
         Overrides parent to serialize text and response for the few-shot
-        input shape and IsRelevant output.
+        input shape and IsRelevant output. Bulk path uses
+        ``_build_success_row`` directly via the parent's bulk upsert.
 
         Parameters
         ----------
@@ -482,16 +524,8 @@ class FewShotCache(InstructorPRC):
         PromptResponse
             The merged cache row.
         """
-        prompt_response_obj = PromptResponse(
-            prompt_id=self.prompt.id,
-            given_id=given_id,
-            model_name=self.model,
-            input_text=json.dumps(text),
-            response_full=response.model_dump(),
-            response_text=json.dumps(response.output_parsed.model_dump()),
-            num_errors=0,
-        )
-
+        row = self._build_success_row(given_id, text, response)
+        prompt_response_obj = PromptResponse(**row)
         if self.store_results:
             self.session.merge(prompt_response_obj)
         return prompt_response_obj
@@ -505,8 +539,9 @@ class FewShotCache(InstructorPRC):
     ):
         """Store or update a cache row for a failed API call (increment num_errors).
 
-        Overrides parent to match by prompt_id and given_id only (no text_id)
-        for this cache's error storage behavior.
+        Single-row path. Overrides parent to match by prompt_id and given_id
+        only (no text_id) for this cache's error storage behavior. Bulk path
+        uses ``_build_error_row`` + the parent's bulk upsert.
 
         Parameters
         ----------
@@ -541,13 +576,8 @@ class FewShotCache(InstructorPRC):
                 self.session.merge(previous_response)
             prompt_response_obj = previous_response
         else:
-            prompt_response_obj = PromptResponse(
-                prompt_id=self.prompt.id,
-                given_id=given_id,
-                input_text=json.dumps(text),
-                response_full=response_full,
-                num_errors=1,
-            )
+            row = self._build_error_row(given_id, text, response_full)
+            prompt_response_obj = PromptResponse(**row)
             if self.store_results:
                 self.session.merge(prompt_response_obj)
         return prompt_response_obj
