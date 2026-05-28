@@ -90,6 +90,7 @@ def api_count_factory(url, default_fields,) -> Callable:
 
 
 def api_query_factory(url, default_fields, limit=None) -> Callable:
+    import time
     import requests
     import pandas as pd
 
@@ -99,10 +100,21 @@ def api_query_factory(url, default_fields, limit=None) -> Callable:
 
         while True:
             next = {} if next_uuid is None else {"after_id": next_uuid}
-            data = requests.post(
-                url,
-                json={"field_ids": fields, "query": filters, "limit": 1000, **next},
-            )
+
+            max_retries = 3
+            for attempt in range(max_retries):
+                data = requests.post(
+                    url,
+                    json={"field_ids": fields, "query": filters, "limit": 1000, **next},
+                )
+                if data.status_code == 200 and data.text.strip():
+                    break
+                wait = 2 ** attempt
+                print(f"\nCB API returned empty/invalid response (status {data.status_code}), retrying in {wait}s (attempt {attempt + 1}/{max_retries})...")
+                time.sleep(wait)
+            else:
+                print(f"\nCB API failed after {max_retries} retries, stopping pagination.")
+                break
 
             res_json = data.json()
 
