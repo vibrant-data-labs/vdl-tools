@@ -1,6 +1,7 @@
 from collections import defaultdict
 from multiprocessing.pool import ThreadPool
 from typing import Any
+import datetime as dt
 
 from more_itertools import chunked
 import numpy as np
@@ -140,7 +141,8 @@ class EmbeddingCache():
         """Bulk upsert successful embedding rows via PG ON CONFLICT.
 
         Composite PK is (model_name, text_id). On conflict, overwrites the
-        embedding fields and clears num_errors.
+        embedding fields, clears num_errors, and bumps date_updated (Core
+        doesn't fire the ORM `onupdate` hook through `ON CONFLICT DO UPDATE`).
         """
         if not rows:
             return
@@ -149,6 +151,11 @@ class EmbeddingCache():
             key = (row["model_name"], row["text_id"])
             deduped[key] = row
         rows = list(deduped.values())
+
+        now = dt.datetime.utcnow()
+        for row in rows:
+            row.setdefault("date_added", now)
+            row.setdefault("date_updated", now)
 
         stmt = pg_insert(Embedding).values(rows)
         stmt = stmt.on_conflict_do_update(
@@ -159,6 +166,9 @@ class EmbeddingCache():
                 "response_full": stmt.excluded.response_full,
                 "embedding": stmt.excluded.embedding,
                 "num_errors": None,
+                # date_added intentionally NOT in the SET clause — preserve
+                # the original "first cached at" timestamp on refresh.
+                "date_updated": now,
             },
         )
         self.session.execute(stmt)
@@ -173,12 +183,18 @@ class EmbeddingCache():
             deduped[key] = row
         rows = list(deduped.values())
 
+        now = dt.datetime.utcnow()
+        for row in rows:
+            row.setdefault("date_added", now)
+            row.setdefault("date_updated", now)
+
         stmt = pg_insert(Embedding).values(rows)
         stmt = stmt.on_conflict_do_update(
             index_elements=["model_name", "text_id"],
             set_={
                 "response_full": stmt.excluded.response_full,
                 "num_errors": func.coalesce(Embedding.num_errors, 0) + 1,
+                "date_updated": now,
             },
         )
         self.session.execute(stmt)

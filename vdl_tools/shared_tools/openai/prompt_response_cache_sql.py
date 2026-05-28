@@ -15,6 +15,7 @@ docstring and method Notes for model-specific parameters.
 
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor as ThreadPool
+import datetime as dt
 
 from sqlalchemy import select, func, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -422,8 +423,9 @@ class PromptResponseCacheSQL():
 
         Uses PostgreSQL `INSERT ... ON CONFLICT DO UPDATE` on the
         composite PK (prompt_id, given_id, model_name). On conflict,
-        overwrites response columns and clears `num_errors` (a previously
-        errored row that now succeeds should look clean).
+        overwrites response columns, clears `num_errors`, and bumps
+        `date_updated` (Core's `ON CONFLICT DO UPDATE` doesn't fire the
+        column's ORM `onupdate` hook, so we set it explicitly).
 
         Parameters
         ----------
@@ -444,6 +446,15 @@ class PromptResponseCacheSQL():
             deduped[key] = row
         rows = list(deduped.values())
 
+        # Stamp timestamps explicitly so a fresh insert via Core gets both
+        # date_added and date_updated populated even though the model's
+        # Python-side `default=` / `onupdate=` hooks don't fire reliably
+        # through `pg_insert().values([...])`.
+        now = dt.datetime.utcnow()
+        for row in rows:
+            row.setdefault("date_added", now)
+            row.setdefault("date_updated", now)
+
         stmt = pg_insert(PromptResponse).values(rows)
         stmt = stmt.on_conflict_do_update(
             index_elements=["prompt_id", "given_id", "model_name"],
@@ -453,6 +464,9 @@ class PromptResponseCacheSQL():
                 "response_full": stmt.excluded.response_full,
                 "response_text": stmt.excluded.response_text,
                 "num_errors": None,
+                # date_added intentionally NOT in the SET clause — preserve
+                # the original "first cached at" timestamp on refresh.
+                "date_updated": now,
             },
         )
         self.session.execute(stmt)
@@ -461,8 +475,9 @@ class PromptResponseCacheSQL():
         """Bulk upsert error rows, incrementing `num_errors` on conflict.
 
         Uses PostgreSQL `INSERT ... ON CONFLICT DO UPDATE` on the
-        composite PK. On conflict, overwrites `response_full` and
-        increments `num_errors` via `COALESCE(num_errors, 0) + 1`.
+        composite PK. On conflict, overwrites `response_full`, increments
+        `num_errors` via `COALESCE(num_errors, 0) + 1`, and bumps
+        `date_updated`.
 
         Parameters
         ----------
@@ -481,12 +496,18 @@ class PromptResponseCacheSQL():
             deduped[key] = row
         rows = list(deduped.values())
 
+        now = dt.datetime.utcnow()
+        for row in rows:
+            row.setdefault("date_added", now)
+            row.setdefault("date_updated", now)
+
         stmt = pg_insert(PromptResponse).values(rows)
         stmt = stmt.on_conflict_do_update(
             index_elements=["prompt_id", "given_id", "model_name"],
             set_={
                 "response_full": stmt.excluded.response_full,
                 "num_errors": func.coalesce(PromptResponse.num_errors, 0) + 1,
+                "date_updated": now,
             },
         )
         self.session.execute(stmt)
