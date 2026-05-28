@@ -186,7 +186,20 @@ def write_dataframe(
         for col in mixed_cols:
             df[col] = df[col].map(_to_string)
 
-    table = pa.Table.from_pandas(df, preserve_index=False)
+    try:
+        table = pa.Table.from_pandas(df, preserve_index=False)
+    except pa.lib.ArrowTypeError as e:
+        # _scan_columns samples only the first 100 rows — mixed types beyond
+        # that window slip through. Parse the offending column from the error,
+        # coerce it, and retry once.
+        import re
+        match = re.search(r"column (\w+) with type", str(e))
+        if match:
+            col = match.group(1)
+            logger.warning("Late-detected mixed-type column '%s', coercing to string and retrying.", col)
+            df = df.copy()
+            df[col] = df[col].map(_to_string)
+        table = pa.Table.from_pandas(df, preserve_index=False)
     meta = dict(table.schema.metadata or {})
     meta[_JSON_COLS_KEY] = json.dumps(json_cols).encode()
     meta[_LINEAGE_KEY] = json.dumps(
