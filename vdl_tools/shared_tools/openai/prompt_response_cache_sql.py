@@ -744,8 +744,8 @@ class PromptResponseCacheSQL():
         self,
         given_ids_texts: list[tuple[str, str]],
         use_cached_result: bool = True,
-        n_per_commit: int = 50,
-        max_workers=3,
+        n_per_commit: int = 200,
+        max_workers=20,
         max_errors=1,
         **kwargs
     ) -> dict[str, dict]:
@@ -763,9 +763,15 @@ class PromptResponseCacheSQL():
         use_cached_result : bool, optional
             If True, use cached results when available. Default is True.
         n_per_commit : int, optional
-            Number of completions to run before committing to the DB. Default is 50.
+            Number of completions to run before bulk-upserting and committing
+            to the DB. Default is 200. Each chunk issues one bulk
+            `INSERT ... ON CONFLICT DO UPDATE` per kind (success/error), so
+            DB cost scales with chunk count, not item count.
         max_workers : int, optional
-            Number of parallel workers for API calls. Default is 3.
+            Number of parallel API workers. Default is 20. Workers do not
+            touch the DB session — concurrency is bounded only by OpenAI
+            rate limits. Tune up (e.g. 50-100) for nano/mini models with
+            generous quotas; down (e.g. 5-10) for tier-1 mainline models.
         max_errors : int, optional
             Maximum number of errors to allow for a (given_id, text) before
             excluding from retries. Default is 1.
@@ -913,8 +919,8 @@ class PromptResponseCacheSQL():
         self,
         given_ids_texts: list[tuple[str, str]],
         use_cached_result: bool = True,
-        n_per_commit: int = 50,
-        max_workers=3,
+        n_per_commit: int = 200,
+        max_workers=20,
         max_errors=1,
         **kwargs
     ):
@@ -930,9 +936,11 @@ class PromptResponseCacheSQL():
         use_cached_result : bool, optional
             If True, use cached results when available. Default is True.
         n_per_commit : int, optional
-            Chunk size for DB commits. Default is 50.
+            Chunk size for DB commits (one bulk upsert per kind per chunk).
+            Default is 200.
         max_workers : int, optional
-            Number of parallel workers. Default is 3.
+            Number of parallel API workers. Default is 20. Tune up for
+            nano/mini models with generous quotas; down for tier-1 mainline.
         max_errors : int, optional
             Max errors per (given_id, text) before skipping. Default is 1.
         **kwargs

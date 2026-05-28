@@ -274,7 +274,7 @@ class EmbeddingCache():
         given_ids_texts: list[tuple[str, str]],
         use_cached_result: bool = True,
         n_per_commit: int = 1500,
-        max_workers=3,
+        max_workers=10,
         max_errors=3,
         **kwargs
     ) -> str:

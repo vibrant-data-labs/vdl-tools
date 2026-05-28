@@ -102,6 +102,13 @@ shared the anti-pattern.
 - `EmbeddingCache` got the same treatment — workers were already API-only,
   but main-thread per-item `merge()` was the bottleneck. Replaced with the
   same bulk upsert pattern on `(model_name, text_id)`.
+- **Defaults bumped** to match the new ceiling:
+  - `PromptResponseCacheSQL.bulk_get_cache_or_run`: `max_workers` 3 → 20,
+    `n_per_commit` 50 → 200.
+  - `FewShotCache.bulk_get_cache_or_run`: `max_workers` 5 → 20,
+    `n_per_commit` 50 → 200.
+  - `EmbeddingCache.bulk_get_cache_or_run`: `max_workers` 3 → 10
+    (`n_per_commit` 1500 unchanged).
 
 **Benchmark (local client + remote RDS, gpt-5.4-nano, 150 countries)**
 

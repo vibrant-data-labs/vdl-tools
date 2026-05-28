@@ -287,8 +287,8 @@ class FewShotCache(InstructorPRC):
         self,
         given_ids_texts: list[tuple[str, EntityActivityDictExamplesDict]],
         use_cached_result: bool = True,
-        n_per_commit: int = 50,
-        max_workers=5,
+        n_per_commit: int = 200,
+        max_workers=20,
         max_errors=1,
         return_parsed_results: bool = True,
         **kwargs
@@ -307,9 +307,10 @@ class FewShotCache(InstructorPRC):
         use_cached_result : bool, optional
             If True, use cached results when available. Default is True.
         n_per_commit : int, optional
-            Chunk size for DB commits. Default is 50.
+            Chunk size for DB commits (one bulk upsert per kind per chunk).
+            Default is 200.
         max_workers : int, optional
-            Number of parallel workers. Default is 5.
+            Number of parallel API workers. Default is 20.
         max_errors : int, optional
             Max errors per (given_id, text) before skipping. Default is 1.
         return_parsed_results : bool, optional
