@@ -8,9 +8,13 @@
 | Step | Status | PR |
 |---|---|---|
 | 1. API-only workers + bulk upsert | ✅ Shipped | #126 |
+| 3. `read_from_cache` / `write_to_cache` per-call flags | ✅ Shipped | _this PR_ |
 | 2. Tenacity retry on validation/JSON parse errors | ⏳ Not started | — |
-| 3. `read_from_cache` / `write_to_cache` per-call flags | ⏳ Not started | — |
 | 4. `request_hash` column for kwargs-aware cache keys | ⏳ Not started | — |
+
+> Step 3 shipped ahead of Step 2: the two are independent (Step 2 lives in
+> `openai_api_utils.py`, Step 3 in the cache flag plumbing) and Step 3 was
+> the higher-utility lever for in-flight runs.
 
 ## Context
 
@@ -163,38 +167,67 @@ conditions.
   happy path, and the `EOF while parsing` traceback should disappear from
   real runs over time.
 
-## Step 3 — `read_from_cache` / `write_to_cache` per-call flags
+## Step 3 — `read_from_cache` / `write_to_cache` per-call flags ✅
 
-Goal: explicit, orthogonal control over read vs write so callers can
-force a re-run, do dry-runs, and test without DB pollution.
+**Status: shipped.**
+
+Decoupled the cache read path from the write path so callers can force
+re-runs, do read-only diagnostic passes, or run pure passthroughs without
+constructor-level changes. Applied across all three caches.
 
 **Files touched**
 - `vdl_tools/shared_tools/openai/prompt_response_cache_sql.py`
-- No caller updates required in step 3 (additive + alias).
+- `vdl_tools/shared_tools/openai/embedding_cache.py`
+- `vdl_tools/shared_tools/taxonomy_mapping/few_shot_cache.py`
 
-**Changes**
-- Add `read_from_cache: bool = True` and `write_to_cache: bool | None = None`
-  to `get_cache_or_run`, `bulk_get_cache_or_run`, and their underscored
-  internals.
-- `write_to_cache is None` ⇒ fall back to `self.store_results` (preserves
-  current constructor-level behavior).
-- `read_from_cache=False` ⇒ skip the lookup phase entirely
-  (`get_prompt_response_obj` / `get_prompt_response_obj_bulk`).
-- Keep `use_cached_result` as a deprecated alias mapping to
-  `read_from_cache`. Emit a `DeprecationWarning` once via `warnings.warn`
-  and leave the existing 30+ callers untouched. Plan to flip the default
-  source of truth in a later cleanup PR.
-- `store_results` on the constructor stays as the project-wide default;
-  per-call `write_to_cache=False` overrides it for that call only.
+**What changed**
+- Added two orthogonal kwargs to `get_cache_or_run` and
+  `bulk_get_cache_or_run` (plus their underscored internals):
+  - `read_from_cache: bool = True` — gate the lookup phase.
+  - `write_to_cache: bool = True` — gate the upsert + commit phase.
+- New module-level helper `_resolve_cache_flags(...)` in
+  `prompt_response_cache_sql.py` (imported by `embedding_cache.py`):
+  translates a legacy `use_cached_result` kwarg into `read_from_cache`
+  and emits a `DeprecationWarning` (`stacklevel=3`). Writes are
+  unaffected by the legacy flag — preserves historical behavior
+  (`use_cached_result=False` was "force refresh," not "read-only").
+- Module-level sentinel `_UNSET` lets us distinguish "caller didn't pass
+  `use_cached_result`" from "caller passed `True`," so existing callers
+  don't spam warnings.
+- Write path is the conjunction of `write_to_cache AND
+  self.store_results` — constructor flag still wins as a hard off.
+- Single-row read-only path (`write_to_cache=False`) builds the
+  response dict from `_build_success_row` + `_row_to_response_dict`
+  so callers get the same return shape without a DB roundtrip.
+- Public method signatures kept fully backwards compatible — all new
+  kwargs default to `True`, deprecated alias still works.
 
-**Verification**
-- Run benchmark with `read_from_cache=False, write_to_cache=False` —
-  confirm no rows added to `prompt_response` and no `SELECT` round-trips
-  in DB logs.
-- Run with `read_from_cache=False, write_to_cache=True` — confirm rows
-  overwritten on `(prompt_id, given_id, model_name)`.
-- Run with the legacy `use_cached_result=False` and confirm same behavior
-  as before plus a deprecation warning in the log.
+**Behavior matrix**
+
+| `read_from_cache` | `write_to_cache` | Behavior |
+|---|---|---|
+| T | T | Default. Read cache, miss → API + persist. |
+| F | T | Force refresh. Bypass cache, persist fresh result. |
+| T | F | Read-only / diagnostic. Cache hits returned; misses run API but **don't** write. |
+| F | F | Pure passthrough. No DB I/O at all. |
+
+**Verification (smoke test `/tmp/smoke_read_write_flags.py`)**
+
+All four quadrants asserted end-to-end against the real database:
+- Q1 (T,T): row persisted on miss; second call returns same row. ✓
+- Q2 (F,T): force-refresh bumps `date_updated`. ✓
+- Q3 (T,F): hit returns cache, miss runs API but no DB row created. ✓
+- Q4 (F,F): API result returned, no DB row created. ✓
+- Legacy `use_cached_result=False` still force-refreshes AND emits one
+  `DeprecationWarning` per call. ✓
+- Single-row `get_cache_or_run(read_from_cache=F, write_to_cache=F)`
+  matches bulk behavior. ✓
+
+**Migration**
+- 151 references to `use_cached_result` across the codebase remain
+  working unchanged. They'll emit a `DeprecationWarning` on use.
+- Migrate at leisure — no urgency. The alias has no planned removal date
+  in this PR.
 
 ## Step 4 — Add `request_hash` to the cache key
 
@@ -304,14 +337,21 @@ predictable.
   the perf-critical path.
 - `print(prompt_obj)` debug line in `register_prompt`. Same.
 - The unused `tuple_` import in `prompt_response_cache_sql.py`. Same.
-- Generalizing `read_from_cache` / `write_to_cache` (Step 3) into
+- ~~Generalizing `read_from_cache` / `write_to_cache` (Step 3) into
   `embedding_cache.py`'s API — that cache lacks `store_results` today,
-  so flag rework there is a separate decision.
+  so flag rework there is a separate decision.~~ ✅ Done — Step 3
+  rolled the flags out to `embedding_cache.py` directly. Note that
+  `EmbeddingCache` still has no `store_results` constructor flag, so
+  the only write gate is `write_to_cache`. Adding a constructor-level
+  `store_results` to `EmbeddingCache` is still optional follow-up.
+- Replacing `datetime.utcnow()` with `datetime.now(dt.UTC)` in the
+  bulk-upsert helpers — Python 3.12 deprecation. Spawned as a separate
+  task; touches the same files as Step 1 but unrelated to flag work.
 
 ## Suggested PR breakdown
 
 Each step is independently shippable and reversible:
 1. PR1: Step 1 (perf). ✅ #126. Big win, no API surface change, no schema change.
-2. PR2: Step 2 (retry). Small, isolated, benefits all callers.
-3. PR3: Step 3 (flags). Additive, deprecation alias keeps callers working.
+2. PR2: Step 3 (flags). ✅ _this PR_. Additive, deprecation alias keeps callers working.
+3. PR3: Step 2 (retry). Small, isolated, benefits all callers.
 4. PR4: Step 4 (`request_hash`). Schema migration; coordinate deployment.

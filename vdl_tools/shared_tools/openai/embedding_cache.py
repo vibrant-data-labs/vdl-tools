@@ -11,6 +11,10 @@ from sqlalchemy.orm import Session
 
 from vdl_tools.shared_tools.database_cache.database_models.embedding import Embedding
 from vdl_tools.shared_tools.openai.openai_api_utils import get_embedding_response
+from vdl_tools.shared_tools.openai.prompt_response_cache_sql import (
+    _UNSET,
+    _resolve_cache_flags,
+)
 from vdl_tools.shared_tools.tools.logger import logger
 
 
@@ -246,13 +250,38 @@ class EmbeddingCache():
         self,
         text: str,
         given_id: str = None,
-        use_cached_result: bool = True,
+        read_from_cache: bool = True,
+        write_to_cache: bool = True,
+        use_cached_result=_UNSET,
         **kwargs
     ) -> str:
+        """Return a cached embedding for ``text`` or call the API and (optionally) cache it.
+
+        Parameters
+        ----------
+        text : str
+            Input text to embed (also used to compute the cache key).
+        given_id : str, optional
+            Caller-supplied identifier. Defaults to the text hash.
+        read_from_cache : bool, optional
+            If True, return a cached embedding when available. If False,
+            always call the API (force-refresh). Default is True.
+        write_to_cache : bool, optional
+            If True, persist new embeddings (and errors) to the cache. If
+            False, the cache is left untouched. Default is True.
+        use_cached_result : bool, optional
+            **Deprecated.** Use ``read_from_cache`` and ``write_to_cache``.
+            When supplied, overrides ``read_from_cache``.
+        **kwargs
+            Forwarded to ``get_embedding_response``.
+        """
+        read_from_cache, write_to_cache = _resolve_cache_flags(
+            read_from_cache, write_to_cache, use_cached_result,
+        )
 
         given_id = given_id or Embedding.create_text_id(text)
 
-        if use_cached_result:
+        if read_from_cache:
             data = self.get_embedding_obj(text=text)
             if data:
                 logger.info("Found cached response for %s", given_id)
@@ -264,11 +293,26 @@ class EmbeddingCache():
                 **kwargs,
             )
             if response is not None:
-                data = self.store_item(
+                if write_to_cache:
+                    data = self.store_item(
+                        given_id=given_id,
+                        text=text,
+                        response=response[0],
+                    )
+                    return data.to_dict()
+                # Read-only / passthrough: build the dict without persisting.
+                row = self._build_success_row(
                     given_id=given_id,
                     text=text,
-                    response=response[0],
+                    embedding=response[0],
                 )
+                return {
+                    "model_name": row["model_name"],
+                    "text_id": row["text_id"],
+                    "given_id": row["given_id"],
+                    "input_text": row["input_text"],
+                    "embedding": row["embedding"],
+                }
             else:
                 logger.warning("No response text for %s", given_id)
                 return None
@@ -278,22 +322,51 @@ class EmbeddingCache():
             response = {
                 "message": str(ex),
             }
-            data = self.store_error(
-                text=text,
-                response_full=response,
-                given_id=given_id,
-            )
-        return data.to_dict()
+            if write_to_cache:
+                data = self.store_error(
+                    text=text,
+                    response_full=response,
+                    given_id=given_id,
+                )
+                return data.to_dict()
+            return None
 
     def bulk_get_cache_or_run(
         self,
         given_ids_texts: list[tuple[str, str]],
-        use_cached_result: bool = True,
+        read_from_cache: bool = True,
+        write_to_cache: bool = True,
         n_per_commit: int = 1500,
         max_workers=10,
         max_errors=3,
+        use_cached_result=_UNSET,
         **kwargs
     ) -> str:
+        """Bulk get cached or fresh embeddings for many (given_id, text) pairs.
+
+        Parameters
+        ----------
+        given_ids_texts : list[tuple[str, str]]
+            (given_id, text) pairs to embed.
+        read_from_cache : bool, optional
+            If True, consult the cache before calling the API. Default is True.
+        write_to_cache : bool, optional
+            If True, persist results to the cache. Default is True.
+        n_per_commit : int, optional
+            Items per DB commit. Default is 1500.
+        max_workers : int, optional
+            Parallel API workers. Default is 10.
+        max_errors : int, optional
+            Max errors per text before skipping. Default is 3.
+        use_cached_result : bool, optional
+            **Deprecated.** Use ``read_from_cache`` and ``write_to_cache``.
+            When supplied, overrides ``read_from_cache``.
+        **kwargs
+            Forwarded to ``get_embedding_response``.
+        """
+        read_from_cache, write_to_cache = _resolve_cache_flags(
+            read_from_cache, write_to_cache, use_cached_result,
+        )
 
         _, texts = zip(*given_ids_texts)
         text_id_to_given_ids = defaultdict(list)
@@ -304,7 +377,7 @@ class EmbeddingCache():
             text_id_to_given_ids[text_id].append(given_id)
             text_id_to_text[text_id] = text
 
-        if use_cached_result:
+        if read_from_cache:
             found_rows, unfound_ids_errors = self.get_embedding_obj_bulk(texts=texts)
 
             # Some texts could be duplicated
@@ -407,10 +480,13 @@ class EmbeddingCache():
                             }
 
             # Bulk upsert (one statement per kind) instead of per-item merge.
-            self._upsert_success_rows(success_rows)
-            self._upsert_error_rows(error_rows)
-            logger.info("Committing chunk %s of len %s", i, added_to_commit)
-            logger.info("Total committed %s", len(res))
-            self.session.commit()
+            # Skipped entirely when `write_to_cache` is False — results are
+            # still returned in `res`, the cache is just left untouched.
+            if write_to_cache:
+                self._upsert_success_rows(success_rows)
+                self._upsert_error_rows(error_rows)
+                logger.info("Committing chunk %s of len %s", i, added_to_commit)
+                logger.info("Total committed %s", len(res))
+                self.session.commit()
 
         return res

@@ -16,6 +16,7 @@ docstring and method Notes for model-specific parameters.
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor as ThreadPool
 import datetime as dt
+import warnings
 
 from sqlalchemy import select, func, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -29,6 +30,53 @@ from vdl_tools.shared_tools.tools.logger import logger
 import logging
 logger.setLevel(logging.DEBUG)
 from typing import Any, Optional
+
+
+# Sentinel so we can tell "caller didn't pass `use_cached_result`" apart from
+# "caller passed `use_cached_result=True`". The deprecation warning fires only
+# when the legacy kwarg is *explicitly* supplied.
+_UNSET = object()
+
+
+def _resolve_cache_flags(
+    read_from_cache: bool,
+    write_to_cache: bool,
+    use_cached_result,
+) -> tuple[bool, bool]:
+    """Translate the legacy ``use_cached_result`` kwarg into ``(read, write)``.
+
+    ``use_cached_result`` historically gated only the READ path; writes
+    always happened (subject to the constructor-level ``store_results``).
+    This helper preserves that behavior for callers who still pass the
+    legacy kwarg: it overrides ``read_from_cache`` and leaves
+    ``write_to_cache`` alone.
+
+    Parameters
+    ----------
+    read_from_cache : bool
+        New flag — whether to consult the cache before calling the API.
+    write_to_cache : bool
+        New flag — whether to persist API results back into the cache.
+    use_cached_result : bool or sentinel
+        Legacy flag. If ``_UNSET`` (default), ignored. Otherwise emits a
+        ``DeprecationWarning`` and overrides ``read_from_cache``.
+
+    Returns
+    -------
+    tuple[bool, bool]
+        Resolved ``(read_from_cache, write_to_cache)``.
+    """
+    if use_cached_result is _UNSET:
+        return read_from_cache, write_to_cache
+    warnings.warn(
+        "`use_cached_result` is deprecated; use `read_from_cache` and "
+        "`write_to_cache` instead. The legacy flag only controlled the "
+        "read side, so it now sets `read_from_cache=<value>` and leaves "
+        "`write_to_cache` unchanged.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+    return bool(use_cached_result), write_to_cache
 
 
 def get_prompt_by_id(prompt_id: str, session):
@@ -667,7 +715,9 @@ class PromptResponseCacheSQL():
         self,
         given_id: str,
         text,
-        use_cached_result: bool = True,
+        read_from_cache: bool = True,
+        write_to_cache: bool = True,
+        use_cached_result=_UNSET,
         **kwargs
     ) -> str:
         """Look up cache or call API; store result and return as dict or None on error.
@@ -678,8 +728,20 @@ class PromptResponseCacheSQL():
             User-defined identifier for this request.
         text
             Input text to send to the model (and to key the cache).
+        read_from_cache : bool, optional
+            If True, consult the cache before calling the API. If False,
+            always call the API even if a cached row exists (force-refresh).
+            Default is True.
+        write_to_cache : bool, optional
+            If True, persist API results (success or error) back into the
+            cache. If False, the call is a passthrough — the cache is not
+            updated. Default is True. Also gated by the constructor's
+            ``store_results``.
         use_cached_result : bool, optional
-            If True, return cached response when available. Default is True.
+            **Deprecated.** Use ``read_from_cache`` and ``write_to_cache``
+            instead. When supplied, overrides ``read_from_cache``; preserves
+            historical behavior where the legacy flag only controlled the
+            read path (writes still happened on misses).
         **kwargs
             Passed to the OpenAI API. Use model-appropriate options; see class Notes.
 
@@ -689,7 +751,11 @@ class PromptResponseCacheSQL():
             Cached or new response as dict (e.g. with 'response_text', 'response_full'),
             or None if the call failed and an error was stored.
         """
-        if use_cached_result:
+        read_from_cache, write_to_cache = _resolve_cache_flags(
+            read_from_cache, write_to_cache, use_cached_result,
+        )
+
+        if read_from_cache:
             data = self.get_prompt_response_obj(
                 given_id=given_id,
                 text=text,
@@ -705,26 +771,33 @@ class PromptResponseCacheSQL():
             **kwargs
         )
         if not error:
-            data = self.store_item(
-                given_id=given_id,
-                text=text,
-                response=response,
-            )
+            if write_to_cache:
+                data = self.store_item(
+                    given_id=given_id,
+                    text=text,
+                    response=response,
+                )
+                return data.to_dict()
+            # Read-only / passthrough: build the response shape without persisting.
+            row = self._build_success_row(given_id, text, response)
+            return self._row_to_response_dict(row)
         else:
             logger.warning("No response text for %s", given_id)
-            self.store_error(
-                given_id=given_id,
-                text=text,
-                response_full=response,
-            )
+            if write_to_cache:
+                self.store_error(
+                    given_id=given_id,
+                    text=text,
+                    response_full=response,
+                )
             return None
-        return data.to_dict()
 
     def get_cache_or_run(
         self,
         given_id: str,
         text,
-        use_cached_result: bool = True,
+        read_from_cache: bool = True,
+        write_to_cache: bool = True,
+        use_cached_result=_UNSET,
         **kwargs,
     ):
         """Return cached response for (given_id, text) or run the API and cache the result.
@@ -741,8 +814,16 @@ class PromptResponseCacheSQL():
             User-defined identifier for this request (e.g. URL, row id).
         text
             Input text to send to the model. Cache is keyed by hash of this.
+        read_from_cache : bool, optional
+            If True, return a cached response when available. If False,
+            always hit the API (force-refresh). Default is True.
+        write_to_cache : bool, optional
+            If True, persist new API results to the cache. If False, the
+            cache is left untouched (read-only / passthrough). Default is
+            True. Also gated by the constructor's ``store_results``.
         use_cached_result : bool, optional
-            If True, return a cached response when available. Default is True.
+            **Deprecated.** Use ``read_from_cache`` and ``write_to_cache``
+            instead. When supplied, overrides ``read_from_cache``.
         **kwargs
             Forwarded to the OpenAI Responses API. Valid options depend on
             the model (see class Notes): e.g. ``text_format``, ``reasoning``.
@@ -752,11 +833,14 @@ class PromptResponseCacheSQL():
         dict or None
             Cached or newly fetched response as a dict, or None if the API
             call failed and an error was stored. When ``store_results`` is
-            False (constructor), new results are not persisted to the cache.
+            False (constructor) or ``write_to_cache=False``, new results
+            are not persisted to the cache.
         """
         return self._get_cache_or_run(
             given_id=given_id,
             text=text,
+            read_from_cache=read_from_cache,
+            write_to_cache=write_to_cache,
             use_cached_result=use_cached_result,
             **kwargs,
         )
@@ -764,10 +848,12 @@ class PromptResponseCacheSQL():
     def _bulk_get_cache_or_run(
         self,
         given_ids_texts: list[tuple[str, str]],
-        use_cached_result: bool = True,
+        read_from_cache: bool = True,
+        write_to_cache: bool = True,
         n_per_commit: int = 200,
         max_workers=20,
         max_errors=1,
+        use_cached_result=_UNSET,
         **kwargs
     ) -> dict[str, dict]:
         """Bulk lookup/call: for each (given_id, text), return cache or run API and store.
@@ -781,8 +867,15 @@ class PromptResponseCacheSQL():
         given_ids_texts : list[tuple[str, str]]
             List of (given_id, text) pairs. given_id is a human-readable
             identifier (e.g. URL for a summarization task).
-        use_cached_result : bool, optional
-            If True, use cached results when available. Default is True.
+        read_from_cache : bool, optional
+            If True, consult the cache before calling the API. If False,
+            always call the API for every item (force-refresh). Default is
+            True.
+        write_to_cache : bool, optional
+            If True, persist API results (success and error) back to the
+            cache. If False, the cache is left untouched (read-only /
+            passthrough). Default is True. Also gated by the constructor's
+            ``store_results``.
         n_per_commit : int, optional
             Number of completions to run before bulk-upserting and committing
             to the DB. Default is 200. Each chunk issues one bulk
@@ -796,6 +889,9 @@ class PromptResponseCacheSQL():
         max_errors : int, optional
             Maximum number of errors to allow for a (given_id, text) before
             excluding from retries. Default is 1.
+        use_cached_result : bool, optional
+            **Deprecated.** Use ``read_from_cache`` and ``write_to_cache``
+            instead. When supplied, overrides ``read_from_cache``.
         **kwargs
             Passed to the OpenAI API for each call. Use model-appropriate
             kwargs (e.g. text_format, reasoning for gpt-5). See class docstring Notes.
@@ -806,6 +902,10 @@ class PromptResponseCacheSQL():
             Map from given_id to response dict (e.g. response_text, response_full).
             Only includes given_ids that succeeded or were found in cache.
         """
+        read_from_cache, write_to_cache = _resolve_cache_flags(
+            read_from_cache, write_to_cache, use_cached_result,
+        )
+
         if not given_ids_texts:
             logger.warning("No given_ids_texts passed")
             return {}
@@ -821,7 +921,7 @@ class PromptResponseCacheSQL():
             given_ids_texts = given_ids_texts
 
         requested_given_ids = {given_id for given_id, _ in given_ids_texts}
-        if use_cached_result:
+        if read_from_cache:
             found_rows, unfound_ids_errors = self.get_prompt_response_obj_bulk(
                 given_ids_texts,
             )
@@ -891,9 +991,12 @@ class PromptResponseCacheSQL():
                     # Single bulk upsert per kind, then one commit per chunk
                     # (matches the prior commit cadence). DB writes happen on
                     # the main thread, so no Session thread-safety hazard.
-                    self._upsert_success_rows(success_rows)
-                    self._upsert_error_rows(error_rows)
-                    self.session.commit()
+                    # When `write_to_cache` is False this chunk is a
+                    # passthrough — results are still returned in-memory.
+                    if write_to_cache:
+                        self._upsert_success_rows(success_rows)
+                        self._upsert_error_rows(error_rows)
+                        self.session.commit()
 
                     res.update(response_dicts_by_given_id)
                     n_run += len(results)
@@ -939,10 +1042,12 @@ class PromptResponseCacheSQL():
     def bulk_get_cache_or_run(
         self,
         given_ids_texts: list[tuple[str, str]],
-        use_cached_result: bool = True,
+        read_from_cache: bool = True,
+        write_to_cache: bool = True,
         n_per_commit: int = 200,
         max_workers=20,
         max_errors=1,
+        use_cached_result=_UNSET,
         **kwargs
     ):
         """Bulk get cached or fresh completions for many (given_id, text) pairs.
@@ -954,8 +1059,13 @@ class PromptResponseCacheSQL():
         ----------
         given_ids_texts : list[tuple[str, str]]
             (given_id, text) pairs to process.
-        use_cached_result : bool, optional
-            If True, use cached results when available. Default is True.
+        read_from_cache : bool, optional
+            If True, consult the cache before calling the API. If False,
+            always call the API (force-refresh). Default is True.
+        write_to_cache : bool, optional
+            If True, persist results back to the cache. If False, the cache
+            is left untouched (read-only / passthrough). Default is True.
+            Also gated by the constructor's ``store_results``.
         n_per_commit : int, optional
             Chunk size for DB commits (one bulk upsert per kind per chunk).
             Default is 200.
@@ -964,6 +1074,9 @@ class PromptResponseCacheSQL():
             nano/mini models with generous quotas; down for tier-1 mainline.
         max_errors : int, optional
             Max errors per (given_id, text) before skipping. Default is 1.
+        use_cached_result : bool, optional
+            **Deprecated.** Use ``read_from_cache`` and ``write_to_cache``
+            instead. When supplied, overrides ``read_from_cache``.
         **kwargs
             Passed to the OpenAI API for each call (model-dependent; see class Notes).
 
@@ -974,10 +1087,12 @@ class PromptResponseCacheSQL():
         """
         return self._bulk_get_cache_or_run(
             given_ids_texts=given_ids_texts,
-            use_cached_result=use_cached_result,
+            read_from_cache=read_from_cache,
+            write_to_cache=write_to_cache,
             n_per_commit=n_per_commit,
             max_workers=max_workers,
             max_errors=max_errors,
+            use_cached_result=use_cached_result,
             **kwargs,
         )
 
