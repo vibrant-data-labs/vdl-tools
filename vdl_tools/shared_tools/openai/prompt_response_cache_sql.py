@@ -32,9 +32,26 @@ logger.setLevel(logging.DEBUG)
 from typing import Any, Optional
 
 
-# Sentinel so we can tell "caller didn't pass `use_cached_result`" apart from
-# "caller passed `use_cached_result=True`". The deprecation warning fires only
-# when the legacy kwarg is *explicitly* supplied.
+# Why `object()` and not `True`/`False`/`None`?
+#
+# We need to distinguish THREE caller states, not two:
+#   1. didn't pass `use_cached_result` at all   → no warning, use new flags
+#   2. passed `use_cached_result=True`          → warn + map to read_from_cache=True
+#   3. passed `use_cached_result=False`         → warn + map to read_from_cache=False
+#
+# Any bool default collapses one of those states into another:
+#   - default=False would silently force-refresh every legacy call site that
+#     omitted the kwarg (~151 of them); historical default was `True`.
+#   - default=True can't distinguish "explicitly passed True" from "defaulted
+#     True," so the warning either fires for everyone (spam) or no one
+#     (legacy `False` callers get silently dropped).
+#   - default=None is workable but `None` can leak from upstream code that's
+#     translating other state, producing a false-positive warning.
+#
+# `object()` produces a brand-new instance whose identity is unique — no
+# caller can accidentally produce the same value, so `is _UNSET` is a
+# bulletproof "did the caller touch this kwarg?" check. Standard Python
+# pattern; same idea as `dataclasses.MISSING` and `dict.pop(key, _missing)`.
 _UNSET = object()
 
 
