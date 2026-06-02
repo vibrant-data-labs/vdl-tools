@@ -36,11 +36,13 @@ def _make_default_client() -> GtDatamartClient:
     )
 
 
-def _load_keywords(search_terms_list, search_terms_path):
+def _load_keywords(search_terms_list, search_terms_path, allow_empty=False):
     if search_terms_list:
         return search_terms_list
     if search_terms_path:
         return pd.read_csv(search_terms_path)["term"].tolist()
+    if allow_empty:
+        return []
     raise ValueError("Must provide either search_terms_list or search_terms_path")
 
 
@@ -231,6 +233,7 @@ def query_process_givingtuesday_data(
     column_for_funding="total_cash_contributions",
     client=None,
     return_full_text=True,
+    force_include_eins=None,
 ):
     """Return the Crunchbase-shaped DataFrame of grantee orgs matching ``search_terms``.
 
@@ -277,6 +280,15 @@ def query_process_givingtuesday_data(
       parquet to (S3 supported). Returns the DataFrame either way.
     * ``client`` — supply a pre-built ``GtDatamartClient`` to override
       the default (built from vdl-tools postgres config).
+    * ``force_include_eins`` — optional list of EINs to inject into the
+      result regardless of whether they match the keyword search or pass
+      the eligibility thresholds. Looked up via
+      ``client.get_nonprofits_by_ein`` and unioned with the FTS hits
+      (search-first dedup, so an EIN matched by both keeps its FTS rank).
+      When supplied, ``search_terms_list`` / ``search_terms_path`` become
+      optional — passing only ``force_include_eins`` runs in forced-only
+      mode. Forced EINs that have no ``basic_fields`` row in the DB are
+      logged at WARNING and dropped (there's no identity data to assemble).
 
     Output columns (one row per eligible EIN):
 
@@ -296,19 +308,50 @@ def query_process_givingtuesday_data(
       ``Data Source='Giving Tuesday'``, ``Org Type='Non Profit'``.
     """
     client = client or _make_default_client()
-    keywords = _load_keywords(search_terms_list, search_terms_path)
-
-    hits = client.search_nonprofits(
-        keywords,
-        search_mode=search_mode,
-        return_text=return_full_text,
-        min_avg_contributions=min_avg_contributions,
-        min_avg_grants=min_avg_grants,
-        min_num_grants=min_num_grants,
-        min_taxyear=filter_yr,
+    keywords = _load_keywords(
+        search_terms_list,
+        search_terms_path,
+        allow_empty=bool(force_include_eins),
     )
+
+    hits_search = (
+        client.search_nonprofits(
+            keywords,
+            search_mode=search_mode,
+            return_text=return_full_text,
+            min_avg_contributions=min_avg_contributions,
+            min_avg_grants=min_avg_grants,
+            min_num_grants=min_num_grants,
+            min_taxyear=filter_yr,
+        )
+        if keywords
+        else []
+    )
+    hits_forced = (
+        client.get_nonprofits_by_ein(
+            force_include_eins, return_text=return_full_text
+        )
+        if force_include_eins
+        else []
+    )
+
+    # Dedup search-first so an EIN matched by FTS keeps its rank/text;
+    # forced-only EINs fall through unchanged.
+    seen = set()
+    hits = []
+    for h in hits_search + hits_forced:
+        if h.ein in seen:
+            continue
+        seen.add(h.ein)
+        hits.append(h)
+
     eins = [h.ein for h in hits]
-    logger.info(f"search_nonprofits returned {len(eins)} eligible EINs")
+    logger.info(
+        "Eligible EIN set: %d (search=%d, forced=%d)",
+        len(eins),
+        len(hits_search),
+        len(hits_forced),
+    )
     if not eins:
         return pd.DataFrame()
 
@@ -316,6 +359,16 @@ def query_process_givingtuesday_data(
     grants_long = _records_to_df(
         client.get_grant_summaries(eins, role="grantee", min_taxyear=filter_yr)
     )
+
+    if force_include_eins:
+        found = set(basic_long["ein"]) if not basic_long.empty else set()
+        missing = [e for e in force_include_eins if e not in found]
+        if missing:
+            logger.warning(
+                "force_include_eins: %d EIN(s) had no basic_fields row and were dropped: %s",
+                len(missing),
+                missing,
+            )
 
     df = _assemble_cb_shape(hits, basic_long, grants_long, column_for_funding)
 
