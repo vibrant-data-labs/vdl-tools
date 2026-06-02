@@ -41,6 +41,8 @@ SUBSET_MAPPED_TYPES = [
     "Corporate",
     "Private Equity",
     "Venture Capital",
+    "Angels",                 # added 2026-06 (xlsx bin renamed from High-Net-Worth Individual(s))
+    "Accelerator / Incubator",  # added 2026-06
 ]
 
 
@@ -206,7 +208,13 @@ def add_investor_boolean_flags(
     mapped types.
     """
     investor_df = investor_df.copy()
-    investor_df[f'is_{column_name.lower()}_investor_calced{keep_suffix}'] = investor_df[column_name].astype(bool)
+    # Strip a trailing "investor" from the flag name so we don't double it up
+    # (e.g. "growthInvestor" → stem "growth" → is_growth_investor_calced_nzi,
+    # not is_growthinvestor_investor_calced_nzi). "strategic" is unaffected.
+    stem = column_name.lower()
+    if stem.endswith("investor"):
+        stem = stem[:-len("investor")].rstrip("_")
+    investor_df[f'is_{stem}_investor_calced{keep_suffix}'] = investor_df[column_name].astype(bool)
     return investor_df
 
 
