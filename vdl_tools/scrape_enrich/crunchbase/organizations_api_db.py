@@ -55,6 +55,26 @@ def __rows_to_df(rows) -> pd.DataFrame | None:
     )
 
 
+def __coerce_to_model_schema(df: pd.DataFrame | None, model) -> pd.DataFrame | None:
+    """Normalize column dtypes to match the SQLAlchemy model.
+
+    DB-sourced frames (via __rows_to_df) get native Python types from
+    SQLAlchemy — DateTime columns come back as datetime objects. API-sourced
+    frames get raw JSON types — the same DateTime columns are ISO strings.
+    Concatenating the two yields an object column with mixed types that
+    PyArrow rejects at parquet write time. Coerce DateTime columns on each
+    side to pandas datetime64[ns, UTC] so the concat is type-safe.
+    """
+    if df is None or df.empty:
+        return df
+    for col in model.__table__.columns:
+        if col.name not in df.columns:
+            continue
+        if isinstance(col.type, sa.DateTime):
+            df[col.name] = pd.to_datetime(df[col.name], errors="coerce", utc=True)
+    return df
+
+
 def __dedup_df(df):
     if df is None or df.empty:
         return df
@@ -128,7 +148,7 @@ def __fetch_cached(session, model, ids, api_query_fn, *, use_cache, save_to_cach
             .filter(model.uuid.in_(ids))
             .all()
         )
-        cached_df = __rows_to_df(rows)
+        cached_df = __coerce_to_model_schema(__rows_to_df(rows), model)
 
     missing = ids
     if cached_df is not None and not cached_df.empty:
@@ -139,6 +159,7 @@ def __fetch_cached(session, model, ids, api_query_fn, *, use_cache, save_to_cach
         logger.info("Fetching %s missing %s from API...", len(missing), model.__tablename__)
         new_df = api_query_fn(missing)
         if new_df is not None and not new_df.empty:
+            new_df = __coerce_to_model_schema(new_df, model)
             cached_df = (
                 pd.concat([cached_df, new_df], ignore_index=True)
                 if cached_df is not None
