@@ -244,6 +244,7 @@ def scrape_websites_psql(
     return_combined_res: bool = True,
     verify_ssl: bool = True,
     max_per_subpath: int = 6,
+    max_per_host: int = 3,  # Cap concurrent requests per host to avoid 429s. None disables.
 ) -> pd.DataFrame:
 
     urls_ids = [(ensure_url_scheme(url), extract_website_name(url)) for url in urls]
@@ -339,7 +340,7 @@ def scrape_websites_psql(
             max_http = min(20, max_workers * 4)
             max_browser = min(3, max_workers)
 
-            async with AsyncScraper(max_http, max_browser, verify_ssl=verify_ssl) as scraper:
+            async with AsyncScraper(max_http, max_browser, verify_ssl=verify_ssl, max_per_host=max_per_host) as scraper:
                 for i, chunk in enumerate(chunks):
                     logger.info(f"Scraping chunk {i+1} / {len(chunks)}")
                     chunk_urls = [x[0] for x in chunk]
