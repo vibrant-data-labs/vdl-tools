@@ -109,6 +109,17 @@ def ensure_url_scheme(url: str) -> str:
     return url
 
 
+def _parsed_row_is_retryable(num_errors, max_errors):
+    """Whether a WebPagesParsed row is a prior combine failure that should be retried.
+
+    Retryable means it has between 1 and max_errors-1 errors (inclusive of 1). Successful
+    rows (0 errors) and rows that have hit the limit (>= max_errors) are NOT retryable:
+    the former are already done, the latter have been given up on. Mirrors the scrape-layer
+    retry condition used for urls_to_scrape so max_errors is honored on the parse layer too.
+    """
+    return 1 <= (num_errors or 0) < max_errors
+
+
 def process_website_text(url, data, add_section_links=False):
     return wp.get_page_text(url, data, add_section_links=add_section_links)
 
@@ -260,9 +271,15 @@ def scrape_websites_psql(
                 existing_parsed = session.query(WebPagesParsed).filter(
                     WebPagesParsed.cleaned_home_key.in_([x[1] for x in urls_ids])
                 ).all()
-                existing_parsed_data = [x.to_dict() for x in existing_parsed]
                 parsed_key_to_num_errors = {x.cleaned_home_key: (x.num_errors or 0) for x in existing_parsed}
                 existing_parsed_keys = parsed_key_to_num_errors
+                # Return previously-parsed rows as-is ONLY when we are not going to retry
+                # them. Retryable rows (1 <= num_errors < max_errors) are excluded here and
+                # re-combined below, so they are neither returned stale nor duplicated.
+                existing_parsed_data = [
+                    x.to_dict() for x in existing_parsed
+                    if not _parsed_row_is_retryable(x.num_errors, max_errors)
+                ]
             else:
                 existing_parsed_keys = {}
                 parsed_key_to_num_errors = {}
@@ -460,11 +477,16 @@ def scrape_websites_psql(
             scraped_df_for_combining = all_scraped_data_df.copy()
             scraped_df_for_combining['cleaned_home_key'] = scraped_df_for_combining['source'].apply(extract_website_name)
 
-            # Only combine data for websites that exist in WebPagesScraped but not in WebPagesParsed
+            # Combine data for websites that have scraped data and either have no parsed
+            # row yet OR have a prior parse failure still under the retry limit. The
+            # retryable clause mirrors the scrape-layer logic so max_errors is honored on
+            # the parse layer too (previously a single failure was permanent).
+            available_keys = set(scraped_df_for_combining['cleaned_home_key'].unique())
             unfound_index_rows = [
                 (url, website_id) for url, website_id in urls_to_process if
-                website_id not in existing_parsed_keys and
-                website_id in scraped_df_for_combining['cleaned_home_key'].unique()
+                website_id in available_keys and
+                (website_id not in existing_parsed_keys or
+                 _parsed_row_is_retryable(existing_parsed_keys[website_id], max_errors))
             ]
             unfound_chunks = list(chunked(unfound_index_rows, n_per_commit))
         else:
