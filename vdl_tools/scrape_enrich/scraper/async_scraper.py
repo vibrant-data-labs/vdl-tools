@@ -1,8 +1,10 @@
 import asyncio
+import contextlib
 import logging
 import httpx
 from enum import Enum
 from typing import Optional, Dict, Any, List, Tuple
+from urllib.parse import urlparse
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from playwright_stealth import Stealth
 
@@ -83,6 +85,7 @@ class AsyncScraper:
         retry_delay: float = DEFAULT_RETRY_DELAY,
         connect_timeout: float = DEFAULT_CONNECT_TIMEOUT,
         read_timeout: float = DEFAULT_READ_TIMEOUT,
+        max_per_host: Optional[int] = None,
     ):
         """
         Initialize the async scraper with separate concurrency limits for lightweight (HTTP)
@@ -96,6 +99,9 @@ class AsyncScraper:
             retry_delay: Base delay between retries (uses exponential backoff)
             connect_timeout: Timeout for establishing connection (fast fail on dead links)
             read_timeout: Timeout for reading response (allow time for slow servers)
+            max_per_host: Max concurrent HTTP requests to a single host. None disables
+                per-host throttling (default). Set to a small value (e.g. 3) to avoid
+                tripping rate limits (429s) when scraping many pages of one site.
         """
         self.http_sem = asyncio.Semaphore(max_concurrent_http)
         self.browser_sem = asyncio.Semaphore(max_concurrent_browser)
@@ -105,8 +111,25 @@ class AsyncScraper:
         self.retry_delay = retry_delay
         self.connect_timeout = connect_timeout
         self.read_timeout = read_timeout
+        self.max_per_host = max_per_host
+        self._host_sems: Dict[str, asyncio.Semaphore] = {}
         self.playwright = None
         self.browser = None
+
+    def _host_limiter(self, url: str):
+        """Return a context manager limiting concurrent requests to url's host.
+
+        When max_per_host is None this is a no-op. Per-host semaphores are created
+        lazily and cached; dict access is safe because asyncio is single-threaded.
+        """
+        if self.max_per_host is None:
+            return contextlib.nullcontext()
+        host = urlparse(url).netloc
+        sem = self._host_sems.get(host)
+        if sem is None:
+            sem = asyncio.Semaphore(self.max_per_host)
+            self._host_sems[host] = sem
+        return sem
 
     async def __aenter__(self):
         # Use separate timeouts: fast connect timeout to fail quickly on dead links,
@@ -168,10 +191,13 @@ class AsyncScraper:
             Tuple of (content, failure_reason, status_code).
             status_code is the actual HTTP status code, or 0 if the request never completed.
         """
-        async with self.http_sem:
-            if not url.startswith('http'):
-                url = f'https://{url}'
+        if not url.startswith('http'):
+            url = f'https://{url}'
 
+        # Per-host limiter is acquired OUTSIDE the global semaphore so that a single
+        # rate-limited host can't occupy the global HTTP pool while waiting on its own
+        # (smaller) slot, which would starve other hosts.
+        async with self._host_limiter(url), self.http_sem:
             for attempt in range(self.http_retries):
                 try:
                     response = await self.client.get(url)
@@ -358,6 +384,7 @@ async def scrape_urls_async(
     verify_ssl: bool = False,
     connect_timeout: float = DEFAULT_CONNECT_TIMEOUT,
     read_timeout: float = DEFAULT_READ_TIMEOUT,
+    max_per_host: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
     Helper function to run the scraper for a list of URLs.
@@ -369,6 +396,7 @@ async def scrape_urls_async(
         verify_ssl: Whether to verify SSL certificates
         connect_timeout: Timeout for establishing connection (fast fail on dead links)
         read_timeout: Timeout for reading response (allow time for slow servers)
+        max_per_host: Max concurrent HTTP requests to a single host (None disables)
 
     Returns a list of results, one per URL. Failed URLs will have success=False.
     """
@@ -378,6 +406,7 @@ async def scrape_urls_async(
         verify_ssl=verify_ssl,
         connect_timeout=connect_timeout,
         read_timeout=read_timeout,
+        max_per_host=max_per_host,
     ) as scraper:
         tasks = [scraper.scrape_url(url) for url in urls]
         results = await asyncio.gather(*tasks, return_exceptions=True)
