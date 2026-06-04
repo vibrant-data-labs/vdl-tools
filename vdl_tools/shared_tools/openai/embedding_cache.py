@@ -156,7 +156,9 @@ class EmbeddingCache():
             deduped[key] = row
         rows = list(deduped.values())
 
-        now = dt.datetime.utcnow()
+        # `dt.datetime.utcnow()` is deprecated in 3.12+. Columns are naive
+        # `DateTime` (see `BaseMixin`), so strip tz to keep round-trip identical.
+        now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
         for row in rows:
             row.setdefault("date_added", now)
             row.setdefault("date_updated", now)
@@ -187,7 +189,9 @@ class EmbeddingCache():
             deduped[key] = row
         rows = list(deduped.values())
 
-        now = dt.datetime.utcnow()
+        # `dt.datetime.utcnow()` is deprecated in 3.12+. Columns are naive
+        # `DateTime` (see `BaseMixin`), so strip tz to keep round-trip identical.
+        now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
         for row in rows:
             row.setdefault("date_added", now)
             row.setdefault("date_updated", now)

@@ -353,6 +353,8 @@ def divided_funding_rows_and_flatten(
                 round_group_dict["n_rounds_grant"] = None
                 round_group_dict["n_rounds_project_finance"] = None
                 round_group_dict["n_rounds_convertible_note"] = None
+                round_group_dict["accelerator_raised"] = None
+                round_group_dict["n_rounds_accelerator"] = None
             if include_investor_lists and round_name in PERIODS_WITH_INVESTOR_LIST:
                 round_group_dict["investors"] = None
 
@@ -406,18 +408,25 @@ def divided_funding_rows_and_flatten(
                 is_grant = round_group_rounds['financing_type_nzi'] == "Grant"
                 is_pf = round_group_rounds['round_type_nzi'] == "Project Finance"
                 is_cn = round_group_rounds['round_type_nzi'] == "Convertible note"
+                # Accelerator/incubator (round_type-based; NZI uses two casings).
+                is_accel = round_group_rounds['round_type_nzi'].isin(
+                    ["Accelerator/incubator", "Accelerator/Incubator"]
+                )
                 debt_rows = round_group_rounds[is_debt]
                 grant_rows = round_group_rounds[is_grant]
                 pf_rows = round_group_rounds[is_pf]
                 cn_rows = round_group_rounds[is_cn]
+                accel_rows = round_group_rounds[is_accel]
                 round_group_dict["debt_raised"]  = float(debt_rows['round_amount_usd_nzi'].sum())
                 round_group_dict["grant_raised"] = float(grant_rows['round_amount_usd_nzi'].sum())
                 round_group_dict["project_finance_raised"] = float(pf_rows['round_amount_usd_nzi'].sum())
                 round_group_dict["convertible_note_raised"] = float(cn_rows['round_amount_usd_nzi'].sum())
+                round_group_dict["accelerator_raised"] = float(accel_rows['round_amount_usd_nzi'].sum())
                 round_group_dict["n_rounds_debt"]  = int(len(debt_rows))
                 round_group_dict["n_rounds_grant"] = int(len(grant_rows))
                 round_group_dict["n_rounds_project_finance"] = int(len(pf_rows))
                 round_group_dict["n_rounds_convertible_note"] = int(len(cn_rows))
+                round_group_dict["n_rounds_accelerator"] = int(len(accel_rows))
                 # Same undisclosed-amount NaN guard as equity/nonequity above.
                 # Gate each split by its own count so true zeros survive.
                 for _amt_key, _n_key in (
@@ -425,6 +434,7 @@ def divided_funding_rows_and_flatten(
                     ("grant_raised", "n_rounds_grant"),
                     ("project_finance_raised", "n_rounds_project_finance"),
                     ("convertible_note_raised", "n_rounds_convertible_note"),
+                    ("accelerator_raised", "n_rounds_accelerator"),
                 ):
                     if round_group_dict[_n_key] > 0 and round_group_dict[_amt_key] == 0:
                         round_group_dict[_amt_key] = float("nan")

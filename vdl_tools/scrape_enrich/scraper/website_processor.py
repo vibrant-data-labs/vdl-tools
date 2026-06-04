@@ -167,15 +167,19 @@ def process_page_source(url: str, source: str):
 
 
 def filter_anchors(url, links):
+    # Compare prefixes without scheme so an http input still matches
+    # https hrefs in the page (and vice versa).
+    bare_url = url.split('://', 1)[1] if '://' in url else url
     urls = [
-        url.replace('www.', ''),
-        url[:-1] if url.endswith('/') else url,
+        bare_url.replace('www.', ''),
+        bare_url[:-1] if bare_url.endswith('/') else bare_url,
         '/'
     ]
 
     res_links = []
     for x in links:
-        matches = [s for s in urls if x.startswith(s) and len(x) > len(s)]
+        bare_x = x.split('://', 1)[1] if '://' in x else x
+        matches = [s for s in urls if bare_x.startswith(s) and len(bare_x) > len(s)]
         if len(matches) == 0:
             continue
 
