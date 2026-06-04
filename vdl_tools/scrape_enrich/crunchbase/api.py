@@ -1,5 +1,5 @@
 from typing import Callable
-
+from vdl_tools.shared_tools.tools.logger import logger
 
 def __predicate(field, operator, values=list()):
     return {
@@ -110,10 +110,10 @@ def api_query_factory(url, default_fields, limit=None) -> Callable:
                 if data.status_code == 200 and data.text.strip():
                     break
                 wait = 2 ** attempt
-                print(f"\nCB API returned empty/invalid response (status {data.status_code}), retrying in {wait}s (attempt {attempt + 1}/{max_retries})...")
+                logger.warning(f"\nCB API returned empty/invalid response (status {data.status_code}), retrying in {wait}s (attempt {attempt + 1}/{max_retries})...")
                 time.sleep(wait)
             else:
-                print(f"\nCB API failed after {max_retries} retries, stopping pagination.")
+                logger.warning(f"\nCB API failed after {max_retries} retries, stopping pagination.")
                 break
 
             res_json = data.json()
