@@ -673,7 +673,11 @@ def run_fewshot_classification(
         for category_definition_tuple in
         tax_level['data'][[tax_level['name'], tax_level['textattr']]].values.tolist()
     ])
-
+    logger.info(
+        "run_fewshot_classification called: %d rows, unique orgs: %d",
+        len(all_df),
+        all_df[id_col].nunique(),
+    )
     ids_to_payloads = {}
     all_df['taxonomy_mapping_id'] = all_df.apply(lambda x: f"{x[id_col]}_{x[mapped_category_col]}", axis=1)
     for _, row in all_df.iterrows():
