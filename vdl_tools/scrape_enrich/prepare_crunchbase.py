@@ -493,8 +493,8 @@ def _process_crunchbase_data(
     df_cb['id'] = df_cb['uuid']
 
     if filter_yr:
-        logger.info(f'Filtering out companies last funded before {filter_yr}')
-        df_cb = df_cb[df_cb['Year_Last_Funded'] >= filter_yr]
+        logger.info(f'Filtering out companies last funded before {filter_yr} (keeping unfunded)')
+        df_cb = df_cb[(df_cb['Year_Last_Funded'] >= filter_yr) | (df_cb['Year_Last_Funded'].isna())]
 
     df_cb['Description_990'] = ''
 
