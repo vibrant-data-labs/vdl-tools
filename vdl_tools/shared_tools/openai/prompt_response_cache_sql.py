@@ -15,8 +15,10 @@ docstring and method Notes for model-specific parameters.
 
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor as ThreadPool
+import datetime as dt
 
-from sqlalchemy import select, tuple_
+from sqlalchemy import select, func, tuple_
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from more_itertools import chunked
 
 from vdl_tools.shared_tools.database_cache.database_models.prompt import Prompt, PromptResponse
@@ -26,7 +28,7 @@ from vdl_tools.shared_tools.tools.logger import logger
 
 import logging
 logger.setLevel(logging.DEBUG)
-from typing import Optional
+from typing import Any, Optional
 
 
 def get_prompt_by_id(prompt_id: str, session):
@@ -362,6 +364,158 @@ class PromptResponseCacheSQL():
         logger.info("%s previous found, %s unfound", len(found_rows), len(unfound_ids_or_errors))
         return found_rows, unfound_ids_or_errors
 
+    def _build_success_row(
+        self,
+        given_id: str,
+        text,
+        response,
+    ) -> dict[str, Any]:
+        """Build a row dict for a successful API response.
+
+        Subclasses override this to customize serialization (e.g. JSON-
+        encoded dict text, or a different response payload shape) without
+        touching the bulk-upsert plumbing.
+
+        Returns
+        -------
+        dict
+            Kwargs suitable for `PromptResponse(**row)` or for use as a
+            VALUES row in `INSERT ... ON CONFLICT DO UPDATE`. Includes
+            `text_id` so the INSERT path can populate the indexed column.
+        """
+        text_id = PromptResponse.create_text_id(text)
+        return {
+            "prompt_id": self.prompt.id,
+            "given_id": str(given_id),
+            "model_name": self.model,
+            "text_id": text_id,
+            "input_text": text,
+            "response_full": response.model_dump_json(),
+            "response_text": response.output_text,
+            "num_errors": None,
+        }
+
+    def _build_error_row(
+        self,
+        given_id: str,
+        text,
+        response_full,
+    ) -> dict[str, Any]:
+        """Build a row dict for a failed API call (single-error row).
+
+        The `num_errors` field is set to 1 for the INSERT case; the
+        bulk-upsert helper handles the COALESCE-and-increment for the
+        UPDATE case via the `set_` clause.
+        """
+        text_id = PromptResponse.create_text_id(text)
+        return {
+            "prompt_id": self.prompt.id,
+            "given_id": str(given_id),
+            "model_name": self.model,
+            "text_id": text_id,
+            "input_text": text,
+            "response_full": response_full,
+            "num_errors": 1,
+        }
+
+    def _upsert_success_rows(self, rows: list[dict[str, Any]]):
+        """Bulk upsert successful response rows.
+
+        Uses PostgreSQL `INSERT ... ON CONFLICT DO UPDATE` on the
+        composite PK (prompt_id, given_id, model_name). On conflict,
+        overwrites response columns, clears `num_errors`, and bumps
+        `date_updated` (Core's `ON CONFLICT DO UPDATE` doesn't fire the
+        column's ORM `onupdate` hook, so we set it explicitly).
+
+        Parameters
+        ----------
+        rows : list[dict]
+            Row dicts as built by `_build_success_row`. May be empty
+            (no-op).
+
+        Notes
+        -----
+        Skipped when `self.store_results` is False.
+        """
+        if not rows or not self.store_results:
+            return
+        # Dedupe by PK so a single batch never violates ON CONFLICT semantics.
+        deduped: dict[tuple, dict[str, Any]] = {}
+        for row in rows:
+            key = (row["prompt_id"], row["given_id"], row["model_name"])
+            deduped[key] = row
+        rows = list(deduped.values())
+
+        # Stamp timestamps explicitly so a fresh insert via Core gets both
+        # date_added and date_updated populated even though the model's
+        # Python-side `default=` / `onupdate=` hooks don't fire reliably
+        # through `pg_insert().values([...])`.
+        # `dt.datetime.utcnow()` is deprecated in 3.12+. Columns are naive
+        # `DateTime` (see `BaseMixin`), so strip tz to keep round-trip identical.
+        now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+        for row in rows:
+            row.setdefault("date_added", now)
+            row.setdefault("date_updated", now)
+
+        stmt = pg_insert(PromptResponse).values(rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["prompt_id", "given_id", "model_name"],
+            set_={
+                "text_id": stmt.excluded.text_id,
+                "input_text": stmt.excluded.input_text,
+                "response_full": stmt.excluded.response_full,
+                "response_text": stmt.excluded.response_text,
+                "num_errors": None,
+                # date_added intentionally NOT in the SET clause — preserve
+                # the original "first cached at" timestamp on refresh.
+                "date_updated": now,
+            },
+        )
+        self.session.execute(stmt)
+
+    def _upsert_error_rows(self, rows: list[dict[str, Any]]):
+        """Bulk upsert error rows, incrementing `num_errors` on conflict.
+
+        Uses PostgreSQL `INSERT ... ON CONFLICT DO UPDATE` on the
+        composite PK. On conflict, overwrites `response_full`, increments
+        `num_errors` via `COALESCE(num_errors, 0) + 1`, and bumps
+        `date_updated`.
+
+        Parameters
+        ----------
+        rows : list[dict]
+            Row dicts as built by `_build_error_row`. May be empty (no-op).
+
+        Notes
+        -----
+        Skipped when `self.store_results` is False.
+        """
+        if not rows or not self.store_results:
+            return
+        deduped: dict[tuple, dict[str, Any]] = {}
+        for row in rows:
+            key = (row["prompt_id"], row["given_id"], row["model_name"])
+            deduped[key] = row
+        rows = list(deduped.values())
+
+        # `dt.datetime.utcnow()` is deprecated in 3.12+. Columns are naive
+        # `DateTime` (see `BaseMixin`), so strip tz to keep round-trip identical.
+        now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+        for row in rows:
+            row.setdefault("date_added", now)
+            row.setdefault("date_updated", now)
+
+        stmt = pg_insert(PromptResponse).values(rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["prompt_id", "given_id", "model_name"],
+            set_={
+                "response_full": stmt.excluded.response_full,
+                "num_errors": func.coalesce(PromptResponse.num_errors, 0) + 1,
+                "date_updated": now,
+            },
+        )
+        self.session.execute(stmt)
+
     def store_error(
         self,
         given_id: str,
@@ -369,6 +523,9 @@ class PromptResponseCacheSQL():
         response_full,
     ):
         """Store or update a cache row for a failed API call (increment num_errors).
+
+        Single-row path. Used by `get_cache_or_run` (the non-bulk entry
+        point). The bulk path uses `_upsert_error_rows` instead.
 
         Parameters
         ----------
@@ -410,14 +567,8 @@ class PromptResponseCacheSQL():
                 self.session.merge(previous_response)
             prompt_response_obj = previous_response
         else:
-            prompt_response_obj = PromptResponse(
-                prompt_id=self.prompt.id,
-                given_id=str(given_id),
-                model_name=self.model,
-                input_text=text,
-                response_full=response_full,
-                num_errors=1,
-            )
+            row = self._build_error_row(given_id, text, response_full)
+            prompt_response_obj = PromptResponse(**row)
             if self.store_results:
                 self.session.merge(prompt_response_obj)
         return prompt_response_obj
@@ -429,6 +580,9 @@ class PromptResponseCacheSQL():
         response,
     ):
         """Store a successful API response in the cache.
+
+        Single-row path. Used by `get_cache_or_run` (the non-bulk entry
+        point). The bulk path uses `_upsert_success_rows` instead.
 
         When ``store_results`` is False (set in the constructor), the merge
         to the database is skipped; the in-memory PromptResponse is still
@@ -448,15 +602,8 @@ class PromptResponseCacheSQL():
         PromptResponse
             The cache row (persisted only if store_results is True).
         """
-        prompt_response_obj = PromptResponse(
-            prompt_id=self.prompt.id,
-            given_id=str(given_id),
-            model_name=self.model,
-            input_text=text,
-            response_full=response.model_dump_json(),
-            response_text=response.output_text,
-            num_errors=None,
-        )
+        row = self._build_success_row(given_id, text, response)
+        prompt_response_obj = PromptResponse(**row)
 
         logger.debug("Storing response for %s, %s", self.prompt.name, given_id)
         if self.store_results:
@@ -622,8 +769,8 @@ class PromptResponseCacheSQL():
         self,
         given_ids_texts: list[tuple[str, str]],
         use_cached_result: bool = True,
-        n_per_commit: int = 50,
-        max_workers=3,
+        n_per_commit: int = 200,
+        max_workers=20,
         max_errors=1,
         **kwargs
     ) -> dict[str, dict]:
@@ -641,9 +788,15 @@ class PromptResponseCacheSQL():
         use_cached_result : bool, optional
             If True, use cached results when available. Default is True.
         n_per_commit : int, optional
-            Number of completions to run before committing to the DB. Default is 50.
+            Number of completions to run before bulk-upserting and committing
+            to the DB. Default is 200. Each chunk issues one bulk
+            `INSERT ... ON CONFLICT DO UPDATE` per kind (success/error), so
+            DB cost scales with chunk count, not item count.
         max_workers : int, optional
-            Number of parallel workers for API calls. Default is 3.
+            Number of parallel API workers. Default is 20. Workers do not
+            touch the DB session — concurrency is bounded only by OpenAI
+            rate limits. Tune up (e.g. 50-100) for nano/mini models with
+            generous quotas; down (e.g. 5-10) for tier-1 mainline models.
         max_errors : int, optional
             Maximum number of errors to allow for a (given_id, text) before
             excluding from retries. Default is 1.
@@ -696,29 +849,16 @@ class PromptResponseCacheSQL():
         logger.info("Found %s cached responses", len(res))
         logger.info("Need to run %s responses", len_unfound)
 
-        def _get_completion_store(given_id_text):
+        def _api_only(given_id_text):
+            """Worker: API call only, no session access. Returns (given_id, text, response_or_err, error_flag)."""
             given_id, text = given_id_text
-
             response, error = self.get_completion_catch_error(
                 prompt_str=self.prompt.prompt_str,
                 text=text,
                 return_all=True,
-                **kwargs
+                **kwargs,
             )
-            if error:
-                self.store_error(
-                    given_id=given_id,
-                    text=text,
-                    response_full=response,
-                )
-                return None
-
-            data = self.store_item(
-                given_id=given_id,
-                text=text,
-                response=response,
-            )
-            return data.to_dict()
+            return given_id, text, response, error
 
         if len(unfound_rows) == 0:
             res = {x: res[x] for x in requested_given_ids if x in res}
@@ -727,14 +867,39 @@ class PromptResponseCacheSQL():
 
         with ThreadPool(max_workers=max_workers) as executor:
             for chunk in chunked(unfound_rows, n_per_commit):
-                given_ids, _ = zip(*chunk)
                 try:
                     logger.info("Running GPT %s on chunk of %s", self.prompt.name, len(chunk))
-                    results = list(executor.map(_get_completion_store, chunk))
-                    for given_id, response in zip(given_ids, results):
-                        if response:
-                            res[given_id] = response
+                    # Workers do not touch self.session — concurrency is bounded
+                    # only by the OpenAI API.
+                    results = list(executor.map(_api_only, chunk))
+
+                    success_rows: list[dict[str, Any]] = []
+                    error_rows: list[dict[str, Any]] = []
+                    response_dicts_by_given_id: dict[str, dict] = {}
+
+                    for given_id, text, response, error in results:
+                        if error:
+                            logger.warning("No response text for %s", given_id)
+                            error_rows.append(
+                                self._build_error_row(given_id, text, response)
+                            )
+                        else:
+                            row = self._build_success_row(given_id, text, response)
+                            success_rows.append(row)
+                            # Build the to_dict() shape the legacy path returns,
+                            # without needing to round-trip through the DB.
+                            response_dicts_by_given_id[str(given_id)] = (
+                                self._row_to_response_dict(row)
+                            )
+
+                    # Single bulk upsert per kind, then one commit per chunk
+                    # (matches the prior commit cadence). DB writes happen on
+                    # the main thread, so no Session thread-safety hazard.
+                    self._upsert_success_rows(success_rows)
+                    self._upsert_error_rows(error_rows)
                     self.session.commit()
+
+                    res.update(response_dicts_by_given_id)
                     n_run += len(results)
                 except KeyboardInterrupt:
                     logger.warning("Received KeyboardInterrupt, returning the currently scraped data...")
@@ -753,12 +918,34 @@ class PromptResponseCacheSQL():
         res = {x: res[x] for x in requested_given_ids if x in res}
         return res
 
+    def _row_to_response_dict(self, row: dict[str, Any]) -> dict[str, Any]:
+        """Convert a built-row dict into the `PromptResponse.to_dict()`-shaped
+        dict the bulk path returns to callers.
+
+        Mirrors the legacy ``data.to_dict()`` shape so callers don't see a
+        behavior change. Date columns aren't populated client-side — they
+        default to None in the returned dict, matching how a freshly
+        constructed (un-committed) PromptResponse would render.
+        """
+        return {
+            "prompt_id": row.get("prompt_id"),
+            "given_id": row.get("given_id"),
+            "model_name": row.get("model_name"),
+            "text_id": row.get("text_id"),
+            "input_text": row.get("input_text"),
+            "response_full": row.get("response_full"),
+            "response_text": row.get("response_text"),
+            "num_errors": row.get("num_errors"),
+            "date_added": None,
+            "date_updated": None,
+        }
+
     def bulk_get_cache_or_run(
         self,
         given_ids_texts: list[tuple[str, str]],
         use_cached_result: bool = True,
-        n_per_commit: int = 50,
-        max_workers=3,
+        n_per_commit: int = 200,
+        max_workers=20,
         max_errors=1,
         **kwargs
     ):
@@ -774,9 +961,11 @@ class PromptResponseCacheSQL():
         use_cached_result : bool, optional
             If True, use cached results when available. Default is True.
         n_per_commit : int, optional
-            Chunk size for DB commits. Default is 50.
+            Chunk size for DB commits (one bulk upsert per kind per chunk).
+            Default is 200.
         max_workers : int, optional
-            Number of parallel workers. Default is 3.
+            Number of parallel API workers. Default is 20. Tune up for
+            nano/mini models with generous quotas; down for tier-1 mainline.
         max_errors : int, optional
             Max errors per (given_id, text) before skipping. Default is 1.
         **kwargs

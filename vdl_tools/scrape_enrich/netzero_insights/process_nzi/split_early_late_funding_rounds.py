@@ -1,6 +1,30 @@
 import datetime as dt
 import pandas as pd
 
+from vdl_tools.scrape_enrich.netzero_insights.process_nzi.stage_constants import (
+    A_TO_B_TYPES,
+    EXIT_TYPES,
+    LATE_STAGE_TYPES,
+    MIDDLE_STAGE_TYPES,
+    SPLIT_AFTER_LAST_EARLY_ROUND,
+    SPLIT_ON_FIRST_LATE_ROUND,
+    STAGE_ORDER,
+    UP_TO_A_TYPES,
+)
+
+# Periods that get the per-investor-type count columns (one count column per investor type:
+# ``{period}_has_<type>_investor_calced_nzi_count``). "exit" is intentionally excluded.
+PERIODS_WITH_INVESTOR_TYPE_COUNTS = {"up_to_a", "a_to_b", "b_to_late", "late_to_exit"}
+
+# Periods that get the per-financing-type breakdown columns (equity_raised / nonequity_raised /
+# debt_raised / grant_raised / project_finance_raised / convertible_note_raised plus per-type
+# round counts — 13 columns total). "exit" is intentionally excluded.
+PERIODS_WITH_FINANCING_TYPE_COLS = {"up_to_a", "a_to_b", "b_to_late", "late_to_exit"}
+
+# Periods that get the per-period ``{period}_investors`` list-of-dicts column (one dict per
+# unique investor seen in any round in that period). "exit" is intentionally excluded.
+PERIODS_WITH_INVESTOR_LIST = {"up_to_a", "a_to_b", "b_to_late", "late_to_exit"}
+
 
 def did_raise_venture(company_funding_rows):
     """Check whether a company has raised venture (equity) funding.
@@ -17,96 +41,6 @@ def did_raise_venture(company_funding_rows):
         True if any row has ``financing_type_nzi == "Equity"``.
     """
     return "Equity" in company_funding_rows['financing_type_nzi'].values
-
-
-M_AND_A_SUCCESS_STAGE = "Series A"
-
-EARLY_VC_STAGES = [
-    "Early VC",
-    "Pre-Seed",
-    "Seed",
-    "Series A",
-]
-
-# Anything Series B or later is considered a late venture round
-LATE_VC_CUTOFF = "Series B"
-
-DISCLOSED_STAGES_ORDERED = [
-    "Accelerator/incubator",
-    "Grant",
-    "Pre-Seed",
-    "Seed",
-    "Early VC",
-    "Series A",
-    "Series B",
-    "Series C",
-    "Late VC",
-    "Series D",
-    "Series E",
-    "Series F",
-    "Series G",
-    "Series H",
-    "Series I",
-    "Series J",
-    "IPO",
-    "SPAC",
-    "Post IPO",
-    "Post IPO - Equity",
-]
-
-M_AND_A_NAMES = [
-    "Merger",
-    "Acquisition",
-    "Buyout",
-]
-
-SPLIT_ON_FIRST_LATE_ROUND = "first_late_round"
-SPLIT_AFTER_LAST_EARLY_ROUND = "after_last_early_round"
-
-
-TWO_YEARS_IN_DAYS = 365 * 2
-
-# Stage classification sets — only equity venture rounds define boundaries.
-# The pre-Series-B window is split into two finer buckets:
-#   up_to_a = rounds before the first Series A or Early VC round
-#   a_to_b  = rounds from first Series A / Early VC up to first Series B
-UP_TO_A_TYPES = {
-    "Pre-Seed",
-    "Seed",
-}
-
-A_TO_B_TYPES = {
-    "Series A",
-    "Early VC",
-}
-
-MIDDLE_STAGE_TYPES = {
-    "Series B",
-    # "Late VC",  # moved to late stage - usually follows C or is synonymous with C
-}
-
-LATE_STAGE_TYPES = {
-    "Late VC",
-    "Series C",
-    "Series D",
-    "Series E",
-    "Series F",
-    "Series G",
-    "Series H",
-    "Series I",
-    "Series J",
-    "Growth equity",
-}
-
-EXIT_TYPES = {
-    "IPO",
-    "SPAC",
-    "Post IPO",
-    "Post IPO - Equity",
-    "Merger",
-    "Acquisition",
-    "Buyout",
-}
 
 
 def _get_effective_stage(round_type):
@@ -137,9 +71,6 @@ def _get_effective_stage(round_type):
     if round_type in EXIT_TYPES:
         return "exit"
     return None
-
-
-STAGE_ORDER = {"up_to_a": 0, "a_to_b": 1, "b_to_late": 2, "late_to_exit": 3, "exit": 4}
 
 
 def raised_equity_round(company_funding_rows):
@@ -246,18 +177,6 @@ def divide_funding_rows(
         "exit":    split[4],
     }
 
-# Buckets that get per-investor-type count columns. Pre-Series-B funding is
-# the analytical focus, so we count investors in the two pre-B buckets plus
-# `b_to_late` (so callers can study Series-B-stage investors as well).
-INVESTOR_COUNT_BUCKETS = {"up_to_a", "a_to_b", "b_to_late"}
-
-# Buckets that get equity / non-equity split columns. Same pre-B focus as
-# INVESTOR_COUNT_BUCKETS — late_to_exit and exit are excluded.
-EQUITY_SPLIT_BUCKETS = {"up_to_a", "a_to_b", "b_to_late"}
-
-# Buckets that get a per-stage `{stage}_investors` list-of-dicts column.
-INVESTOR_LIST_BUCKETS = {"up_to_a", "a_to_b", "b_to_late"}
-
 
 def _collect_investor_types(primary, secondary):
     """Return a deduped list of investor types from primary + secondary.
@@ -358,7 +277,7 @@ def divided_funding_rows_and_flatten(
         Investor metadata (output of ``process_nzi_investors``) with
         ``investor_id_nzi``, ``name_nzi``, ``primary_type_nzi``, and
         ``secondary_types_nzi``. When provided, each bucket in
-        ``INVESTOR_LIST_BUCKETS`` gets a ``{stage}_investors`` column
+        ``PERIODS_WITH_INVESTOR_LIST`` gets a ``{stage}_investors`` column
         containing a deduped list of
         ``{"id", "name", "investor_types"}`` dicts (``investor_types``
         merges primary + secondary types). When ``None`` (default), the
@@ -370,9 +289,9 @@ def divided_funding_rows_and_flatten(
         One row per company with columns prefixed by stage name (e.g.
         ``up_to_a_first_round_date``, ``a_to_b_amount_raised``,
         ``b_to_late_num_rounds``, ``exit_last_round_date``). Buckets in
-        ``INVESTOR_COUNT_BUCKETS`` also get
+        ``PERIODS_WITH_INVESTOR_TYPE_COUNTS`` also get
         ``*_has_<type>_investor_calced_nzi_count`` columns. Buckets in
-        ``EQUITY_SPLIT_BUCKETS`` additionally get
+        ``PERIODS_WITH_FINANCING_TYPE_COLS`` additionally get
         ``*_equity_raised`` (sum of ``Equity`` financing-type rounds),
         ``*_nonequity_raised`` (sum of all other rounds — grants, debt,
         convertibles, etc.), ``*_n_rounds_equity`` / ``*_n_rounds_nonequity``
@@ -383,7 +302,7 @@ def divided_funding_rows_and_flatten(
         the NaN guard, which fires when every round of a given type in
         the bucket was undisclosed). When
         ``processed_investor_df`` is provided, buckets in
-        ``INVESTOR_LIST_BUCKETS`` also get ``*_investors`` — a deduped
+        ``PERIODS_WITH_INVESTOR_LIST`` also get ``*_investors`` — a deduped
         list of ``{"id", "name", "investor_types"}`` dicts covering every
         investor across the bucket's rounds.
     """
@@ -414,13 +333,13 @@ def divided_funding_rows_and_flatten(
                 "all_funding_activity": None,
             }
             # Investor counts only for the two pre-B buckets.
-            if round_name in INVESTOR_COUNT_BUCKETS:
+            if round_name in PERIODS_WITH_INVESTOR_TYPE_COUNTS:
                 round_group_dict.update({f"{col}_count": None for col in investor_type_columns})
             # Equity / non-equity split only for pre-B buckets. The
             # debt / grant / project-finance entries are extra line items
             # carved out of the nonequity rows so analyses can pull them
             # out separately (not a re-bucketing).
-            if round_name in EQUITY_SPLIT_BUCKETS:
+            if round_name in PERIODS_WITH_FINANCING_TYPE_COLS:
                 round_group_dict["equity_raised"] = None
                 round_group_dict["nonequity_raised"] = None
                 round_group_dict["n_rounds_equity"] = None
@@ -434,7 +353,9 @@ def divided_funding_rows_and_flatten(
                 round_group_dict["n_rounds_grant"] = None
                 round_group_dict["n_rounds_project_finance"] = None
                 round_group_dict["n_rounds_convertible_note"] = None
-            if include_investor_lists and round_name in INVESTOR_LIST_BUCKETS:
+                round_group_dict["accelerator_raised"] = None
+                round_group_dict["n_rounds_accelerator"] = None
+            if include_investor_lists and round_name in PERIODS_WITH_INVESTOR_LIST:
                 round_group_dict["investors"] = None
 
             if round_group_rounds is None:
@@ -451,10 +372,10 @@ def divided_funding_rows_and_flatten(
             # so downstream means treat the bucket as missing, not as $0.
             if round_group_dict["num_rounds"] > 0 and round_group_dict["amount_raised"] == 0:
                 round_group_dict["amount_raised"] = float("nan")
-            if round_name in INVESTOR_COUNT_BUCKETS:
+            if round_name in PERIODS_WITH_INVESTOR_TYPE_COUNTS:
                 for investor_type_col in investor_type_columns:
                     round_group_dict[f"{investor_type_col}_count"] = round_group_rounds[investor_type_col].sum()
-            if round_name in EQUITY_SPLIT_BUCKETS:
+            if round_name in PERIODS_WITH_FINANCING_TYPE_COLS:
                 is_equity = round_group_rounds['financing_type_nzi'] == "Equity"
                 equity_rows = round_group_rounds[is_equity]
                 nonequity_rows = round_group_rounds[~is_equity]
@@ -487,18 +408,25 @@ def divided_funding_rows_and_flatten(
                 is_grant = round_group_rounds['financing_type_nzi'] == "Grant"
                 is_pf = round_group_rounds['round_type_nzi'] == "Project Finance"
                 is_cn = round_group_rounds['round_type_nzi'] == "Convertible note"
+                # Accelerator/incubator (round_type-based; NZI uses two casings).
+                is_accel = round_group_rounds['round_type_nzi'].isin(
+                    ["Accelerator/incubator", "Accelerator/Incubator"]
+                )
                 debt_rows = round_group_rounds[is_debt]
                 grant_rows = round_group_rounds[is_grant]
                 pf_rows = round_group_rounds[is_pf]
                 cn_rows = round_group_rounds[is_cn]
+                accel_rows = round_group_rounds[is_accel]
                 round_group_dict["debt_raised"]  = float(debt_rows['round_amount_usd_nzi'].sum())
                 round_group_dict["grant_raised"] = float(grant_rows['round_amount_usd_nzi'].sum())
                 round_group_dict["project_finance_raised"] = float(pf_rows['round_amount_usd_nzi'].sum())
                 round_group_dict["convertible_note_raised"] = float(cn_rows['round_amount_usd_nzi'].sum())
+                round_group_dict["accelerator_raised"] = float(accel_rows['round_amount_usd_nzi'].sum())
                 round_group_dict["n_rounds_debt"]  = int(len(debt_rows))
                 round_group_dict["n_rounds_grant"] = int(len(grant_rows))
                 round_group_dict["n_rounds_project_finance"] = int(len(pf_rows))
                 round_group_dict["n_rounds_convertible_note"] = int(len(cn_rows))
+                round_group_dict["n_rounds_accelerator"] = int(len(accel_rows))
                 # Same undisclosed-amount NaN guard as equity/nonequity above.
                 # Gate each split by its own count so true zeros survive.
                 for _amt_key, _n_key in (
@@ -506,10 +434,11 @@ def divided_funding_rows_and_flatten(
                     ("grant_raised", "n_rounds_grant"),
                     ("project_finance_raised", "n_rounds_project_finance"),
                     ("convertible_note_raised", "n_rounds_convertible_note"),
+                    ("accelerator_raised", "n_rounds_accelerator"),
                 ):
                     if round_group_dict[_n_key] > 0 and round_group_dict[_amt_key] == 0:
                         round_group_dict[_amt_key] = float("nan")
-            if include_investor_lists and round_name in INVESTOR_LIST_BUCKETS:
+            if include_investor_lists and round_name in PERIODS_WITH_INVESTOR_LIST:
                 round_group_dict["investors"] = _bucket_investors(
                     round_group_rounds, investor_lookup
                 )

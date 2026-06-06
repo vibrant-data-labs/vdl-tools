@@ -1,6 +1,10 @@
 import pandas as pd
 from vdl_tools.shared_tools.tools.text_cleaning import camel_to_snake
 
+from vdl_tools.scrape_enrich.netzero_insights.process_nzi.stage_constants import (
+    M_AND_A_NAMES,
+)
+
 
 
 FUNDING_ROUND_COLUMNS = [
@@ -33,13 +37,6 @@ FUNDING_ROUND_COLUMNS = [
     # "infrastructureProjectID",
     "roundNews",
 ]
-
-
-ACQUISITION_ROUND_TYPES = {
-    'Merger',
-    "Acquisition",
-    "Buyout",
-}
 
 
 def filter_format_columns(
@@ -162,7 +159,7 @@ def was_acquired_merged(
     round_type_col: str = 'roundType',
 ):
     company_round_types = company_funding_rows[round_type_col].values
-    company_acquisition_events = ACQUISITION_ROUND_TYPES.intersection(company_round_types)
+    company_acquisition_events = set(M_AND_A_NAMES).intersection(company_round_types)
     return len(company_acquisition_events) > 0
 
 def add_acquisition_indicators(

@@ -1,8 +1,12 @@
 from collections import defaultdict
 from multiprocessing.pool import ThreadPool
+from typing import Any
+import datetime as dt
 
 from more_itertools import chunked
 import numpy as np
+from sqlalchemy import func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from vdl_tools.shared_tools.database_cache.database_models.embedding import Embedding
@@ -98,12 +102,114 @@ class EmbeddingCache():
         logger.info("%s previous found, %s unfound", len(found_rows), len(unfound_ids_or_errors))
         return found_rows, unfound_ids_or_errors
 
+    def _build_success_row(
+        self,
+        given_id: str,
+        text: str,
+        embedding,
+    ) -> dict[str, Any]:
+        """Build a row dict for a successful embedding."""
+        text_id = Embedding.create_text_id(text)
+        return {
+            "model_name": self.model_name,
+            "text_id": text_id,
+            "given_id": given_id if given_id is not None else text_id,
+            "input_text": text,
+            "response_full": {"data": embedding},
+            "embedding": embedding,
+            "num_errors": None,
+        }
+
+    def _build_error_row(
+        self,
+        given_id: str,
+        text: str,
+        response_full: dict,
+    ) -> dict[str, Any]:
+        """Build a row dict for a failed embedding call."""
+        text_id = Embedding.create_text_id(text)
+        return {
+            "model_name": self.model_name,
+            "text_id": text_id,
+            "given_id": given_id if given_id is not None else text_id,
+            "input_text": text,
+            "response_full": response_full,
+            "num_errors": 1,
+        }
+
+    def _upsert_success_rows(self, rows: list[dict[str, Any]]):
+        """Bulk upsert successful embedding rows via PG ON CONFLICT.
+
+        Composite PK is (model_name, text_id). On conflict, overwrites the
+        embedding fields, clears num_errors, and bumps date_updated (Core
+        doesn't fire the ORM `onupdate` hook through `ON CONFLICT DO UPDATE`).
+        """
+        if not rows:
+            return
+        deduped: dict[tuple, dict[str, Any]] = {}
+        for row in rows:
+            key = (row["model_name"], row["text_id"])
+            deduped[key] = row
+        rows = list(deduped.values())
+
+        # `dt.datetime.utcnow()` is deprecated in 3.12+. Columns are naive
+        # `DateTime` (see `BaseMixin`), so strip tz to keep round-trip identical.
+        now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+        for row in rows:
+            row.setdefault("date_added", now)
+            row.setdefault("date_updated", now)
+
+        stmt = pg_insert(Embedding).values(rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["model_name", "text_id"],
+            set_={
+                "given_id": stmt.excluded.given_id,
+                "input_text": stmt.excluded.input_text,
+                "response_full": stmt.excluded.response_full,
+                "embedding": stmt.excluded.embedding,
+                "num_errors": None,
+                # date_added intentionally NOT in the SET clause — preserve
+                # the original "first cached at" timestamp on refresh.
+                "date_updated": now,
+            },
+        )
+        self.session.execute(stmt)
+
+    def _upsert_error_rows(self, rows: list[dict[str, Any]]):
+        """Bulk upsert error rows, incrementing num_errors on conflict."""
+        if not rows:
+            return
+        deduped: dict[tuple, dict[str, Any]] = {}
+        for row in rows:
+            key = (row["model_name"], row["text_id"])
+            deduped[key] = row
+        rows = list(deduped.values())
+
+        # `dt.datetime.utcnow()` is deprecated in 3.12+. Columns are naive
+        # `DateTime` (see `BaseMixin`), so strip tz to keep round-trip identical.
+        now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+        for row in rows:
+            row.setdefault("date_added", now)
+            row.setdefault("date_updated", now)
+
+        stmt = pg_insert(Embedding).values(rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["model_name", "text_id"],
+            set_={
+                "response_full": stmt.excluded.response_full,
+                "num_errors": func.coalesce(Embedding.num_errors, 0) + 1,
+                "date_updated": now,
+            },
+        )
+        self.session.execute(stmt)
+
     def store_error(
         self,
         text: str,
         response_full: dict,
         given_id: str,
     ):
+        """Single-row error store (used by `get_cache_or_run`)."""
         text_id = Embedding.create_text_id(text)
         logger.info("Storing error for %s, %s", self.model_name, given_id)
         previous_response = (
@@ -123,13 +229,8 @@ class EmbeddingCache():
             self.session.merge(previous_response)
             return previous_response
         else:
-            embedding_obj = Embedding(
-                model_name=self.model_name,
-                given_id=given_id,
-                input_text=text,
-                response_full=response_full,
-                num_errors=1,
-            )
+            row = self._build_error_row(given_id, text, response_full)
+            embedding_obj = Embedding(**row)
             self.session.merge(embedding_obj)
         return embedding_obj
 
@@ -139,14 +240,9 @@ class EmbeddingCache():
         text: str,
         response,
     ):
-        embedding_obj = Embedding(
-            model_name=self.model_name,
-            given_id=given_id,
-            input_text=text,
-            response_full={"data": response},
-            embedding=response,
-        )
-
+        """Single-row success store (used by `get_cache_or_run`)."""
+        row = self._build_success_row(given_id, text, response)
+        embedding_obj = Embedding(**row)
         self.session.merge(embedding_obj)
         return embedding_obj
 
@@ -198,7 +294,7 @@ class EmbeddingCache():
         given_ids_texts: list[tuple[str, str]],
         use_cached_result: bool = True,
         n_per_commit: int = 1500,
-        max_workers=3,
+        max_workers=10,
         max_errors=3,
         **kwargs
     ) -> str:
@@ -272,6 +368,8 @@ class EmbeddingCache():
             with ThreadPool(processes=max_workers) as executor:
                 chunk_results = list(executor.map(_run_chunk, i_chunks))
 
+            success_rows: list[dict[str, Any]] = []
+            error_rows: list[dict[str, Any]] = []
             added_to_commit = 0
             for result_chunk in chunk_results:
                 text_id_to_embeddings.update(result_chunk)
@@ -279,33 +377,42 @@ class EmbeddingCache():
 
                 for text_id, embedding in result_chunk.items():
                     text = text_id_to_text[text_id]
+                    given_ids = text_id_to_given_ids[text_id]
+                    # Use the first associated given_id as the row's given_id;
+                    # downstream `res` is keyed by every associated given_id.
+                    row_given_id = given_ids[0] if given_ids else text_id
+
                     if embedding is not None:
-                        data = self.store_item(
-                            given_id=None,
+                        row = self._build_success_row(
+                            given_id=row_given_id,
                             text=text,
-                            response=embedding,
+                            embedding=embedding,
                         )
-                        given_ids = text_id_to_given_ids[text_id]
+                        success_rows.append(row)
                         for given_id in given_ids:
                             res[given_id] = {
-                                "given_id": data.given_id,
-                                "text_id": data.text_id,
-                                "embedding": data.embedding,
+                                "given_id": row["given_id"],
+                                "text_id": row["text_id"],
+                                "embedding": row["embedding"],
                             }
                     else:
                         logger.error("No response for %s", text_id)
-                        data = self.store_error(
+                        row = self._build_error_row(
+                            given_id=row_given_id,
                             text=text,
                             response_full={"message": "No response"},
-                            given_id=None,
                         )
-                        given_ids = text_id_to_given_ids[text_id]
+                        error_rows.append(row)
                         for given_id in given_ids:
                             res[given_id] = {
-                                "given_id": data.given_id,
-                                "text_id": data.text_id,
-                                "embedding": data.embedding,
+                                "given_id": row["given_id"],
+                                "text_id": row["text_id"],
+                                "embedding": None,
                             }
+
+            # Bulk upsert (one statement per kind) instead of per-item merge.
+            self._upsert_success_rows(success_rows)
+            self._upsert_error_rows(error_rows)
             logger.info("Committing chunk %s of len %s", i, added_to_commit)
             logger.info("Total committed %s", len(res))
             self.session.commit()
