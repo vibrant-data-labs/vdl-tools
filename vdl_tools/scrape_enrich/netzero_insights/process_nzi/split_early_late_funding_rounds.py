@@ -300,7 +300,14 @@ def divided_funding_rows_and_flatten(
         values among non-equity rounds). When the bucket exists,
         ``equity_raised + nonequity_raised == amount_raised`` (ignoring
         the NaN guard, which fires when every round of a given type in
-        the bucket was undisclosed). When
+        the bucket was undisclosed). The **a_to_b bucket only** additionally
+        gets ``a_to_b_first_a_raised`` (amount of the first Series A / Early VC
+        round), ``a_to_b_post_first_a_equity_raised`` (sum of equity rounds after
+        the first A — subsequent A bridges + any other equity before the first
+        B), and ``a_to_b_n_rounds_post_first_a_equity`` (their count). These split
+        ``a_to_b_equity_raised`` (= first_a + post, up to the undisclosed guard)
+        and ``a_to_b_n_rounds_equity`` (= 1 + n_rounds_post_first_a_equity);
+        there is no ``n_rounds_first_a`` because it is always 1. When
         ``processed_investor_df`` is provided, buckets in
         ``PERIODS_WITH_INVESTOR_LIST`` also get ``*_investors`` — a deduped
         list of ``{"id", "name", "investor_types"}`` dicts covering every
@@ -355,6 +362,15 @@ def divided_funding_rows_and_flatten(
                 round_group_dict["n_rounds_convertible_note"] = None
                 round_group_dict["accelerator_raised"] = None
                 round_group_dict["n_rounds_accelerator"] = None
+            # A-to-B ONLY: split the bucket's equity into the FIRST Series A round
+            # vs every equity round after it (subsequent A bridges + any later
+            # equity before the first B). There is deliberately no
+            # ``n_rounds_first_a`` — by definition the first A is a single round,
+            # and every A-to-B-cohort company has exactly one.
+            if round_name == "a_to_b":
+                round_group_dict["first_a_raised"] = None
+                round_group_dict["post_first_a_equity_raised"] = None
+                round_group_dict["n_rounds_post_first_a_equity"] = None
             if include_investor_lists and round_name in PERIODS_WITH_INVESTOR_LIST:
                 round_group_dict["investors"] = None
 
@@ -438,6 +454,43 @@ def divided_funding_rows_and_flatten(
                 ):
                     if round_group_dict[_n_key] > 0 and round_group_dict[_amt_key] == 0:
                         round_group_dict[_amt_key] = float("nan")
+
+                # A-to-B ONLY: split equity into the first Series A round vs the
+                # equity raised after it (before the first B). The bucket rounds
+                # are already date-sorted (divide_funding_rows sorts + resets
+                # index) and the a_to_b bucket starts at the first Series A /
+                # Early VC round, so the "first A" is the earliest round whose
+                # round_type is a Series-A-cohort type. Series A and Early VC are
+                # interchangeable (A_TO_B_TYPES), so an Early-VC-only company's
+                # first Early VC round counts as its first A.
+                if round_name == "a_to_b":
+                    # Positional view (index may be non-contiguous after slicing).
+                    sorted_rounds = round_group_rounds.reset_index(drop=True)
+                    is_first_a_type = sorted_rounds['round_type_nzi'].isin(A_TO_B_TYPES)
+                    a_positions = [i for i, is_a in enumerate(is_first_a_type) if is_a]
+                    if a_positions:
+                        first_a_pos = a_positions[0]
+                        # first_a_raised is a SINGLE round's amount — take it
+                        # directly (NaN if undisclosed; don't .sum(), which would
+                        # turn that NaN into 0).
+                        round_group_dict["first_a_raised"] = float(
+                            sorted_rounds['round_amount_usd_nzi'].iloc[first_a_pos]
+                        )
+                        # Equity rounds strictly after the first A: subsequent A
+                        # bridges and any other equity rounds before the first B.
+                        after_first_a = sorted_rounds.iloc[first_a_pos + 1:]
+                        post_a_equity = after_first_a[
+                            after_first_a['financing_type_nzi'] == "Equity"
+                        ]
+                        n_post = int(len(post_a_equity))
+                        post_sum = float(post_a_equity['round_amount_usd_nzi'].sum())
+                        # Same undisclosed-amount guard as equity_raised above:
+                        # a 0 sum with >0 rounds means every post-A equity round
+                        # was undisclosed → NaN, not a true $0.
+                        if n_post > 0 and post_sum == 0:
+                            post_sum = float("nan")
+                        round_group_dict["n_rounds_post_first_a_equity"] = n_post
+                        round_group_dict["post_first_a_equity_raised"] = post_sum
             if include_investor_lists and round_name in PERIODS_WITH_INVESTOR_LIST:
                 round_group_dict["investors"] = _bucket_investors(
                     round_group_rounds, investor_lookup
