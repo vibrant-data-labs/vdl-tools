@@ -207,10 +207,10 @@ def build_judge_system_prompt(config: JudgeConfig) -> str:
         f"PART 2 — {config.verdict_top_label} alignment verdict. Given the "
         f"description, decide whether the chosen {config.verdict_top_label}(s) "
         f"is the correct top-level verdict. Values:\n"
-        f'- "correct": the chosen {config.verdict_top_label}(s) match what the description says the entity does.\n'
-        f'- "wrong": the description supports a DIFFERENT {config.verdict_top_label}; the chosen {config.verdict_top_label} is wrong.\n'
+        f'- "correct": the chosen {config.verdict_top_label}(s) are exactly the set the description supports — INCLUDING when the description supports MULTIPLE {config.verdict_top_label}s and ALL of them were chosen. Judge only the top level here; do NOT downgrade to "mixed" for missing or extra lower-level (e.g. Solution / Sub-Term) detail.\n'
+        f'- "wrong": a chosen {config.verdict_top_label} is not supported and the description supports a DIFFERENT one instead.\n'
         f'- "ambiguous": more than one {config.verdict_top_label} could be defended; the description is ambiguous on the cross-{config.verdict_top_label.lower()} split.\n'
-        f'- "mixed": the description clearly supports MULTIPLE {config.verdict_top_label}s (genuinely distinct, prominent lines of work) but only one was chosen — or the chosen multi-{config.verdict_top_label} set differs from what the description supports.\n'
+        f'- "mixed": the chosen {config.verdict_top_label} set only PARTIALLY matches what the description supports — a supported {config.verdict_top_label} was missed (e.g. two are supported but only one was chosen), or an unsupported {config.verdict_top_label} was added alongside a correct one. If every supported {config.verdict_top_label} was chosen and none unsupported was added, the verdict is "correct", NOT "mixed".\n'
         f'- "{config.verdict_no_match_value}": the description does not describe work in scope; the entity should have returned no {config.verdict_top_label} match.'
     )
 
