@@ -243,4 +243,19 @@ STAGE_FAILURE_MAP = {
         # not in DISCLOSED_STAGES_ORDERED, so exclude them here.
         "graduation_stages": sorted(EXIT_TYPES - set(M_AND_A_NAMES)),
     },
+    # Like Seed_Exit, but the cohort is the Series A stage (Series A ≡ Early VC) —
+    # "did a company that raised a Series A / Early VC round go on to an exit?".
+    "A_Exit": {
+        "at_stage_round_types": ["Series A", "Early VC"],
+        # M&A names are handled separately by `_has_successful_manda` and are
+        # not in DISCLOSED_STAGES_ORDERED, so exclude them here.
+        "graduation_stages": sorted(EXIT_TYPES - set(M_AND_A_NAMES)),
+    },
+    # Series A cohort → reached a late-stage venture round (Late VC or Series C).
+    # Unlike A_Exit, graduation is late-venture (not exits), so the catch-all
+    # auto-append applies normally — same graduation set as Series B.
+    "A_Late": {
+        "at_stage_round_types": ["Series A", "Early VC"],
+        "graduation_stages": ["Late VC", "Series C"],
+    },
 }
