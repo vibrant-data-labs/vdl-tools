@@ -258,4 +258,11 @@ STAGE_FAILURE_MAP = {
         "at_stage_round_types": ["Series A", "Early VC"],
         "graduation_stages": ["Late VC", "Series C"],
     },
+    # Seed cohort → reached a late-stage venture round (Late VC or Series C). Same
+    # seed cohort gate as Seed / Seed_Exit; like A_Late, graduation is late-venture
+    # (not exits), so the catch-all auto-append applies normally.
+    "Seed_Late": {
+        "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed", "Seed"],
+        "graduation_stages": ["Late VC", "Series C"],
+    },
 }
