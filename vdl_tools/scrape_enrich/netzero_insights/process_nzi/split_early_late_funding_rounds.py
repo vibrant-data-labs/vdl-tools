@@ -677,24 +677,30 @@ def _split_on_first_late_round(company_funding_rows, stages):
     # up_to_a window: rows before the first elevated row.
     up_to_a_end = first_elevated - 1 if first_elevated is not None else last_idx
 
-    # Only emit up_to_a if there's at least one Pre-Seed/Seed round in
-    # the range. Otherwise, leading non-equity rows (debt, convertible):
-    #   - are absorbed into a_to_b when a Series A round exists, matching
-    #     the old behavior where a convertible before Series A bundled
-    #     into the same bucket as the A.
-    #   - are dropped when no Series A exists either (e.g.
-    #     [Debt, Late VC, IPO]). Intentional: the old behavior
-    #     over-counted these outliers by bundling leading debt rounds
-    #     into the late_to_exit bucket, inflating late_to_exit totals by ~$1B across
-    #     the dataset.
-    has_up_to_a = up_to_a_end >= 0 and _has_stage_in_range(stages, "up_to_a", 0, up_to_a_end)
+    # Emit the up_to_a bucket when EITHER:
+    #   (a) there's a Pre-Seed/Seed round in the window (the original anchor), OR
+    #   (b) a Series A / Early VC round exists later — then by definition every
+    #       round before that first A is the "up to A" period, even pre-A grants /
+    #       accelerators / debt / convertibles that aren't Pre-Seed/Seed. This is
+    #       the fix (2026-06): without it, those leading pre-A rounds leaked into
+    #       the a_to_b bucket whenever the company had no Pre-Seed/Seed round, so
+    #       the a_to_b period didn't actually start at the first A. We anchor on
+    #       round POSITION (before the first A), not round TYPE, because grant /
+    #       accelerator / award rounds recur at every stage (39% of A companies
+    #       raise one AFTER their Series A) and so can't define the boundary.
+    #
+    # The no-Series-A case is unchanged: leading non-equity rows for a company
+    # like [Debt, Late VC, IPO] are still dropped (not bundled into late_to_exit),
+    # because first_a_to_b is None there and only the seed anchor (a) applies.
+    has_seed_anchor = up_to_a_end >= 0 and _has_stage_in_range(stages, "up_to_a", 0, up_to_a_end)
+    has_up_to_a = has_seed_anchor or (first_a_to_b is not None and up_to_a_end >= 0)
     up_to_a = _slice_or_none(company_funding_rows, 0, up_to_a_end) if has_up_to_a else None
 
-    # a_to_b: only exists if the company actually had an a_to_b stage round.
-    # When there's no up_to_a, leading non-equity rows get pulled into a_to_b
-    # so they're not silently dropped (matches old "early" semantics).
+    # a_to_b: only exists if the company actually had an a_to_b stage round, and it
+    # ALWAYS starts at that first Series A / Early VC round — the rounds before it
+    # are the up_to_a bucket (see above), never folded into a_to_b.
     if first_a_to_b is not None:
-        a_to_b_actual_start = first_a_to_b if has_up_to_a else 0
+        a_to_b_actual_start = first_a_to_b
         a_to_b_end = last_idx
         if b_to_late_start is not None:
             a_to_b_end = b_to_late_start - 1
@@ -771,6 +777,7 @@ def _split_after_last_early_round(company_funding_rows, stages):
     n = len(company_funding_rows)
     last_idx = n - 1
 
+    first_a_to_b = _find_first_index_at_stage(stages, "a_to_b")
     last_a_to_b = _find_last_index_at_stage(stages, "a_to_b")
     a_to_b_start_at_or_above = _find_first_index_at_or_above(stages, "a_to_b")
     late_to_exit_start = _find_first_index_at_or_above(stages, "late_to_exit")
@@ -786,12 +793,18 @@ def _split_after_last_early_round(company_funding_rows, stages):
     else:
         up_to_a_end = last_idx
 
-    has_up_to_a = up_to_a_end >= 0 and _has_stage_in_range(stages, "up_to_a", 0, up_to_a_end)
+    # Emit up_to_a on a Pre-Seed/Seed anchor OR (the 2026-06 fix) whenever a
+    # Series A / Early VC round exists later — everything before the first A is the
+    # up_to_a period by position, so pre-A grants / accelerators / debt no longer
+    # leak into a_to_b. See _split_on_first_late_round for the full rationale.
+    has_seed_anchor = up_to_a_end >= 0 and _has_stage_in_range(stages, "up_to_a", 0, up_to_a_end)
+    has_up_to_a = has_seed_anchor or (first_a_to_b is not None and up_to_a_end >= 0)
     up_to_a = _slice_or_none(company_funding_rows, 0, up_to_a_end) if has_up_to_a else None
 
-    # a_to_b: extends through last_a_to_b round (interleaved b_to_late stays in a_to_b).
+    # a_to_b: starts at the first Series A / Early VC round and extends through the
+    # last a_to_b round (interleaved b_to_late stays in a_to_b).
     if last_a_to_b is not None:
-        a_to_b_start = a_to_b_start_at_or_above if has_up_to_a else 0
+        a_to_b_start = first_a_to_b
         a_to_b = _slice_or_none(company_funding_rows, a_to_b_start, last_a_to_b)
         b_to_late_start = last_a_to_b + 1
     else:
