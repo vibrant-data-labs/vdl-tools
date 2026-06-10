@@ -265,4 +265,13 @@ STAGE_FAILURE_MAP = {
         "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed", "Seed"],
         "graduation_stages": ["Late VC", "Series C"],
     },
+    # Seed cohort → reached a Series B round. Same seed cohort gate as Seed /
+    # Seed_Exit / Seed_Late, but a lower bar than Seed_Late: graduation is Series B
+    # (same graduation set as the "Series A" cohort). The catch-all auto-append
+    # sweeps in everything at or after Series B, so a Seed company that jumped
+    # straight to Late VC / an exit still counts as having passed Series B.
+    "Seed_B": {
+        "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed", "Seed"],
+        "graduation_stages": ["Series B"],
+    },
 }
