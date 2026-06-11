@@ -300,14 +300,19 @@ def divided_funding_rows_and_flatten(
         values among non-equity rounds). When the bucket exists,
         ``equity_raised + nonequity_raised == amount_raised`` (ignoring
         the NaN guard, which fires when every round of a given type in
-        the bucket was undisclosed). The **a_to_b bucket only** additionally
+        the bucket was undisclosed). The **a_to_b bucket** additionally
         gets ``a_to_b_first_a_raised`` (amount of the first Series A / Early VC
         round), ``a_to_b_post_first_a_equity_raised`` (sum of equity rounds after
         the first A — subsequent A bridges + any other equity before the first
         B), and ``a_to_b_n_rounds_post_first_a_equity`` (their count). These split
         ``a_to_b_equity_raised`` (= first_a + post, up to the undisclosed guard)
         and ``a_to_b_n_rounds_equity`` (= 1 + n_rounds_post_first_a_equity);
-        there is no ``n_rounds_first_a`` because it is always 1. When
+        there is no ``n_rounds_first_a`` because it is always 1. The **b_to_late
+        bucket** gets the analogous split around the first **Series B** round:
+        ``b_to_late_first_b_raised``, ``b_to_late_post_first_b_equity_raised``,
+        ``b_to_late_n_rounds_post_first_b_equity`` (the b_to_late bucket always
+        opens on the first Series B since the 2026-06 bucket-start fix, so the
+        identity holds cleanly). When
         ``processed_investor_df`` is provided, buckets in
         ``PERIODS_WITH_INVESTOR_LIST`` also get ``*_investors`` — a deduped
         list of ``{"id", "name", "investor_types"}`` dicts covering every
@@ -371,6 +376,13 @@ def divided_funding_rows_and_flatten(
                 round_group_dict["first_a_raised"] = None
                 round_group_dict["post_first_a_equity_raised"] = None
                 round_group_dict["n_rounds_post_first_a_equity"] = None
+            # B-to-LATE ONLY: the same split, but around the FIRST Series B round vs every
+            # equity round after it (subsequent B bridges + any equity before the first
+            # late-stage round). No ``n_rounds_first_b`` — the first B is a single round.
+            if round_name == "b_to_late":
+                round_group_dict["first_b_raised"] = None
+                round_group_dict["post_first_b_equity_raised"] = None
+                round_group_dict["n_rounds_post_first_b_equity"] = None
             if include_investor_lists and round_name in PERIODS_WITH_INVESTOR_LIST:
                 round_group_dict["investors"] = None
 
@@ -491,6 +503,36 @@ def divided_funding_rows_and_flatten(
                             post_sum = float("nan")
                         round_group_dict["n_rounds_post_first_a_equity"] = n_post
                         round_group_dict["post_first_a_equity_raised"] = post_sum
+
+                # B-to-LATE ONLY: same split around the first Series B round. The b_to_late
+                # bucket starts at the first Series-B-or-higher round and (since the 2026-06
+                # bucket-start fix) always opens on the first Series B, so the "first B" is the
+                # earliest round whose round_type is in MIDDLE_STAGE_TYPES (= {"Series B"}).
+                if round_name == "b_to_late":
+                    sorted_rounds = round_group_rounds.reset_index(drop=True)
+                    is_first_b_type = sorted_rounds['round_type_nzi'].isin(MIDDLE_STAGE_TYPES)
+                    b_positions = [i for i, is_b in enumerate(is_first_b_type) if is_b]
+                    if b_positions:
+                        first_b_pos = b_positions[0]
+                        # first_b_raised is a SINGLE round's amount — take it directly (NaN if
+                        # undisclosed; don't .sum(), which would turn that NaN into 0).
+                        round_group_dict["first_b_raised"] = float(
+                            sorted_rounds['round_amount_usd_nzi'].iloc[first_b_pos]
+                        )
+                        # Equity rounds strictly after the first B: subsequent B bridges and any
+                        # other equity rounds before the first late-stage round.
+                        after_first_b = sorted_rounds.iloc[first_b_pos + 1:]
+                        post_b_equity = after_first_b[
+                            after_first_b['financing_type_nzi'] == "Equity"
+                        ]
+                        n_post = int(len(post_b_equity))
+                        post_sum = float(post_b_equity['round_amount_usd_nzi'].sum())
+                        # Same undisclosed-amount guard as equity_raised: a 0 sum with >0 rounds
+                        # means every post-B equity round was undisclosed → NaN, not a true $0.
+                        if n_post > 0 and post_sum == 0:
+                            post_sum = float("nan")
+                        round_group_dict["n_rounds_post_first_b_equity"] = n_post
+                        round_group_dict["post_first_b_equity_raised"] = post_sum
             if include_investor_lists and round_name in PERIODS_WITH_INVESTOR_LIST:
                 round_group_dict["investors"] = _bucket_investors(
                     round_group_rounds, investor_lookup
@@ -677,24 +719,30 @@ def _split_on_first_late_round(company_funding_rows, stages):
     # up_to_a window: rows before the first elevated row.
     up_to_a_end = first_elevated - 1 if first_elevated is not None else last_idx
 
-    # Only emit up_to_a if there's at least one Pre-Seed/Seed round in
-    # the range. Otherwise, leading non-equity rows (debt, convertible):
-    #   - are absorbed into a_to_b when a Series A round exists, matching
-    #     the old behavior where a convertible before Series A bundled
-    #     into the same bucket as the A.
-    #   - are dropped when no Series A exists either (e.g.
-    #     [Debt, Late VC, IPO]). Intentional: the old behavior
-    #     over-counted these outliers by bundling leading debt rounds
-    #     into the late_to_exit bucket, inflating late_to_exit totals by ~$1B across
-    #     the dataset.
-    has_up_to_a = up_to_a_end >= 0 and _has_stage_in_range(stages, "up_to_a", 0, up_to_a_end)
+    # Emit the up_to_a bucket when EITHER:
+    #   (a) there's a Pre-Seed/Seed round in the window (the original anchor), OR
+    #   (b) a Series A / Early VC round exists later — then by definition every
+    #       round before that first A is the "up to A" period, even pre-A grants /
+    #       accelerators / debt / convertibles that aren't Pre-Seed/Seed. This is
+    #       the fix (2026-06): without it, those leading pre-A rounds leaked into
+    #       the a_to_b bucket whenever the company had no Pre-Seed/Seed round, so
+    #       the a_to_b period didn't actually start at the first A. We anchor on
+    #       round POSITION (before the first A), not round TYPE, because grant /
+    #       accelerator / award rounds recur at every stage (39% of A companies
+    #       raise one AFTER their Series A) and so can't define the boundary.
+    #
+    # The no-Series-A case is unchanged: leading non-equity rows for a company
+    # like [Debt, Late VC, IPO] are still dropped (not bundled into late_to_exit),
+    # because first_a_to_b is None there and only the seed anchor (a) applies.
+    has_seed_anchor = up_to_a_end >= 0 and _has_stage_in_range(stages, "up_to_a", 0, up_to_a_end)
+    has_up_to_a = has_seed_anchor or (first_a_to_b is not None and up_to_a_end >= 0)
     up_to_a = _slice_or_none(company_funding_rows, 0, up_to_a_end) if has_up_to_a else None
 
-    # a_to_b: only exists if the company actually had an a_to_b stage round.
-    # When there's no up_to_a, leading non-equity rows get pulled into a_to_b
-    # so they're not silently dropped (matches old "early" semantics).
+    # a_to_b: only exists if the company actually had an a_to_b stage round, and it
+    # ALWAYS starts at that first Series A / Early VC round — the rounds before it
+    # are the up_to_a bucket (see above), never folded into a_to_b.
     if first_a_to_b is not None:
-        a_to_b_actual_start = first_a_to_b if has_up_to_a else 0
+        a_to_b_actual_start = first_a_to_b
         a_to_b_end = last_idx
         if b_to_late_start is not None:
             a_to_b_end = b_to_late_start - 1
@@ -771,6 +819,7 @@ def _split_after_last_early_round(company_funding_rows, stages):
     n = len(company_funding_rows)
     last_idx = n - 1
 
+    first_a_to_b = _find_first_index_at_stage(stages, "a_to_b")
     last_a_to_b = _find_last_index_at_stage(stages, "a_to_b")
     a_to_b_start_at_or_above = _find_first_index_at_or_above(stages, "a_to_b")
     late_to_exit_start = _find_first_index_at_or_above(stages, "late_to_exit")
@@ -786,12 +835,18 @@ def _split_after_last_early_round(company_funding_rows, stages):
     else:
         up_to_a_end = last_idx
 
-    has_up_to_a = up_to_a_end >= 0 and _has_stage_in_range(stages, "up_to_a", 0, up_to_a_end)
+    # Emit up_to_a on a Pre-Seed/Seed anchor OR (the 2026-06 fix) whenever a
+    # Series A / Early VC round exists later — everything before the first A is the
+    # up_to_a period by position, so pre-A grants / accelerators / debt no longer
+    # leak into a_to_b. See _split_on_first_late_round for the full rationale.
+    has_seed_anchor = up_to_a_end >= 0 and _has_stage_in_range(stages, "up_to_a", 0, up_to_a_end)
+    has_up_to_a = has_seed_anchor or (first_a_to_b is not None and up_to_a_end >= 0)
     up_to_a = _slice_or_none(company_funding_rows, 0, up_to_a_end) if has_up_to_a else None
 
-    # a_to_b: extends through last_a_to_b round (interleaved b_to_late stays in a_to_b).
+    # a_to_b: starts at the first Series A / Early VC round and extends through the
+    # last a_to_b round (interleaved b_to_late stays in a_to_b).
     if last_a_to_b is not None:
-        a_to_b_start = a_to_b_start_at_or_above if has_up_to_a else 0
+        a_to_b_start = first_a_to_b
         a_to_b = _slice_or_none(company_funding_rows, a_to_b_start, last_a_to_b)
         b_to_late_start = last_a_to_b + 1
     else:
