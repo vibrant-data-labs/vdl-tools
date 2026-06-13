@@ -594,8 +594,16 @@ def classify_entity(
     descent_fanout_cap: int,
     confidence_threshold: float | None = None,
     emit_per_level: bool = False,
+    seed_names: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Walk the taxonomy top-down for a single entity.
+
+    ``seed_names`` fixes a contiguous top prefix of the levels (mapping each
+    seeded level's ``output_col`` to its value, e.g. ``{"Pillar": "Energy
+    Transition"}``) and the walk descends only the remaining levels from
+    that seeded parent — used to continue into a subtree after a top-level
+    node has been assigned elsewhere (e.g. by the empties adjudicator). The
+    seeded levels carry no evidence/reason of their own.
 
     Returns one record per LEAF in the match tree — i.e. per root-to-tip
     path through the accepted matches. A leaf is a match that was either
@@ -617,22 +625,52 @@ def classify_entity(
         "reason": None,
         "confidence": None,
     }
-    initial_branch = {
-        "names": {},
-        "parent_path": {},
-        "leaf": empty_leaf,
-        # path_meta: out_col -> {evidence, reason, confidence, mode} for every
-        # level matched along this path. Used to emit per-level evidence /
-        # reason / confidence when ``emit_per_level`` is set.
-        "path_meta": {},
-    }
+    last_idx = levels[-1]["idx"]
+
+    # path_meta: out_col -> {evidence, reason, confidence, mode} for every
+    # level matched along this path, for the per-level output (emit_per_level).
+    if seed_names:
+        # Reconstruct the seeded prefix's names + parent_path so the walk can
+        # descend its children. Stops seeding at the first level whose value
+        # is missing or not found (then walks normally from there).
+        names: dict[str, Any] = {}
+        parent_path: dict[str, Any] = {}
+        seed_leaf = empty_leaf
+        start_idx = 0
+        for lvl in levels:
+            oc = lvl["output_col"]
+            if oc not in seed_names:
+                break
+            cands = candidates_for_level(tables, lvl["idx"], parent_path)
+            match = cands[cands[lvl["key_col"]] == seed_names[oc]]
+            if match.empty:
+                break
+            row = match.iloc[0]
+            names[oc] = seed_names[oc]
+            if lvl["idx"] != last_idx:
+                parent_path[lvl["child_filter_col"]] = row[lvl["child_filter_value_col"]]
+            seed_leaf = {
+                "deepest_match": lvl["name"],
+                "leaf_definition": str(row["Definition"]).strip(),
+                "mode_of_operation": None,
+                "evidence": None,
+                "reason": None,
+                "confidence": None,
+            }
+            start_idx = lvl["idx"] + 1
+        initial_branch = {"names": names, "parent_path": parent_path,
+                          "leaf": seed_leaf, "path_meta": {}}
+        levels_to_walk = [lvl for lvl in levels if lvl["idx"] >= start_idx]
+    else:
+        initial_branch = {
+            "names": {}, "parent_path": {}, "leaf": empty_leaf, "path_meta": {},
+        }
+        levels_to_walk = levels
 
     active: list[dict[str, Any]] = [initial_branch]
     leaves: list[dict[str, Any]] = []
 
-    last_idx = levels[-1]["idx"]
-
-    for lvl in levels:
+    for lvl in levels_to_walk:
         level_idx = lvl["idx"]
         key_col = lvl["key_col"]
         out_col = lvl["output_col"]
@@ -754,19 +792,28 @@ def _classify_one(
     descent_fanout_cap: int,
     confidence_threshold: float | None = None,
     emit_per_level: bool = False,
+    seed_col: str | None = None,
 ) -> list[dict[str, Any]]:
     """Classify a single entity and return flat output rows.
 
     All columns of ``row`` are carried through into ``base`` so the
     per-row output keeps any extra attributes (Funding, x/y, etc.).
     Emits one null-taxonomy row when there is no level-0 match so the
-    entity still appears in the output.
+    entity still appears in the output. When ``seed_col`` is set and the
+    row has a non-empty value there, the walk is seeded at the top level
+    with that value (see ``classify_entity``'s ``seed_names``).
     """
     name = str(row[name_col])
     desc = str(row[text_col])
     base = {col: row[col] for col in row.index}
     base[name_col] = name
     base[text_col] = desc
+
+    seed_names = None
+    if seed_col is not None:
+        seed_val = row.get(seed_col)
+        if seed_val is not None and str(seed_val).strip() not in ("", "nan", "None"):
+            seed_names = {levels[0]["output_col"]: str(seed_val)}
 
     try:
         records = classify_entity(
@@ -780,6 +827,7 @@ def _classify_one(
             descent_fanout_cap=descent_fanout_cap,
             confidence_threshold=confidence_threshold,
             emit_per_level=emit_per_level,
+            seed_names=seed_names,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"  [error] {name}: {exc}")
@@ -819,8 +867,15 @@ def classify_entities(
     max_workers: int = 8,
     confidence_threshold: float | None = None,
     emit_per_level: bool = False,
+    seed_col: str | None = None,
 ) -> pd.DataFrame:
     """Classify many entities in parallel; return one flat DataFrame.
+
+    When ``seed_col`` is set, each entity whose ``seed_col`` value is
+    non-empty has its walk seeded at the top level with that value (the
+    walk descends that node's subtree); entities with an empty seed walk
+    from the root as usual. Useful for descending into a subtree after a
+    top-level assignment from elsewhere (e.g. the empties adjudicator).
 
     ``entities`` must have at least ``id_col``, ``name_col``, ``text_col``.
     The output has those columns followed by every other entity column
@@ -848,7 +903,7 @@ def classify_entities(
             all_records.extend(_classify_one(
                 client, tables, levels, system_prompt, row,
                 id_col, name_col, text_col, model, descent_fanout_cap,
-                confidence_threshold, emit_per_level,
+                confidence_threshold, emit_per_level, seed_col,
             ))
     else:
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -857,7 +912,7 @@ def classify_entities(
                     _classify_one,
                     client, tables, levels, system_prompt, row,
                     id_col, name_col, text_col, model, descent_fanout_cap,
-                    confidence_threshold, emit_per_level,
+                    confidence_threshold, emit_per_level, seed_col,
                 ): row
                 for _, row in entities.iterrows()
             }
@@ -976,17 +1031,52 @@ def collapse_to_one_row_per_uid(
 # Adjudication of unmatched entities (second-stage scope check)
 # ---------------------------------------------------------------------------
 
+def build_default_scope_prompt(
+    tables: dict[int, pd.DataFrame],
+    levels: list[dict],
+) -> str:
+    """Generic default scope prompt for ``adjudicate_unmatched``.
+
+    Renders the top-level node names + definitions from the taxonomy and a
+    generic in-scope/category/reason instruction. This is the runnable
+    baseline — like the engine's default rule bodies, it works for any
+    taxonomy with no authoring, but a caller-supplied ``scope_prompt`` with
+    domain-specific in/out guidance and routing will classify more
+    accurately.
+    """
+    levels = normalize_levels(levels)
+    top = levels[0]
+    t = tables[top["idx"]]
+    block = "\n".join(
+        f"- {row[top['key_col']]}: {str(row['Definition']).strip()}"
+        for _, row in t.iterrows()
+        if pd.notna(row.get(top["key_col"])) and pd.notna(row.get("Definition"))
+    )
+    return (
+        "You decide whether an entity's own work is in scope for the taxonomy "
+        "below. Top-level categories and their scope:\n"
+        f"{block}\n\n"
+        "Judge by whether the entity's own activity is itself one of these "
+        "categories (an implicit mechanism is acceptable), not an incidental "
+        "side-effect of otherwise out-of-scope work. Return JSON: "
+        "{\"in_scope\": true|false, \"category\": \"<exact category name or "
+        "null>\", \"reason\": \"<one sentence>\"}."
+    )
+
+
 def adjudicate_unmatched(
     df: pd.DataFrame,
     *,
     client: OpenAI,
     model: str,
-    scope_prompt: str,
     id_col: str,
     name_col: str,
     text_col: str,
-    top_level_col: str,
-    category_choices: Iterable[str],
+    levels: list[dict] | None = None,
+    tables: dict[int, pd.DataFrame] | None = None,
+    top_level_col: str | None = None,
+    category_choices: Iterable[str] | None = None,
+    scope_prompt: str | None = None,
     max_workers: int = 8,
 ) -> pd.DataFrame:
     """Second-stage scope check on entities the walk left unmatched.
@@ -1006,11 +1096,32 @@ def adjudicate_unmatched(
         - ``adjudicated_<top_level_col>`` str | None  (validated category)
         - ``adjudicator_reason``        str | None
 
-    ``scope_prompt`` is the system prompt; it must instruct the model to
-    return JSON ``{"in_scope": bool, "<top_level_col lowercased> or
-    'category'": "<name or null>", "reason": "..."}``. Category values
-    are validated (case-insensitively) against ``category_choices``.
+    ``top_level_col``, ``category_choices``, and ``scope_prompt`` each
+    default from ``levels`` + ``tables`` when omitted (top-level output
+    column; top-level node names; ``build_default_scope_prompt``), so a
+    generic caller can pass just ``levels`` + ``tables``. Supply any of them
+    explicitly to override — a domain-specific ``scope_prompt`` in
+    particular classifies more accurately than the default. The scope prompt
+    must instruct the model to return JSON ``{"in_scope": bool, "<category
+    key>": "<name or null>", "reason": "..."}``; category values are
+    validated (case-insensitively) against ``category_choices``.
     """
+    if top_level_col is None or category_choices is None or scope_prompt is None:
+        if levels is None or tables is None:
+            raise ValueError(
+                "adjudicate_unmatched: supply levels + tables to default "
+                "top_level_col / category_choices / scope_prompt, or pass all "
+                "three explicitly."
+            )
+        nlevels = normalize_levels(levels)
+        top = nlevels[0]
+        if top_level_col is None:
+            top_level_col = top["output_col"]
+        if category_choices is None:
+            category_choices = list(tables[top["idx"]][top["key_col"]].dropna())
+        if scope_prompt is None:
+            scope_prompt = build_default_scope_prompt(tables, nlevels)
+
     cats = {str(c).strip().lower(): str(c) for c in category_choices}
 
     def _empty(s: pd.Series) -> pd.Series:

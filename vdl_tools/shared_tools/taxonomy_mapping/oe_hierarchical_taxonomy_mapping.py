@@ -808,6 +808,7 @@ def map_to_oneearth(
     adjudicate_empties: bool = False,
     adjudicator_model: str = "gpt-4.1-mini",
     adjudicator_scope_prompt: str | None = None,
+    walk_recovered: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Classify a DataFrame of entities against the One Earth taxonomy.
 
@@ -871,6 +872,14 @@ def map_to_oneearth(
         When True, the per-row frame gains ``<level> evidence`` /
         ``<level> reason`` / ``<level> confidence`` columns for every
         assignment along each path, not just the deepest match.
+    walk_recovered
+        When True (requires ``adjudicate_empties=True``), entities the walk
+        left empty but the adjudicator marked in scope get a second walk
+        seeded at the adjudicated pillar, descending into Sub-Pillar /
+        Solution / Sub-Term where the description supports it. Their
+        placeholder rows are replaced by the seeded leaf rows; the
+        ``adjudicator_*`` columns carry through, so the rows remain flagged
+        as adjudicator-sourced.
 
     Returns
     -------
@@ -887,6 +896,9 @@ def map_to_oneearth(
         ``"NoMatch"``). Non-classification columns from the input are
         carried through using each id's first non-null value.
     """
+    if walk_recovered and not adjudicate_empties:
+        raise ValueError("walk_recovered=True requires adjudicate_empties=True")
+
     if taxonomy_path is None:
         taxonomy_path = find_latest_taxonomy()
     tables = load_taxonomy(taxonomy_path)
@@ -919,23 +931,89 @@ def map_to_oneearth(
         emit_per_level=emit_per_level,
     )
     if adjudicate_empties:
-        scope_prompt = adjudicator_scope_prompt or build_adjudicator_scope_prompt(
-            taxonomy_path)
-        top_level = ONEEARTH_LEVELS[0]
+        # Default top-level column + category choices from the level spec +
+        # tables; override only the scope prompt with the OE-specific rich one.
         per_row_df = _htm.adjudicate_unmatched(
             per_row_df,
             client=client,
             model=adjudicator_model,
-            scope_prompt=scope_prompt,
             id_col=id_col,
             name_col=name_col,
             text_col=text_col,
-            top_level_col=top_level["output_col"],
-            category_choices=list(tables[top_level["idx"]][top_level["key_col"]]),
+            levels=ONEEARTH_LEVELS,
+            tables=tables,
+            scope_prompt=adjudicator_scope_prompt or build_adjudicator_scope_prompt(
+                taxonomy_path),
             max_workers=max_workers,
         )
+
+    if walk_recovered:
+        per_row_df = _walk_recovered_entities(
+            per_row_df, client=client, tables=tables, system_prompt=system_prompt,
+            id_col=id_col, name_col=name_col, text_col=text_col, model=model,
+            descent_fanout_cap=descent_fanout_cap, max_workers=max_workers,
+            confidence_threshold=confidence_threshold, emit_per_level=emit_per_level,
+        )
+
     collapsed_df = collapse_to_one_row_per_uid(per_row_df, id_col=id_col)
     return per_row_df, collapsed_df
+
+
+def _walk_recovered_entities(
+    per_row_df: pd.DataFrame, *, client, tables, system_prompt, id_col, name_col,
+    text_col, model, descent_fanout_cap, max_workers, confidence_threshold,
+    emit_per_level,
+) -> pd.DataFrame:
+    """Seed the walk at each adjudicator-recovered entity's pillar and descend.
+
+    Entities the walk left empty but the adjudicator marked in-scope (with a
+    pillar) get a second walk seeded at that pillar, picking up Sub-Pillar /
+    Solution / Sub-Term where the description supports it. Their placeholder
+    (no-match) rows are replaced by the seeded leaf rows; the adjudicator
+    columns carry through, so these rows stay flagged as adjudicator-sourced.
+    Entities that stay pillar-only after the descent keep the assigned pillar.
+    """
+    top_col = ONEEARTH_LEVELS[0]["output_col"]
+    adj_col = f"adjudicated_{top_col}"
+    if adj_col not in per_row_df.columns:
+        return per_row_df
+
+    is_recovered = (
+        per_row_df[top_col].isna()
+        & (per_row_df["adjudicator_in_scope"] == True)  # noqa: E712
+        & per_row_df[adj_col].notna()
+    )
+    rec_ids = per_row_df.loc[is_recovered, id_col].unique()
+    if len(rec_ids) == 0:
+        return per_row_df
+
+    # One entity row per recovered id; strip the classification columns so the
+    # seeded walk regenerates them (carry cols incl. adjudicator_* are kept).
+    class_cols = (
+        [lvl["output_col"] for lvl in ONEEARTH_LEVELS]
+        + ["deepest_match", "leaf_definition", "mode_of_operation",
+           "evidence", "reason", "confidence"]
+    )
+    for lvl in ONEEARTH_LEVELS:
+        oc = lvl["output_col"]
+        class_cols += [f"{oc} evidence", f"{oc} reason", f"{oc} confidence"]
+    seed_input = (per_row_df[per_row_df[id_col].isin(rec_ids)]
+                  .drop_duplicates(id_col)
+                  .drop(columns=[c for c in class_cols if c in per_row_df.columns]))
+
+    seeded = classify_entities(
+        client=client, tables=tables, levels=ONEEARTH_LEVELS,
+        system_prompt=system_prompt, entities=seed_input, id_col=id_col,
+        name_col=name_col, text_col=text_col, model=model,
+        descent_fanout_cap=descent_fanout_cap, max_workers=max_workers,
+        confidence_threshold=confidence_threshold, emit_per_level=emit_per_level,
+        seed_col=adj_col,
+    )
+
+    kept = per_row_df[~per_row_df[id_col].isin(rec_ids)]
+    merged = pd.concat([kept, seeded.reindex(columns=per_row_df.columns)],
+                       ignore_index=True)
+    return merged
 
 
 # Re-exports for callers that want to drive the engine directly.
