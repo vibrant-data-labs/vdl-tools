@@ -769,11 +769,11 @@ _PROMPT_BY_MODE: dict[str, str] = {
     "research": ONEEARTH_RESEARCH_SYSTEM_PROMPT,
 }
 
-def build_adjudicator_scope_prompt(taxonomy_path: Path | None = None) -> str:
-    """Build the second-stage adjudicator's scope system prompt.
+def build_recovery_scope_prompt(taxonomy_path: Path | None = None) -> str:
+    """Build the second-stage recovery's scope system prompt.
 
     Reuses the canonical mapping scope (``ONEEARTH_DOMAIN_INTRO`` +
-    ``ONEEARTH_CROSS_PILLAR_ROUTING``) so the adjudicator and the classifier
+    ``ONEEARTH_CROSS_PILLAR_ROUTING``) so the recovery and the classifier
     share one scope source, plus a yes/no instruction. Validated on the
     seed-42 empties at ~88% accuracy separating in-scope-but-refused from
     genuinely out-of-scope; the bare-definition scope under-recalls on
@@ -805,9 +805,9 @@ def map_to_oneearth(
     system_prompt: str | None = None,
     confidence_threshold: float | None = None,
     emit_per_level: bool = False,
-    adjudicate_empties: bool = False,
-    adjudicator_model: str = "gpt-4.1-mini",
-    adjudicator_scope_prompt: str | None = None,
+    recover_unmatched: bool = False,
+    recovery_model: str = "gpt-4.1-mini",
+    recovery_scope_prompt: str | None = None,
     walk_recovered: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Classify a DataFrame of entities against the One Earth taxonomy.
@@ -873,13 +873,13 @@ def map_to_oneearth(
         ``<level> reason`` / ``<level> confidence`` columns for every
         assignment along each path, not just the deepest match.
     walk_recovered
-        When True (requires ``adjudicate_empties=True``), entities the walk
-        left empty but the adjudicator marked in scope get a second walk
-        seeded at the adjudicated pillar, descending into Sub-Pillar /
+        When True (requires ``recover_unmatched=True``), entities the walk
+        left empty but the recovery marked in scope get a second walk
+        seeded at the recovered pillar, descending into Sub-Pillar /
         Solution / Sub-Term where the description supports it. Their
         placeholder rows are replaced by the seeded leaf rows; the
-        ``adjudicator_*`` columns carry through, so the rows remain flagged
-        as adjudicator-sourced.
+        ``recovery_*`` columns carry through, so the rows remain flagged
+        as recovery-sourced.
 
     Returns
     -------
@@ -896,8 +896,8 @@ def map_to_oneearth(
         ``"NoMatch"``). Non-classification columns from the input are
         carried through using each id's first non-null value.
     """
-    if walk_recovered and not adjudicate_empties:
-        raise ValueError("walk_recovered=True requires adjudicate_empties=True")
+    if walk_recovered and not recover_unmatched:
+        raise ValueError("walk_recovered=True requires recover_unmatched=True")
 
     if taxonomy_path is None:
         taxonomy_path = find_latest_taxonomy()
@@ -930,19 +930,19 @@ def map_to_oneearth(
         confidence_threshold=confidence_threshold,
         emit_per_level=emit_per_level,
     )
-    if adjudicate_empties:
+    if recover_unmatched:
         # Default top-level column + category choices from the level spec +
         # tables; override only the scope prompt with the OE-specific rich one.
-        per_row_df = _htm.adjudicate_unmatched(
+        per_row_df = _htm.recover_unmatched(
             per_row_df,
             client=client,
-            model=adjudicator_model,
+            model=recovery_model,
             id_col=id_col,
             name_col=name_col,
             text_col=text_col,
             levels=ONEEARTH_LEVELS,
             tables=tables,
-            scope_prompt=adjudicator_scope_prompt or build_adjudicator_scope_prompt(
+            scope_prompt=recovery_scope_prompt or build_recovery_scope_prompt(
                 taxonomy_path),
             max_workers=max_workers,
         )
@@ -964,31 +964,31 @@ def _walk_recovered_entities(
     text_col, model, descent_fanout_cap, max_workers, confidence_threshold,
     emit_per_level,
 ) -> pd.DataFrame:
-    """Seed the walk at each adjudicator-recovered entity's pillar and descend.
+    """Seed the walk at each recovery-recovered entity's pillar and descend.
 
-    Entities the walk left empty but the adjudicator marked in-scope (with a
+    Entities the walk left empty but the recovery marked in-scope (with a
     pillar) get a second walk seeded at that pillar, picking up Sub-Pillar /
     Solution / Sub-Term where the description supports it. Their placeholder
-    (no-match) rows are replaced by the seeded leaf rows; the adjudicator
-    columns carry through, so these rows stay flagged as adjudicator-sourced.
+    (no-match) rows are replaced by the seeded leaf rows; the recovery
+    columns carry through, so these rows stay flagged as recovery-sourced.
     Entities that stay pillar-only after the descent keep the assigned pillar.
     """
     top_col = ONEEARTH_LEVELS[0]["output_col"]
-    adj_col = f"adjudicated_{top_col}"
-    if adj_col not in per_row_df.columns:
+    recovered_col = f"recovered_{top_col}"
+    if recovered_col not in per_row_df.columns:
         return per_row_df
 
     is_recovered = (
         per_row_df[top_col].isna()
-        & (per_row_df["adjudicator_in_scope"] == True)  # noqa: E712
-        & per_row_df[adj_col].notna()
+        & (per_row_df["recovered_in_scope"] == True)  # noqa: E712
+        & per_row_df[recovered_col].notna()
     )
     rec_ids = per_row_df.loc[is_recovered, id_col].unique()
     if len(rec_ids) == 0:
         return per_row_df
 
     # One entity row per recovered id; strip the classification columns so the
-    # seeded walk regenerates them (carry cols incl. adjudicator_* are kept).
+    # seeded walk regenerates them (carry cols incl. recovery_* are kept).
     class_cols = (
         [lvl["output_col"] for lvl in ONEEARTH_LEVELS]
         + ["deepest_match", "leaf_definition", "mode_of_operation",
@@ -1007,7 +1007,7 @@ def _walk_recovered_entities(
         name_col=name_col, text_col=text_col, model=model,
         descent_fanout_cap=descent_fanout_cap, max_workers=max_workers,
         confidence_threshold=confidence_threshold, emit_per_level=emit_per_level,
-        seed_col=adj_col,
+        seed_col=recovered_col,
     )
 
     kept = per_row_df[~per_row_df[id_col].isin(rec_ids)]

@@ -602,7 +602,7 @@ def classify_entity(
     seeded level's ``output_col`` to its value, e.g. ``{"Pillar": "Energy
     Transition"}``) and the walk descends only the remaining levels from
     that seeded parent — used to continue into a subtree after a top-level
-    node has been assigned elsewhere (e.g. by the empties adjudicator). The
+    node has been assigned elsewhere (e.g. by the empties recovery). The
     seeded levels carry no evidence/reason of their own.
 
     Returns one record per LEAF in the match tree — i.e. per root-to-tip
@@ -875,7 +875,7 @@ def classify_entities(
     non-empty has its walk seeded at the top level with that value (the
     walk descends that node's subtree); entities with an empty seed walk
     from the root as usual. Useful for descending into a subtree after a
-    top-level assignment from elsewhere (e.g. the empties adjudicator).
+    top-level assignment from elsewhere (e.g. the empties recovery).
 
     ``entities`` must have at least ``id_col``, ``name_col``, ``text_col``.
     The output has those columns followed by every other entity column
@@ -1028,14 +1028,14 @@ def collapse_to_one_row_per_uid(
 
 
 # ---------------------------------------------------------------------------
-# Adjudication of unmatched entities (second-stage scope check)
+# Recovery of unmatched entities (second-stage scope check)
 # ---------------------------------------------------------------------------
 
 def build_default_scope_prompt(
     tables: dict[int, pd.DataFrame],
     levels: list[dict],
 ) -> str:
-    """Generic default scope prompt for ``adjudicate_unmatched``.
+    """Generic default scope prompt for ``recover_unmatched``.
 
     Renders the top-level node names + definitions from the taxonomy and a
     generic in-scope/category/reason instruction. This is the runnable
@@ -1064,7 +1064,7 @@ def build_default_scope_prompt(
     )
 
 
-def adjudicate_unmatched(
+def recover_unmatched(
     df: pd.DataFrame,
     *,
     client: OpenAI,
@@ -1092,9 +1092,9 @@ def adjudicate_unmatched(
 
     Adds three columns, filled only for unmatched entities (matched
     entities and their rows keep ``None``):
-        - ``adjudicator_in_scope``      bool | None
-        - ``adjudicated_<top_level_col>`` str | None  (validated category)
-        - ``adjudicator_reason``        str | None
+        - ``recovered_in_scope``      bool | None
+        - ``recovered_<top_level_col>`` str | None  (validated category)
+        - ``recovered_reason``        str | None
 
     ``top_level_col``, ``category_choices``, and ``scope_prompt`` each
     default from ``levels`` + ``tables`` when omitted (top-level output
@@ -1109,7 +1109,7 @@ def adjudicate_unmatched(
     if top_level_col is None or category_choices is None or scope_prompt is None:
         if levels is None or tables is None:
             raise ValueError(
-                "adjudicate_unmatched: supply levels + tables to default "
+                "recover_unmatched: supply levels + tables to default "
                 "top_level_col / category_choices / scope_prompt, or pass all "
                 "three explicitly."
             )
@@ -1136,7 +1136,7 @@ def adjudicate_unmatched(
 
     cat_key = top_level_col.strip().lower()
 
-    def _adjudicate(uid: Any) -> tuple[Any, tuple]:
+    def _recover(uid: Any) -> tuple[Any, tuple]:
         name = str(rep.loc[uid, name_col])
         text = str(rep.loc[uid, text_col])
         user_prompt = f"Organization: {name}\n\nDescription:\n{text}"
@@ -1154,23 +1154,23 @@ def adjudicate_unmatched(
             reason = str(data.get("reason", "")).strip()
             return uid, (in_scope, cat if in_scope else None, reason)
         except Exception as exc:  # noqa: BLE001
-            return uid, (None, None, f"adjudicator error: {exc}")
+            return uid, (None, None, f"recovery error: {exc}")
 
     results: dict[Any, tuple] = {}
     if unmatched_ids:
-        print(f"Adjudicating {len(unmatched_ids)} unmatched entities with {model}")
+        print(f"Recovering {len(unmatched_ids)} unmatched entities with {model}")
         if max_workers <= 1:
             for uid in unmatched_ids:
-                _, res = _adjudicate(uid)
+                _, res = _recover(uid)
                 results[uid] = res
         else:
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                for uid, res in pool.map(_adjudicate, unmatched_ids):
+                for uid, res in pool.map(_recover, unmatched_ids):
                     results[uid] = res
 
     df = df.copy()
     none3 = (None, None, None)
-    df["adjudicator_in_scope"] = df[id_col].map(lambda u: results.get(u, none3)[0])
-    df[f"adjudicated_{top_level_col}"] = df[id_col].map(lambda u: results.get(u, none3)[1])
-    df["adjudicator_reason"] = df[id_col].map(lambda u: results.get(u, none3)[2])
+    df["recovered_in_scope"] = df[id_col].map(lambda u: results.get(u, none3)[0])
+    df[f"recovered_{top_level_col}"] = df[id_col].map(lambda u: results.get(u, none3)[1])
+    df["recovered_reason"] = df[id_col].map(lambda u: results.get(u, none3)[2])
     return df
