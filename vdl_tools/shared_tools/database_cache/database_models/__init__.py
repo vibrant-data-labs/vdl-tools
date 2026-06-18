@@ -1,5 +1,6 @@
 from .base import Base
 from .embedding import Embedding
+from .geocode import Geocode #pylint: disable=no-name-in-module
 from .linkedin_orgs import LinkedInOrganization #pylint: disable=no-name-in-module
 from .linkedin_people import LinkedInPerson #pylint: disable=no-name-in-module
 from .linkedin_base_employee import LinkedInBaseEmployee #pylint: disable=no-name-in-module
@@ -23,6 +24,7 @@ __all__ = (
     "CompanyCommercialDeal",
     "CompanyFundingRounds",
     "Embedding",
+    "Geocode",
     "Investor",
     "LinkedInOrganization",
     "LinkedInPerson",
