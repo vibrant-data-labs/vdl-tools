@@ -23,6 +23,8 @@ from vdl_tools.scrape_enrich.geocode import (
 from vdl_tools.scrape_enrich.geocode_cache import get_component
 from vdl_tools.scrape_enrich.geocode_cache_sql import GeocodeCache
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
+from vdl_tools.shared_tools.tools.logger import logger
+
 
 __all__ = [
     "geocode_addresses",
@@ -47,7 +49,7 @@ def geocode_addresses(df, address, test=None, use_cached_result=True):
     Returns: df with added columns of latitude, longitude, city, state, country
     """
     if test is not None:
-        print("subset %d for testing" % test)
+        logger.info("subset %d for testing" % test)
         df = df.head(test).copy()
     # only compute on facilities that have address info
     df = df.reset_index(drop=True)
@@ -61,7 +63,7 @@ def geocode_addresses(df, address, test=None, use_cached_result=True):
     # Bulk: read the cache for every address at once, then geocode only the misses.
     USER, KEY = get_api_info()
     unique_addresses = df_w_geo[address].unique().tolist()
-    print("getting lat/longs with postgres geocode cache")
+    logger.info("getting lat/longs with postgres geocode cache")
     with get_session() as session:
         cache = GeocodeCache(session, USER, KEY)
         address_to_location = cache.bulk_get_cache_or_run(
@@ -72,7 +74,7 @@ def geocode_addresses(df, address, test=None, use_cached_result=True):
     # `.get` -> None for addresses that errored / returned no result (NaN-safe)
     df_w_geo['location'] = df_w_geo[address].apply(lambda a: address_to_location.get(a))
 
-    print("getting address components")
+    logger.info("getting address components")
     df_w_geo["Latitude"] = df_w_geo["location"].apply(
         lambda x: x['latitude'] if x else ""
     )
@@ -108,10 +110,13 @@ def get_lat_long(
     """
     df["Address"] = df[address]
     # get lat long and city, state, country from final addresses
-    print("geocoding addresses")
+    logger.info("geocoding addresses")
     df_geo = df[[idCol, "Address"]]
-    df_geo = geocode_addresses(df_geo, "Address",
-                               use_cached_result=use_cached_result)
+    df_geo = geocode_addresses(
+        df_geo,
+        "Address",
+        use_cached_result=use_cached_result,
+    )
     df.drop(["Address"], axis=1, inplace=True)  # remove origional address for merging
     return df_geo
 
@@ -129,12 +134,12 @@ def add_geo_lat_long(
     df :  metadata file, must have [idCol, address] columns
     idCol : unique id for merging metadata
     """
-    print("\nAdding Lat/Long, City, Region, Country")
+    logger.info("\nAdding Lat/Long, City, Region, Country")
     df_geo = get_lat_long(
         df,
         idCol,
         address,
-        use_cached_result=use_cached_result
+        use_cached_result=use_cached_result,
     )
 
     # merge geo data to main file
