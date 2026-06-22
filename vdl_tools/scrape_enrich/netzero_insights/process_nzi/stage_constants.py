@@ -243,4 +243,35 @@ STAGE_FAILURE_MAP = {
         # not in DISCLOSED_STAGES_ORDERED, so exclude them here.
         "graduation_stages": sorted(EXIT_TYPES - set(M_AND_A_NAMES)),
     },
+    # Like Seed_Exit, but the cohort is the Series A stage (Series A ≡ Early VC) —
+    # "did a company that raised a Series A / Early VC round go on to an exit?".
+    "A_Exit": {
+        "at_stage_round_types": ["Series A", "Early VC"],
+        # M&A names are handled separately by `_has_successful_manda` and are
+        # not in DISCLOSED_STAGES_ORDERED, so exclude them here.
+        "graduation_stages": sorted(EXIT_TYPES - set(M_AND_A_NAMES)),
+    },
+    # Series A cohort → reached a late-stage venture round (Late VC or Series C).
+    # Unlike A_Exit, graduation is late-venture (not exits), so the catch-all
+    # auto-append applies normally — same graduation set as Series B.
+    "A_Late": {
+        "at_stage_round_types": ["Series A", "Early VC"],
+        "graduation_stages": ["Late VC", "Series C"],
+    },
+    # Seed cohort → reached a late-stage venture round (Late VC or Series C). Same
+    # seed cohort gate as Seed / Seed_Exit; like A_Late, graduation is late-venture
+    # (not exits), so the catch-all auto-append applies normally.
+    "Seed_Late": {
+        "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed", "Seed"],
+        "graduation_stages": ["Late VC", "Series C"],
+    },
+    # Seed cohort → reached a Series B round. Same seed cohort gate as Seed /
+    # Seed_Exit / Seed_Late, but a lower bar than Seed_Late: graduation is Series B
+    # (same graduation set as the "Series A" cohort). The catch-all auto-append
+    # sweeps in everything at or after Series B, so a Seed company that jumped
+    # straight to Late VC / an exit still counts as having passed Series B.
+    "Seed_B": {
+        "at_stage_round_types": ["Accelerator/incubator", "Grant", "Pre-Seed", "Seed"],
+        "graduation_stages": ["Series B"],
+    },
 }

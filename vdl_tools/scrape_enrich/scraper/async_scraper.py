@@ -295,7 +295,9 @@ class AsyncScraper:
             )
 
             # Block heavy resources but keep CSS (blocking it is a bot fingerprint)
-            await context.route("**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2,mp4,mp3}", lambda route: route.abort())
+            async def _block_resource(route):
+                await route.abort()
+            await context.route("**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2,mp4,mp3}", _block_resource)
 
             page = await context.new_page()
             await Stealth().apply_stealth_async(page)

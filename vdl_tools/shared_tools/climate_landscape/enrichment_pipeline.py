@@ -25,7 +25,7 @@ from vdl_tools.shared_tools.web_summarization.website_summarization_cache_psql i
 from vdl_tools.shared_tools.web_summarization.website_summarization_psql import summarize_scraped_df
 
 from vdl_tools.shared_tools.model_caches.climate_relevance_cache import generate_climate_relevance_predictions
-import vdl_tools.scrape_enrich.geocode as geocode
+import vdl_tools.scrape_enrich.geocode_v2 as geocode
 import vdl_tools.scrape_enrich.process_images as images
 import vdl_tools.scrape_enrich.tags_from_text as tft
 import vdl_tools.shared_tools.common_functions as cf

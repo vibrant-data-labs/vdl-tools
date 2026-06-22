@@ -64,7 +64,7 @@ from vdl_tools.shared_tools.taxonomy_mapping.hierarchical_taxonomy_mapping impor
 # TODO: relativize SHARED_TAXONOMY_DIR via vdl_tools.shared_tools.project_config
 # when this file moves to vdl_tools/shared_tools/taxonomy_mapping/.
 SHARED_TAXONOMY_DIR = Path(
-    "/Users/rjw/Dropbox/VDL/shared-data/data/taxonomies/oneearth"
+    "/Users/rjw/Dropbox/VDL/shared-data-clean/data/taxonomies/oneearth"
 )
 
 MODEL = "gpt-5.4-nano"
@@ -165,26 +165,29 @@ ONEEARTH_LEVELS = [
 
 ONEEARTH_DOMAIN_INTRO = (
     "You are classifying an organization against the One Earth Climate "
-    "Solutions Framework — a hierarchical taxonomy of climate-action "
-    "solutions designed to keep global warming below 1.5°C. The "
-    "taxonomy is organized into five pillars: Energy Transition (clean "
-    "renewable power, heat, transport, electrification, batteries / "
-    "energy storage, EV infrastructure, building energy systems, and "
-    "industrial decarbonization), Nature Conservation (protecting, "
-    "restoring, and connecting forests, grasslands, wetlands, "
-    "peatlands, and oceans), Regenerative Agriculture (soil-restoring "
-    "farming, reduced chemical inputs, and food-system transformation), "
-    "Cross-Cutting (entities that work across multiple primary pillars, "
-    "OR 'field-builders' / 'ecosystem-builders' that support the "
-    "climate field as a whole — typically by creating enabling tools "
-    "such as data platforms, monitoring, science, or financial tools, "
-    "or enabling conditions such as policy, legal, educational, or "
-    "cultural work — NOT a fallback bucket for entities that don't fit "
-    "cleanly elsewhere), and Geo-Engineering (intentional large-scale "
-    "interventions in Earth systems such as carbon dioxide removal or "
-    "solar radiation management). Every taxonomy node describes a "
-    "specific climate-action solution, not general sustainability, "
-    "social services, or economic development."
+    "Solutions Framework, a hierarchical taxonomy of climate-action "
+    "solutions for keeping global warming below 1.5°C. The taxonomy has "
+    "four levels — Pillar, Sub-Pillar, Solution, Sub-Term — nested under "
+    "five top-level pillars:\n"
+    "- Energy Transition: clean renewable power, heat, transport, "
+    "electrification, energy storage, EV infrastructure, building energy "
+    "systems, and industrial decarbonization.\n"
+    "- Nature Conservation: protecting, restoring, and connecting "
+    "forests, grasslands, wetlands, peatlands, and oceans.\n"
+    "- Regenerative Agriculture: soil-restoring farming, reduced "
+    "chemical inputs, and food-system transformation, including food "
+    "waste reduction.\n"
+    "- Geo-Engineering: intentional large-scale interventions in Earth "
+    "systems such as carbon dioxide removal or solar radiation "
+    "management.\n"
+    "- Cross-Cutting: field-building and enabling work (tools, data, "
+    "monitoring, policy, finance, legal, education, advocacy) that "
+    "spans two or more of the other four pillars. It is a leaf with no "
+    "sub-pillars or solutions of its own, not a fallback bucket.\n"
+    "Return an empty match list when the organization's work falls "
+    "outside all five pillars — e.g. general social services, "
+    "non-climate health, sports, consumer products with no climate "
+    "angle, or generic economic development."
 )
 
 # Copied verbatim from the Drawdown driver — the definitions are
@@ -223,236 +226,121 @@ ONEEARTH_MODES = [
 
 ONEEARTH_RULE_OVERRIDES = {
     "domain_relevance": (
-        "Climate-action relevance. Match a candidate when the "
-        "description names activities aligned with the candidate's "
-        "definition. The taxonomy already establishes the climate "
-        "mechanism for each candidate — your job is to decide whether "
-        "the description names the activity, not to re-derive whether "
-        "the activity helps stabilize the climate.\n"
-        "Important: the inclusions below grant entry at the Pillar / "
-        "Sub-Pillar level only. Selecting a specific Solution or "
-        "Sub-Term still requires the description to name that specific "
-        "activity — see the specificity rule for the depth-of-evidence "
-        "constraint that always applies.\n"
-        "- Ecosystem protection or restoration (forests, grasslands, "
-        "wetlands, peatlands, mangroves, coastal habitats, watersheds, "
-        "coral reefs, urban green infrastructure) counts as a Nature "
-        "Conservation match even when the description does not "
-        "explicitly say 'carbon' or 'GHG' — the carbon-sink mechanism "
-        "is already established by the taxonomy itself.\n"
-        "- Habitat / biodiversity / wildlife / land-trust / Audubon-"
-        "style organizations count as Nature Conservation matches at "
-        "the Pillar / Sub-Pillar level when their work involves "
-        "managing intact ecosystems or rebuilding degraded ones, even "
-        "when the framing is conservation rather than carbon.\n"
-        "- Climate-data, analytics, risk-modeling, monitoring, and "
-        "geospatial tools count as 'enabling tech' matches for the "
-        "climate decisions they inform (e.g. siting renewables, "
-        "monitoring forests, tracking emissions, climate-risk "
-        "disclosure).\n"
-        "- Local food systems, farmers markets, agroecology, and "
-        "community food infrastructure count as Regenerative "
-        "Agriculture matches at the Pillar / Sub-Pillar level when "
-        "sustainable practices or food-system transformation are named "
-        "as goals.\n"
-        "Out of scope: activities clearly unrelated to climate — pure "
-        "social welfare, general recreation, drinking-water utility "
-        "services, education unrelated to environment, fundraising or "
-        "networking without programs, generic 'clean' or 'green' "
-        "branding without specific activity. When the description is "
-        "too thin to commit to even a Pillar, return `matches: []`."
+        "Climate-action relevance. Match a candidate when the description "
+        "names activities aligned with the candidate's definition. The "
+        "taxonomy already establishes the climate mechanism for each "
+        "candidate — decide whether the description names the activity, "
+        "not whether the activity helps the climate. An organization's "
+        "products, services, or stated mission are sufficient evidence at "
+        "the Pillar / Sub-Pillar level even when the climate mechanism is "
+        "left implicit.\n"
+        "The activity classes below are IN SCOPE and map as shown. These "
+        "inclusions grant entry at the Pillar / Sub-Pillar level only; "
+        "selecting a specific Solution or Sub-Term still requires the "
+        "description to name that specific activity (see the specificity "
+        "rule):\n"
+        "- Low-carbon or circular materials, recycling, and material "
+        "substitution (bioplastics, recycled or bio-based fibers, "
+        "low-carbon cement / chemicals, battery or e-waste recycling) -> "
+        "Energy Transition (industrial decarbonization).\n"
+        "- Food-system work: regenerative, urban, or indoor / controlled-"
+        "environment farming, agroecology, local / organic food systems, "
+        "alternative proteins, food-waste reduction / rescue / upcycling, "
+        "composting, and sustainable fibers or textile recycling "
+        "(fibersheds) -> Regenerative Agriculture.\n"
+        "- Ecosystem protection, restoration, or connection (forests, "
+        "grasslands, wetlands, peatlands, oceans, coastal habitats, urban "
+        "green infrastructure) and conservation-enabling work "
+        "(biodiversity data, conservation finance, monitoring, policy, "
+        "education) -> Nature Conservation.\n"
+        "- Carbon dioxide removal or capture (direct air capture, "
+        "mineralization or carbon-storing materials, enhanced weathering, "
+        "ocean or biogenic CDR) and carbon-credit / MRV infrastructure "
+        "for capture -> Geo-Engineering.\n"
+        "- Climate field-building that enables others (data platforms, "
+        "monitoring, finance, policy, legal, education, advocacy, "
+        "incubators) -> placed by scope; see the cross-pillar rule.\n"
+        "Out of scope: fossil-fuel extraction, processing, or transport; "
+        "conventional chemical-input agribusiness; consumer goods carrying "
+        "only a 'sustainable' / 'green' label with no climate mechanism; "
+        "general social services, recreation, emergency services, "
+        "non-environmental health or education, and generic economic "
+        "development. When the description is too thin to commit even to a "
+        "Pillar, return `matches: []`.\n"
+        "At the Pillar level, bias plausible but uncertain matches toward "
+        "inclusion. The specificity and qualifier cautions in the other "
+        "rules govern the choice of a Solution or Sub-Term — they do not "
+        "justify withholding a Pillar because the description names no "
+        "specific technology, practice, or qualifier."
     ),
     "cross_sector": (
-        "No cross-pillar inference, and no Cross-Cutting fallback. "
-        "Assign a Pillar only if the entity itself performs the "
-        "climate activity in that Pillar. An entity that supplies a "
-        "lower-emission input to another sector stays in its own "
-        "primary Pillar — it does not get pulled into the destination "
-        "Pillar — unless the description says the entity also operates "
-        "in the destination Pillar.\n"
-        "Critically, Cross-Cutting is NOT a default for entities that "
-        "aren't a clean fit elsewhere. Cross-Cutting is reserved for "
-        "(a) entities that genuinely work across multiple primary "
-        "pillars (e.g. an organization whose programs span both "
-        "Renewable Power and Forest Conservation), or (b) field-"
-        "builders / ecosystem-builders that provide enabling tools "
-        "(data platforms, monitoring, climate science, financial tools) "
-        "or enabling conditions (policy, legal, education, culture) "
-        "for the climate field broadly. A company that builds, "
-        "operates, deploys, or supplies a SPECIFIC climate solution "
-        "belongs to that solution's primary Pillar:\n"
-        "- A battery-storage company, EV-charging operator, building-"
-        "HVAC vendor, heat-pump installer, smart-grid software vendor, "
-        "or industrial-decarbonization technology provider is Energy "
-        "Transition (NOT Cross-Cutting).\n"
-        "- A land trust, wildlife group, marine conservation org, or "
-        "ecosystem-restoration company is Nature Conservation (NOT "
-        "Cross-Cutting).\n"
-        "- A regenerative-farming co-op, cover-crop seed supplier, or "
-        "alternative-protein producer is Regenerative Agriculture "
-        "(NOT Cross-Cutting).\n"
-        "- A low-carbon materials, recycling, or chemicals company "
-        "stays in whichever primary Pillar its specific activity sits "
-        "in (typically Energy Transition for industrial decarb), or "
-        "returns no Pillar match if it has no clear home — it does "
-        "not become Cross-Cutting by default.\n"
-        "Pick Cross-Cutting only when the description names "
-        "field-building, advocacy across pillars, or enabling tools / "
-        "enabling conditions as the entity's own work. When in doubt, "
-        "prefer no match over a Cross-Cutting fallback."
-    ),
-    "specificity": (
-        "Specificity must match the level. A candidate is selectable "
-        "only when the description names activity specific enough to "
-        "support it. Broad themes ('sustainability', 'cleantech', "
-        "'clean energy', 'energy efficiency', 'renewables', 'nature-"
-        "based solutions', 'regenerative practices', 'low-carbon') can "
-        "support a Pillar but are not sufficient for a narrower "
-        "Sub-Pillar, Solution, or Sub-Term unless the description also "
-        "names the specific technology, process, material, ecosystem, "
-        "or practice the child covers.\n"
-        "Energy Transition example: 'renewable energy' alone supports "
-        "the Pillar and a Renewable Power Sub-Pillar, but does NOT "
-        "support solar-, wind-, geothermal-, or hydro-specific "
-        "Solutions or Sub-Terms — those require the description to "
-        "name the technology ('solar', 'wind', 'geothermal'). Sub-Terms "
-        "in particular often add a narrower qualifier (utility-scale, "
-        "distributed, offshore, tropical) that must be explicitly "
-        "supported.\n"
-        "Nature Conservation example: generic phrases like 'habitat "
-        "protection', 'wildlife conservation', 'land conservation', "
-        "'watershed protection', 'biodiversity', 'environmental "
-        "stewardship', 'protecting nature', or 'preserving open space' "
-        "support the Nature Conservation Pillar (and often a broad "
-        "Sub-Pillar like Land Conservation), but they do NOT by "
-        "themselves support any specific Solution or Sub-Term in that "
-        "Pillar.\n"
-        "Categorical rule for Ecosystem Restoration Sub-Pillar: a "
-        "specific Solution or Sub-Term under Ecosystem Restoration "
-        "REQUIRES the description to name BOTH (a) the specific "
-        "ecosystem being restored — e.g. wetlands, salt marshes, "
-        "mangroves, peatlands, rivers / streams, riparian areas, "
-        "estuaries, forests, grasslands, prairies, coral reefs, kelp "
-        "forests, oyster reefs, dunes — AND (b) the restoration / "
-        "management activity. Generic 'habitat restoration', 'habitat "
-        "enhancement', 'ecological restoration', 'ecosystem "
-        "rehabilitation', or 'restoration projects' language supports "
-        "the Sub-Pillar but NOT a specific child. Same for adjacent "
-        "named activities: Species Rewilding requires 'reintroduces "
-        "extirpated species'; Hydrological Restoration requires "
-        "'restores natural water flow / hydrology'; Invasive Species "
-        "Management / Vegetation Management requires 'removes / "
-        "controls invasive species' or 'manages vegetation'; Erosion "
-        "Control requires explicit erosion or sediment language. A "
-        "wildlife refuge, conservation trust, garden club, or fishery "
-        "enhancement group whose description only says 'restores "
-        "habitat' or 'enhances habitat' should leaf at the Sub-Pillar.\n"
-        "Categorical rule for Land Conservation Sub-Pillar: Land Trust "
-        "requires 'acquires land or holds easements'; Protected Lands "
-        "requires 'manages a designated reserve / national park / "
-        "formally protected area'; Land Corridors / Wildlife "
-        "Connectivity requires explicit corridor or connectivity "
-        "language; Indigenous Tenure requires explicit Indigenous "
-        "land-rights language.\n"
-        "Regenerative Agriculture example: 'sustainable farming', "
-        "'regenerative practices', or 'soil health' support the "
-        "Pillar / Sub-Pillar but NOT a specific child.\n"
-        "Categorical rule for Regenerative Croplands Sub-Pillar: a "
-        "specific Solution or Sub-Term REQUIRES the description to "
-        "name the specific practice — Cover Crops requires 'cover "
-        "crops' or 'planting cover between cash crops'; No-till / "
-        "Reduced Tillage requires 'no-till', 'reduced tillage', or "
-        "'minimum disturbance'; Microbial Inoculants requires "
-        "'microbial inoculants' or 'beneficial microbes'; Agroforestry "
-        "requires 'integrating trees with crops or livestock'; "
-        "Polyculture / Silvopasture / Multi-strata each require their "
-        "specific cropping system named; Dryland Irrigation requires "
-        "explicit irrigation language; Abandoned Farmland Restoration "
-        "requires 'abandoned' or 'degraded' farmland language; "
-        "Perennial Crops & Superfoods requires explicit perennial-crop "
-        "language. A community garden, school program, soil-health "
-        "education org, or general agricultural-services org that does "
-        "not name a specific practice should leaf at the Sub-Pillar.\n"
-        "When in doubt, return `matches: []` and let the walk stop "
-        "one level higher."
-    ),
-    "qualifier_lock": (
-        "Qualifier lock. Qualifiers in a candidate's name are "
-        "mandatory constraints, not flavor. They include:\n"
-        "- Scale / deployment type: Utility-Scale, Distributed, "
-        "Residential, Commercial, Industrial, Small Modular.\n"
-        "- Geographic scope: Onshore, Offshore, Coastal, Terrestrial, "
-        "Marine.\n"
-        "- Climatic / biome terms: Temperate, Tropical, Boreal, Arctic, "
-        "Polar, Tundra.\n"
-        "- Ecosystem type — a Solution or Sub-Term named for a specific "
-        "ecosystem REQUIRES that ecosystem to appear in the "
-        "description: Wetland(s), Salt Marsh, Mangrove, Peatland, "
-        "Bog, Riparian, River, Stream, Estuary, Coral Reef, Kelp "
-        "Forest, Oyster Reef, Seagrass, Dune, Forest, Grassland, "
-        "Prairie, Savanna, Tundra. 'Habitat restoration' or 'ecosystem "
-        "restoration' alone is NOT enough — the specific ecosystem "
-        "must be named.\n"
-        "- Practice type — a Solution or Sub-Term named for a specific "
-        "agricultural / land-management practice REQUIRES that "
-        "practice to appear in the description: Cover Crop, No-Till, "
-        "Reduced Tillage, Microbial Inoculant, Biochar, Compost, "
-        "Agroforestry, Silvopasture, Polyculture, Multi-strata, "
-        "Perennial Crop, Crop Rotation, Managed Grazing, Holistic "
-        "Grazing, Erosion Control, Conservation Tillage. 'Regenerative "
-        "practices' or 'soil health' alone is NOT enough.\n"
-        "- Feedstock / phase: First-generation, Advanced, etc.\n"
-        "If the description identifies a different qualifier, do NOT "
-        "select that candidate. If the description is silent on the "
-        "qualifier, do NOT select — the candidate's qualifier must be "
-        "supported by the description. When no sibling's qualifier "
-        "matches the description, return an empty list at this level."
+        "No cross-pillar inference. Assign a pillar only for an activity the "
+        "entity itself performs, supplies, or advances. An entity that "
+        "supplies a low-carbon input or service to another pillar stays in "
+        "its own pillar unless the description says it also operates in that "
+        "pillar."
     ),
     "prominence": (
-        "Prominence at Pillar and Sub-Pillar levels. At these two "
-        "levels, select only activities that are a core line of "
-        "business — a distinct area with multiple sentences, listed "
-        "among the entity's main offerings, or described as a primary "
-        "focus. A single incidental phrase ('also supports X', "
-        "'including X', 'in addition to Y') about an activity "
-        "otherwise absent from the description is not enough at these "
-        "levels. At the Solution and Sub-Term levels, this threshold "
-        "does not apply for entities directly performing or enabling "
-        "the technology — a specifically named technology or practice "
-        "is sufficient even if briefly mentioned. For entities whose "
-        "primary mode is 'indirect' (advocacy / education / policy / "
-        "awareness), the prominence threshold applies at EVERY level: "
-        "a single passing phrase about a candidate's domain is not "
-        "enough — the description must establish that domain as a "
-        "primary focus of the entity's advocacy or programs."
-    ),
-    "advocacy_depth": (
-        "Advocacy depth lock. When the entity's primary mode of "
-        "operation toward a candidate is 'indirect' (advocacy, public "
-        "policy, education, awareness, organizing, legal challenges, "
-        "convening, standards-setting, research without deployment), "
-        "the match must sit at the level that matches the SCOPE of "
-        "the advocacy named in the description, not at deeper levels "
-        "the entity does not itself perform. Concretely: an advocacy "
-        "organization that promotes 'renewable energy' in general "
-        "matches at the Energy Transition Pillar or a Renewable Power "
-        "Sub-Pillar — NOT at solar/wind Solutions or Sub-Terms — "
-        "unless the description names the specific Solution or "
-        "Sub-Term as the focus of that advocacy (e.g. 'campaigns "
-        "specifically to expand rooftop solar incentives'). Generic "
-        "phrases like 'promotes renewables', 'opposes coal', "
-        "'protects forests', or 'supports clean energy policies' name "
-        "the Pillar or Sub-Pillar, not a Solution. The narrower the "
-        "candidate, the more explicit the advocacy focus must be."
+        "Prominence. Match a Pillar or Sub-Pillar for any activity that is "
+        "the entity's own work — its products, services, or stated mission "
+        "— even if described in a single phrase or sentence; do not require "
+        "multiple sentences or \"primary focus\" framing at these levels. "
+        "What fails this bar is an activity that is not the entity's own "
+        "(e.g. \"our clients include solar firms\") or a throwaway mention "
+        "of something otherwise absent from the description. At the Solution "
+        "/ Sub-Term levels, a specifically named technology or practice is "
+        "likewise sufficient even if briefly mentioned."
     ),
 }
 
-ONEEARTH_SYSTEM_PROMPT = build_system_prompt(
-    levels=ONEEARTH_LEVELS,
-    domain_intro=ONEEARTH_DOMAIN_INTRO,
-    modes=ONEEARTH_MODES,
-    rules=ONEEARTH_RULE_OVERRIDES,
+# Cross-pillar routing — disambiguation for activities that could plausibly
+# fit more than one pillar. Definitions hold scope; the prompt holds routing.
+# Appended as its own labeled section (build_system_prompt only emits the
+# fixed PROMPT_RULE_KEYS). Mirrored 1:1 in the judge's scope intro.
+ONEEARTH_CROSS_PILLAR_ROUTING = (
+    "Cross-pillar routing. When work could plausibly fit more than one "
+    "pillar, route it as follows:\n"
+    "- Field-builders / ecosystem-builders whose own work is enabling tools "
+    "(data, monitoring, finance, science) or enabling conditions (policy, "
+    "legal, education, advocacy, incubation): bounded to ONE primary pillar "
+    "-> that pillar's `Cross-Cutting <Pillar>` sub-pillar; spanning TWO OR "
+    "MORE primary pillars -> the top-level Cross-Cutting pillar. Cross-Cutting "
+    "is never a fallback for a poor fit — an entity that builds, deploys, or "
+    "supplies a SPECIFIC solution belongs to that solution's pillar.\n"
+    "- Carbon capture, transport, storage, or removal — including "
+    "point-source capture at fossil or industrial facilities — is "
+    "Geo-Engineering / Engineered CDR, not Energy Transition, whenever that "
+    "is the primary climate mechanism.\n"
+    "- Classify by product or activity, not feedstock: bio-based, "
+    "biodegradable, or recycled plastics and organic / green chemicals are "
+    "Energy Transition (Organic Chemicals & Plastics) even when made from "
+    "agricultural or organic-waste feedstock; fibers, textiles, and clothing "
+    "are Regenerative Agriculture (circular fibersheds); food and farming "
+    "products are Regenerative Agriculture; materials whose primary purpose "
+    "is capturing or sequestering CO2 are Geo-Engineering."
 )
+
+
+def build_oneearth_system_prompt(include_confidence: bool = False) -> str:
+    """Assemble the canonical One Earth organization system prompt.
+
+    Generic skeleton + OE rule overrides (domain_relevance with a
+    Pillar-level inclusion bias, generic cross_sector, prominence) + the
+    standalone cross-pillar routing section. ``include_confidence=True``
+    adds the per-match confidence schema/instruction for the
+    confidence-threshold knob.
+    """
+    prompt = build_system_prompt(
+        levels=ONEEARTH_LEVELS,
+        domain_intro=ONEEARTH_DOMAIN_INTRO,
+        modes=ONEEARTH_MODES,
+        rules=ONEEARTH_RULE_OVERRIDES,
+        include_confidence=include_confidence,
+    )
+    return prompt + "\n\n" + ONEEARTH_CROSS_PILLAR_ROUTING
+
+
+ONEEARTH_SYSTEM_PROMPT = build_oneearth_system_prompt()
 
 
 # ---------------------------------------------------------------------------
@@ -616,32 +504,103 @@ ONEEARTH_RESEARCH_RULE_OVERRIDES = {
         "another sector stays in its own primary Pillar — it does not "
         "get pulled into the destination sector's Pillar — unless the "
         "abstract says the project also investigates that destination.\n"
-        "Cross-Cutting is reserved for: (a) projects whose research "
-        "spans multiple primary pillars (e.g. integrated land-energy "
-        "system modeling, multi-pillar policy analysis), or (b) "
-        "field-building research that produces tools, monitoring, or "
-        "science enabling many solutions (climate science, satellite "
-        "monitoring, multi-domain decision-support tools, climate-"
-        "policy frameworks). A research project on a SPECIFIC named "
-        "solution belongs to that solution's primary Pillar:\n"
+        "TWO DISTINCT SENSES of 'cross-cutting' exist in this taxonomy "
+        "— do not conflate them:\n"
+        "  (A) Top-level Cross-Cutting Pillar — for projects whose work "
+        "      genuinely spans multiple PRIMARY PILLARS (Energy "
+        "      Transition × Nature Conservation × Regenerative "
+        "      Agriculture × Geo-Engineering). Examples: integrated "
+        "      land-energy system modeling that combines forest carbon "
+        "      with renewable siting; a climate finance platform that "
+        "      funds both Reg Ag and Energy Transition work; satellite "
+        "      monitoring that serves both Nature Conservation AND "
+        "      Energy Transition use cases. The defining test: list "
+        "      the primary pillars the project's stated work touches. "
+        "      If that list has >= 2 entries, top-level Cross-Cutting "
+        "      may fit.\n"
+        "  (B) Cross-Cutting Sub-Pillars inside one primary pillar "
+        "      (Cross-Cutting Energy / Cross-Cutting Nature / Cross-"
+        "      Cutting Regen Ag) — for projects that span multiple "
+        "      SOLUTIONS within ONE primary pillar, or that build the "
+        "      field for that pillar. Per the taxonomy definitions:\n"
+        "      • Cross-Cutting Regen Ag spans multiple Regen Ag "
+        "        Solutions (regenerative croplands, sustainable "
+        "        rangelands, food waste reduction, circular "
+        "        fibersheds) — including supply-chain tools, food-"
+        "        system data platforms, ag-policy analysis, farmer "
+        "        education / extension that touches several practices, "
+        "        food-system AI institutes, planetarian-diet research, "
+        "        meal-planning / food-waste apps.\n"
+        "      • Cross-Cutting Energy spans multiple energy Solutions "
+        "        (renewable power + renewable heat + renewable transport "
+        "        + energy efficiency) — including grid-modeling that "
+        "        crosses generation modes, cleantech accelerators "
+        "        funding multiple energy solutions, multi-mode "
+        "        decarbonization planning tools.\n"
+        "      • Cross-Cutting Nature spans multiple nature Solutions "
+        "        (land conservation + ocean conservation + ecosystem "
+        "        restoration + wildlife connectivity) — including "
+        "        multi-ecosystem monitoring, multi-habitat policy "
+        "        frameworks, conservation-finance platforms.\n"
+        "DECISION RULE: Before picking top-level Cross-Cutting Pillar, "
+        "identify the primary pillar(s) the project's stated work "
+        "lives in. If the project's scope sits entirely within ONE "
+        "primary pillar's domain (e.g. 'the food system' = Regen Ag; "
+        "'the energy transition' = Energy Transition; 'biodiversity / "
+        "ecosystems' = Nature Conservation), descend into THAT pillar "
+        "and pick its Cross-Cutting Sub-Pillar, NOT the top-level "
+        "Cross-Cutting Pillar. Use top-level Cross-Cutting Pillar only "
+        "when the work genuinely crosses pillar boundaries (e.g., "
+        "energy + nature, energy + agriculture, all-pillar climate "
+        "science).\n"
+        "WITHIN-PILLAR SUB-PILLAR RULE: When a project is a horizontal "
+        "platform within ONE primary pillar — i.e., an institute / "
+        "research center / data platform / AI or ML system / MRV or "
+        "monitoring system / policy framework / financing mechanism / "
+        "supply-chain or systems-level effort — and its stated mission "
+        "targets MULTIPLE Sub-Pillars or multiple Solutions within "
+        "that pillar, route to the pillar's Cross-Cutting Sub-Pillar "
+        "(Cross-Cutting Energy / Cross-Cutting Nature / Cross-Cutting "
+        "Regen Ag) rather than to whichever narrow Sub-Pillar has the "
+        "strongest literal-text match in the abstract. Signals that "
+        "trigger this routing: mission statements that name 2+ "
+        "downstream activities ('breeding AND production AND supply "
+        "chain AND consumer'; 'generation AND transmission AND end-"
+        "use efficiency'; 'multiple ecosystems'); explicit framings "
+        "like 'transform US food systems', 'decarbonize the energy "
+        "system', 'transform biodiversity monitoring'; institute / "
+        "center / consortium scope language; horizontal enabling "
+        "technologies (AI, sensors, digital twins, satellite, finance, "
+        "policy) applied across several levers within the pillar. Do "
+        "NOT collapse such a project onto its narrowest literal match "
+        "(e.g. picking Food Waste Reduction just because the abstract "
+        "lists 'eliminating food waste' as one of four mission goals). "
+        "Conversely, when a project genuinely targets ONLY one named "
+        "lever (one specific solution, one ecosystem, one technology), "
+        "stay at that narrow Sub-Pillar / Solution — do not promote it "
+        "to Cross-Cutting.\n"
+        "A research project on a SPECIFIC named solution belongs to "
+        "that solution's primary Pillar:\n"
         "- Battery chemistry, EV powertrain, heat-pump, smart-grid, "
         "or industrial-decarbonization research → Energy Transition "
         "(NOT Cross-Cutting).\n"
         "- Wetland-restoration ecology, marine conservation science, "
         "or land-trust research → Nature Conservation (NOT Cross-"
         "Cutting).\n"
-        "- Soil microbiome, cover-crop, regenerative-grazing, or "
-        "alternative-protein research → Regenerative Agriculture "
-        "(NOT Cross-Cutting).\n"
+        "- Soil microbiome, cover-crop, regenerative-grazing, "
+        "alternative-protein research, food-waste R&D, planetarian-"
+        "diet studies → Regenerative Agriculture (NOT top-level "
+        "Cross-Cutting).\n"
         "- Low-carbon materials, recycling, or industrial chemistry "
         "research stays in its primary Pillar (typically Energy "
         "Transition for industrial decarb), or returns no Pillar "
-        "match if no clean home — it does NOT become Cross-Cutting "
-        "by default.\n"
-        "Pick Cross-Cutting only when the abstract names "
-        "field-building, cross-pillar integration, or enabling tools "
-        "as the project's research target. When in doubt, prefer no "
-        "match over a Cross-Cutting fallback."
+        "match if no clean home — it does NOT become top-level "
+        "Cross-Cutting by default.\n"
+        "Pick top-level Cross-Cutting Pillar only when the abstract "
+        "names genuine cross-pillar integration or all-field enabling "
+        "tools. When in doubt between top-level Cross-Cutting and a "
+        "within-pillar Cross-Cutting Sub-Pillar, prefer the within-"
+        "pillar Sub-Pillar."
     ),
     "specificity": (
         "Specificity must match the level. A candidate is selectable "
@@ -810,6 +769,26 @@ _PROMPT_BY_MODE: dict[str, str] = {
     "research": ONEEARTH_RESEARCH_SYSTEM_PROMPT,
 }
 
+def build_recovery_scope_prompt(taxonomy_path: Path | None = None) -> str:
+    """Build the second-stage recovery's scope system prompt.
+
+    Reuses the canonical mapping scope (``ONEEARTH_DOMAIN_INTRO`` +
+    ``ONEEARTH_CROSS_PILLAR_ROUTING``) so the recovery and the classifier
+    share one scope source, plus a yes/no instruction. Validated on the
+    seed-42 empties at ~88% accuracy separating in-scope-but-refused from
+    genuinely out-of-scope; the bare-definition scope under-recalls on
+    framing-masked in-scope orgs, so the richer scope is used. ``taxonomy_path``
+    is accepted for signature compatibility but unused (scope is text-based).
+    """
+    return (
+        ONEEARTH_DOMAIN_INTRO + "\n\n" + ONEEARTH_CROSS_PILLAR_ROUTING + "\n\n"
+        + "Decide whether the organization's OWN work is in scope for any "
+        "pillar above (an implicit climate mechanism is acceptable; an "
+        "incidental co-benefit of otherwise out-of-scope work is not). "
+        "Return JSON: {\"in_scope\": true|false, \"pillar\": \"<exact pillar "
+        "name or null>\", \"reason\": \"<one sentence>\"}."
+    )
+
 
 def map_to_oneearth(
     entities: pd.DataFrame,
@@ -824,6 +803,12 @@ def map_to_oneearth(
     descent_fanout_cap: int = DESCENT_FANOUT_CAP,
     prompt_mode: str = "organization",
     system_prompt: str | None = None,
+    confidence_threshold: float | None = None,
+    emit_per_level: bool = False,
+    recover_unmatched: bool = False,
+    recovery_model: str = "gpt-4.1-mini",
+    recovery_scope_prompt: str | None = None,
+    walk_recovered: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Classify a DataFrame of entities against the One Earth taxonomy.
 
@@ -875,6 +860,26 @@ def map_to_oneearth(
         Escape hatch for callers that want to assemble a fully custom
         system prompt via ``build_system_prompt``. When provided, it
         overrides ``prompt_mode`` entirely.
+    confidence_threshold
+        Precision/recall knob in [0, 1]. When set, the ``system_prompt``
+        must be confidence-enabled (``build_system_prompt(
+        include_confidence=True)``); the model emits a per-match
+        confidence and matches below the threshold are dropped. LOWER
+        keeps more (weaker) matches — fewer no-mappings, more false
+        positives; HIGHER keeps only strong matches. ``None`` (default)
+        applies no confidence scoring or filtering.
+    emit_per_level
+        When True, the per-row frame gains ``<level> evidence`` /
+        ``<level> reason`` / ``<level> confidence`` columns for every
+        assignment along each path, not just the deepest match.
+    walk_recovered
+        When True (requires ``recover_unmatched=True``), entities the walk
+        left empty but the recovery marked in scope get a second walk
+        seeded at the recovered pillar, descending into Sub-Pillar /
+        Solution / Sub-Term where the description supports it. Their
+        placeholder rows are replaced by the seeded leaf rows; the
+        ``recovery_*`` columns carry through, so the rows remain flagged
+        as recovery-sourced.
 
     Returns
     -------
@@ -891,17 +896,24 @@ def map_to_oneearth(
         ``"NoMatch"``). Non-classification columns from the input are
         carried through using each id's first non-null value.
     """
+    if walk_recovered and not recover_unmatched:
+        raise ValueError("walk_recovered=True requires recover_unmatched=True")
+
     if taxonomy_path is None:
         taxonomy_path = find_latest_taxonomy()
     tables = load_taxonomy(taxonomy_path)
 
     if system_prompt is None:
-        if prompt_mode not in _PROMPT_BY_MODE:
+        if confidence_threshold is not None and prompt_mode == "organization":
+            # The confidence knob needs the confidence-enabled schema.
+            system_prompt = build_oneearth_system_prompt(include_confidence=True)
+        elif prompt_mode not in _PROMPT_BY_MODE:
             raise ValueError(
                 f"Unknown prompt_mode {prompt_mode!r}; expected one of "
                 f"{sorted(_PROMPT_BY_MODE)} or pass system_prompt= explicitly."
             )
-        system_prompt = _PROMPT_BY_MODE[prompt_mode]
+        else:
+            system_prompt = _PROMPT_BY_MODE[prompt_mode]
 
     per_row_df = classify_entities(
         client=client,
@@ -915,9 +927,93 @@ def map_to_oneearth(
         model=model,
         descent_fanout_cap=descent_fanout_cap,
         max_workers=max_workers,
+        confidence_threshold=confidence_threshold,
+        emit_per_level=emit_per_level,
     )
+    if recover_unmatched:
+        # Default top-level column + category choices from the level spec +
+        # tables; override only the scope prompt with the OE-specific rich one.
+        per_row_df = _htm.recover_unmatched(
+            per_row_df,
+            client=client,
+            model=recovery_model,
+            id_col=id_col,
+            name_col=name_col,
+            text_col=text_col,
+            levels=ONEEARTH_LEVELS,
+            tables=tables,
+            scope_prompt=recovery_scope_prompt or build_recovery_scope_prompt(
+                taxonomy_path),
+            max_workers=max_workers,
+        )
+
+    if walk_recovered:
+        per_row_df = _walk_recovered_entities(
+            per_row_df, client=client, tables=tables, system_prompt=system_prompt,
+            id_col=id_col, name_col=name_col, text_col=text_col, model=model,
+            descent_fanout_cap=descent_fanout_cap, max_workers=max_workers,
+            confidence_threshold=confidence_threshold, emit_per_level=emit_per_level,
+        )
+
     collapsed_df = collapse_to_one_row_per_uid(per_row_df, id_col=id_col)
     return per_row_df, collapsed_df
+
+
+def _walk_recovered_entities(
+    per_row_df: pd.DataFrame, *, client, tables, system_prompt, id_col, name_col,
+    text_col, model, descent_fanout_cap, max_workers, confidence_threshold,
+    emit_per_level,
+) -> pd.DataFrame:
+    """Seed the walk at each recovery-recovered entity's pillar and descend.
+
+    Entities the walk left empty but the recovery marked in-scope (with a
+    pillar) get a second walk seeded at that pillar, picking up Sub-Pillar /
+    Solution / Sub-Term where the description supports it. Their placeholder
+    (no-match) rows are replaced by the seeded leaf rows; the recovery
+    columns carry through, so these rows stay flagged as recovery-sourced.
+    Entities that stay pillar-only after the descent keep the assigned pillar.
+    """
+    top_col = ONEEARTH_LEVELS[0]["output_col"]
+    recovered_col = f"recovered_{top_col}"
+    if recovered_col not in per_row_df.columns:
+        return per_row_df
+
+    is_recovered = (
+        per_row_df[top_col].isna()
+        & (per_row_df["recovered_in_scope"] == True)  # noqa: E712
+        & per_row_df[recovered_col].notna()
+    )
+    rec_ids = per_row_df.loc[is_recovered, id_col].unique()
+    if len(rec_ids) == 0:
+        return per_row_df
+
+    # One entity row per recovered id; strip the classification columns so the
+    # seeded walk regenerates them (carry cols incl. recovery_* are kept).
+    class_cols = (
+        [lvl["output_col"] for lvl in ONEEARTH_LEVELS]
+        + ["deepest_match", "leaf_definition", "mode_of_operation",
+           "evidence", "reason", "confidence"]
+    )
+    for lvl in ONEEARTH_LEVELS:
+        oc = lvl["output_col"]
+        class_cols += [f"{oc} evidence", f"{oc} reason", f"{oc} confidence"]
+    seed_input = (per_row_df[per_row_df[id_col].isin(rec_ids)]
+                  .drop_duplicates(id_col)
+                  .drop(columns=[c for c in class_cols if c in per_row_df.columns]))
+
+    seeded = classify_entities(
+        client=client, tables=tables, levels=ONEEARTH_LEVELS,
+        system_prompt=system_prompt, entities=seed_input, id_col=id_col,
+        name_col=name_col, text_col=text_col, model=model,
+        descent_fanout_cap=descent_fanout_cap, max_workers=max_workers,
+        confidence_threshold=confidence_threshold, emit_per_level=emit_per_level,
+        seed_col=recovered_col,
+    )
+
+    kept = per_row_df[~per_row_df[id_col].isin(rec_ids)]
+    merged = pd.concat([kept, seeded.reindex(columns=per_row_df.columns)],
+                       ignore_index=True)
+    return merged
 
 
 # Re-exports for callers that want to drive the engine directly.
