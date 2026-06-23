@@ -1059,7 +1059,7 @@ __all__ = [
 if __name__ == "__main__":
     taxonomy_dir = find_latest_taxonomy(Path("../shared-data-clean/data/taxonomies/oneearth"))
     entities = pd.DataFrame([
-        {"id": 1, "name": "CCS", "description": "CCS is a project developer focusing on building carbon capture and storage facilities."},
+        {"id": 1, "name": "CCS", "description": "CCS is a project developer focusing on building carbon capture and storage facilities. They also make fertilizer from captured carbon dioxide."},
         {"id": 2, "name": "Electric Semis", "description": "Electric Semis is an auto manufacturer focusing on building electric semi-trucks. They also build battery storage systems."},
         {"id": 3, "name": "Forest Defense Fund", "description": "Forest Defense Fund is a non-profit organization focusing on protecting forests and wildlife."},
     ])
@@ -1069,5 +1069,7 @@ if __name__ == "__main__":
         id_col="id",
         name_col="name",
         text_col="description",
+        read_from_cache=True,
+        write_to_cache=True,
     )
     print(results)
