@@ -21,7 +21,7 @@ from typing import  Optional
 
 from vdl_tools.shared_tools.database_cache.database_models.prompt import PromptResponse
 from vdl_tools.shared_tools.openai.openai_api_utils import CLIENT
-from vdl_tools.shared_tools.openai.prompt_response_cache_sql import DEFAULT_MODEL
+from vdl_tools.shared_tools.openai.prompt_response_cache_sql import _UNSET, DEFAULT_MODEL
 from vdl_tools.shared_tools.openai.openai_api_utils import is_reasoning_model
 from vdl_tools.shared_tools.openai.prompt_response_cache_instructor import InstructorPRC
 from vdl_tools.shared_tools.tools.logger import logger
@@ -286,11 +286,13 @@ class FewShotCache(InstructorPRC):
     def bulk_get_cache_or_run(
         self,
         given_ids_texts: list[tuple[str, EntityActivityDictExamplesDict]],
-        use_cached_result: bool = True,
+        read_from_cache: bool = True,
+        write_to_cache: bool = True,
         n_per_commit: int = 200,
         max_workers=20,
         max_errors=1,
         return_parsed_results: bool = True,
+        use_cached_result=_UNSET,
         **kwargs
     ) -> dict:
         """Bulk get cached or fresh relevance results for many (given_id, entity+examples) pairs.
@@ -304,8 +306,10 @@ class FewShotCache(InstructorPRC):
         given_ids_texts : list[tuple[str, EntityActivityDictExamplesDict]]
             (given_id, entity_activity_dict_examples_dict) pairs; the second
             element can be a dict or Pydantic instance.
-        use_cached_result : bool, optional
-            If True, use cached results when available. Default is True.
+        read_from_cache : bool, optional
+            If True, consult the cache before calling the API. Default is True.
+        write_to_cache : bool, optional
+            If True, persist results to the cache. Default is True.
         n_per_commit : int, optional
             Chunk size for DB commits (one bulk upsert per kind per chunk).
             Default is 200.
@@ -316,6 +320,9 @@ class FewShotCache(InstructorPRC):
         return_parsed_results : bool, optional
             If True, return dict mapping id -> parsed JSON (e.g. {"is_relevant": bool}).
             If False, return dict mapping id -> full response dict. Default is True.
+        use_cached_result : bool, optional
+            **Deprecated.** Use ``read_from_cache`` and ``write_to_cache``
+            instead. When supplied, overrides ``read_from_cache``.
         **kwargs
             Passed to the OpenAI API (model-dependent; see class Notes).
 
@@ -331,10 +338,12 @@ class FewShotCache(InstructorPRC):
         ]
         ids_to_responses = self._bulk_get_cache_or_run(
             given_ids_texts=given_ids_texts,
-            use_cached_result=use_cached_result,
+            read_from_cache=read_from_cache,
+            write_to_cache=write_to_cache,
             n_per_commit=n_per_commit,
             max_workers=max_workers,
             max_errors=max_errors,
+            use_cached_result=use_cached_result,
             **kwargs,
         )
 
@@ -348,7 +357,9 @@ class FewShotCache(InstructorPRC):
         given_id: str,
         activity_entity_dict: EntityActivityDict|dict,
         examples_dicts: list[dict]=None,
-        use_cached_result: bool = True,
+        read_from_cache: bool = True,
+        write_to_cache: bool = True,
+        use_cached_result=_UNSET,
         **kwargs
     ):
         """Return cached or fresh relevance result for one entity/activity (and optional examples).
@@ -365,8 +376,13 @@ class FewShotCache(InstructorPRC):
             Few-shot examples; each dict has entity_description,
             activity_description, relevant (and optionally activity_name).
             Default is EXAMPLES.
+        read_from_cache : bool, optional
+            If True, consult the cache before calling the API. Default is True.
+        write_to_cache : bool, optional
+            If True, persist results to the cache. Default is True.
         use_cached_result : bool, optional
-            If True, use cached result when available. Default is True.
+            **Deprecated.** Use ``read_from_cache`` and ``write_to_cache``
+            instead. When supplied, overrides ``read_from_cache``.
         **kwargs
             Passed to the OpenAI API (model-dependent; see class Notes).
 
@@ -391,6 +407,8 @@ class FewShotCache(InstructorPRC):
         return self._get_cache_or_run(
             given_id=given_id,
             text=entity_activity_dict_examples_dicts,
+            read_from_cache=read_from_cache,
+            write_to_cache=write_to_cache,
             use_cached_result=use_cached_result,
             **kwargs,
         )
