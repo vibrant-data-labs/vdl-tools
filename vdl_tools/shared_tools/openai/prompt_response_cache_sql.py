@@ -250,7 +250,7 @@ class PromptResponseCacheSQL():
         if not any([prompt is not None, prompt_str, prompt_id]):
             raise Exception("Need to give at least one of prompt, prompt_str, prompt_id")
 
-        self.session = session or get_session()
+        self.session = session
         self.prompt = self._set_prompt_obj(
             prompt=prompt,
             prompt_str=prompt_str,

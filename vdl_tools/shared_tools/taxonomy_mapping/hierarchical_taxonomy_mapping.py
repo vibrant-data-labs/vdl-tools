@@ -643,7 +643,8 @@ def classify_entities(
     confidence_threshold: float | None = None,
     emit_per_level: bool = False,
     seed_col: str | None = None,
-    use_cached_result: bool = True,
+    read_from_cache: bool = True,
+    write_to_cache: bool = True,
 ) -> pd.DataFrame:
     """Classify many entities against the taxonomy via a SQL-cached walk.
 
@@ -708,9 +709,13 @@ def classify_entities(
         Optional input column whose value pre-seeds the walk at the
         top level (the walk descends that node's subtree). Used by the
         recovery flow to second-walk entities the first pass left empty.
-    use_cached_result
-        When False, bypass cached rows and re-issue the API call; the
-        new response overwrites the cache entry.
+    read_from_cache
+        When False, bypass cached rows and re-issue every API call
+        (force-refresh). Default True.
+    write_to_cache
+        When False, leave the cache untouched (read-only / passthrough).
+        Also gated by the cache's constructor-level ``store_results``.
+        Default True.
     """
     levels = normalize_levels(levels)
     last_idx = levels[-1]["idx"]
@@ -795,7 +800,8 @@ def classify_entities(
             print(f"  [{lvl['name']}] {len(requests)} request(s)")
             responses = cache.bulk_get_cache_or_run(
                 given_ids_texts=[(gid, txt) for gid, txt, _, _ in requests],
-                use_cached_result=use_cached_result,
+                read_from_cache=read_from_cache,
+                write_to_cache=write_to_cache,
                 max_workers=max_workers,
             )
 
@@ -1073,7 +1079,8 @@ def recover_unmatched(
     category_choices: Iterable[str] | None = None,
     scope_prompt: str | None = None,
     max_workers: int = 8,
-    use_cached_result: bool = True,
+    read_from_cache: bool = True,
+    write_to_cache: bool = True,
 ) -> pd.DataFrame:
     """Second-stage scope check on entities the walk left unmatched.
 
@@ -1155,7 +1162,8 @@ def recover_unmatched(
 
         responses = cache.bulk_get_cache_or_run(
             given_ids_texts=requests,
-            use_cached_result=use_cached_result,
+            read_from_cache=read_from_cache,
+            write_to_cache=write_to_cache,
             max_workers=max_workers,
         )
 

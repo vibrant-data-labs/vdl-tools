@@ -55,18 +55,12 @@ from vdl_tools.shared_tools.taxonomy_mapping.hierarchical_taxonomy_mapping impor
     build_system_prompt,
     classify_entities,
 )
+from vdl_tools.shared_tools.database_cache.database_utils import get_session
 
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-
-# TODO: relativize SHARED_TAXONOMY_DIR via vdl_tools.shared_tools.project_config
-# when this file moves to vdl_tools/shared_tools/taxonomy_mapping/.
-SHARED_TAXONOMY_DIR = Path(
-    "/Users/rjw/Dropbox/VDL/shared-data-clean/data/taxonomies/oneearth"
-)
-
 MODEL = "gpt-5.4-nano"
 DESCENT_FANOUT_CAP = 3
 DEFAULT_WORKERS = 32  # I/O-bound on the OpenAI API; large pools are fine.
@@ -87,7 +81,7 @@ PILLAR_DETAIL_SHEETS = (
 # ---------------------------------------------------------------------------
 
 def find_latest_taxonomy(
-    taxonomy_dir: Path = SHARED_TAXONOMY_DIR,
+    taxonomy_dir: Path,
 ) -> Path:
     """Return the latest VDL-edited OE Solutions Terms xlsx in ``taxonomy_dir``.
 
@@ -797,7 +791,7 @@ def map_to_oneearth(
     id_col: str,
     name_col: str,
     text_col: str,
-    session,
+    session=None,
     model: str = MODEL,
     max_workers: int = DEFAULT_WORKERS,
     taxonomy_path: Path | None = None,
@@ -810,7 +804,8 @@ def map_to_oneearth(
     recovery_model: str = "gpt-4.1-mini",
     recovery_scope_prompt: str | None = None,
     walk_recovered: bool = False,
-    use_cached_result: bool = True,
+    read_from_cache: bool = True,
+    write_to_cache: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Classify a DataFrame of entities against the One Earth taxonomy.
 
@@ -844,9 +839,12 @@ def map_to_oneearth(
         Concurrency cap for the cache's API worker pool, applied per
         level batch. The hierarchical walk is I/O-bound on the OpenAI
         API; large pools (16, 32, 64) are fine.
-    use_cached_result
-        When False, bypass cached rows and re-issue every API call;
-        the new responses overwrite cache entries. Default True.
+    read_from_cache
+        When False, bypass cached rows and re-issue every API call
+        (force-refresh). Default True.
+    write_to_cache
+        When False, leave the cache untouched (read-only / passthrough).
+        Default True.
     taxonomy_path
         Optional override for the taxonomy xlsx. Defaults to
         ``find_latest_taxonomy()`` which picks the latest VDL-edited
@@ -922,48 +920,51 @@ def map_to_oneearth(
         else:
             system_prompt = _PROMPT_BY_MODE[prompt_mode]
 
-    per_row_df = classify_entities(
-        session=session,
-        tables=tables,
-        levels=ONEEARTH_LEVELS,
-        system_prompt=system_prompt,
-        entities=entities,
-        id_col=id_col,
-        name_col=name_col,
-        text_col=text_col,
-        model=model,
-        descent_fanout_cap=descent_fanout_cap,
-        max_workers=max_workers,
-        confidence_threshold=confidence_threshold,
-        emit_per_level=emit_per_level,
-        use_cached_result=use_cached_result,
-    )
-    if recover_unmatched:
-        # Default top-level column + category choices from the level spec +
-        # tables; override only the scope prompt with the OE-specific rich one.
-        per_row_df = _htm.recover_unmatched(
-            per_row_df,
+    with get_session(session=session) as session:
+        per_row_df = classify_entities(
             session=session,
-            model=recovery_model,
+            tables=tables,
+            levels=ONEEARTH_LEVELS,
+            system_prompt=system_prompt,
+            entities=entities,
             id_col=id_col,
             name_col=name_col,
             text_col=text_col,
-            levels=ONEEARTH_LEVELS,
-            tables=tables,
-            scope_prompt=recovery_scope_prompt or build_recovery_scope_prompt(
-                taxonomy_path),
+            model=model,
+            descent_fanout_cap=descent_fanout_cap,
             max_workers=max_workers,
-            use_cached_result=use_cached_result,
+            confidence_threshold=confidence_threshold,
+            emit_per_level=emit_per_level,
+            read_from_cache=read_from_cache,
+            write_to_cache=write_to_cache,
         )
+        if recover_unmatched:
+            # Default top-level column + category choices from the level spec +
+            # tables; override only the scope prompt with the OE-specific rich one.
+            per_row_df = _htm.recover_unmatched(
+                per_row_df,
+                session=session,
+                model=recovery_model,
+                id_col=id_col,
+                name_col=name_col,
+                text_col=text_col,
+                levels=ONEEARTH_LEVELS,
+                tables=tables,
+                scope_prompt=recovery_scope_prompt or build_recovery_scope_prompt(
+                    taxonomy_path),
+                max_workers=max_workers,
+                read_from_cache=read_from_cache,
+                write_to_cache=write_to_cache,
+            )
 
-    if walk_recovered:
-        per_row_df = _walk_recovered_entities(
-            per_row_df, session=session, tables=tables, system_prompt=system_prompt,
-            id_col=id_col, name_col=name_col, text_col=text_col, model=model,
-            descent_fanout_cap=descent_fanout_cap, max_workers=max_workers,
-            confidence_threshold=confidence_threshold, emit_per_level=emit_per_level,
-            use_cached_result=use_cached_result,
-        )
+        if walk_recovered:
+            per_row_df = _walk_recovered_entities(
+                per_row_df, session=session, tables=tables, system_prompt=system_prompt,
+                id_col=id_col, name_col=name_col, text_col=text_col, model=model,
+                descent_fanout_cap=descent_fanout_cap, max_workers=max_workers,
+                confidence_threshold=confidence_threshold, emit_per_level=emit_per_level,
+                read_from_cache=read_from_cache, write_to_cache=write_to_cache,
+            )
 
     collapsed_df = collapse_to_one_row_per_uid(per_row_df, id_col=id_col)
     return per_row_df, collapsed_df
@@ -972,7 +973,7 @@ def map_to_oneearth(
 def _walk_recovered_entities(
     per_row_df: pd.DataFrame, *, session, tables, system_prompt, id_col, name_col,
     text_col, model, descent_fanout_cap, max_workers, confidence_threshold,
-    emit_per_level, use_cached_result=True,
+    emit_per_level, read_from_cache=True, write_to_cache=True,
 ) -> pd.DataFrame:
     """Seed the walk at each recovery-recovered entity's pillar and descend.
 
@@ -1017,7 +1018,8 @@ def _walk_recovered_entities(
         name_col=name_col, text_col=text_col, model=model,
         descent_fanout_cap=descent_fanout_cap, max_workers=max_workers,
         confidence_threshold=confidence_threshold, emit_per_level=emit_per_level,
-        seed_col=recovered_col, use_cached_result=use_cached_result,
+        seed_col=recovered_col,
+        read_from_cache=read_from_cache, write_to_cache=write_to_cache,
     )
 
     kept = per_row_df[~per_row_df[id_col].isin(rec_ids)]
@@ -1052,3 +1054,20 @@ __all__ = [
     "build_system_prompt",
     "classify_entities",
 ]
+
+
+if __name__ == "__main__":
+    taxonomy_dir = find_latest_taxonomy(Path("../shared-data-clean/data/taxonomies/oneearth"))
+    entities = pd.DataFrame([
+        {"id": 1, "name": "CCS", "description": "CCS is a project developer focusing on building carbon capture and storage facilities."},
+        {"id": 2, "name": "Electric Semis", "description": "Electric Semis is an auto manufacturer focusing on building electric semi-trucks. They also build battery storage systems."},
+        {"id": 3, "name": "Forest Defense Fund", "description": "Forest Defense Fund is a non-profit organization focusing on protecting forests and wildlife."},
+    ])
+    results = map_to_oneearth(
+        entities=entities,
+        taxonomy_path=taxonomy_dir,
+        id_col="id",
+        name_col="name",
+        text_col="description",
+    )
+    print(results)
