@@ -13,12 +13,16 @@ Two thin ``InstructorPRC`` subclasses + their Pydantic response schemas:
 Both classes inherit ``bulk_get_cache_or_run`` from ``InstructorPRC``; the
 hierarchical mapping engine drives them one bulk call per level.
 
-The Pydantic schemas are intentionally permissive on optional fields
-(``mode_of_operation``, ``confidence``) so the same schema works whether or
-not the system prompt was built with modes / confidence enabled — when the
-prompt does not ask for them, the model returns ``null`` and the engine's
-downstream cleaning normalizes that to the existing "empty mode" /
-"no confidence" behavior.
+The default ``MatchesResponse`` is permissive on optional fields
+(``mode_of_operation``, ``confidence``) so it accepts responses from any
+prompt. **But** under OpenAI strict-mode structured output, those fields
+become "nullable required" — the model is forced to emit *something* for
+each, even when the prompt didn't ask. For prompts without modes (e.g.
+ED-tracker), that can spuriously trigger the engine's indirect-fanout-stop
+when the model guesses ``"indirect"``. Drivers that want tight control
+should define their own minimal Pydantic class and pass it as
+``response_model`` to ``TaxonomyMatchCache`` (and as ``match_schema`` to
+``build_system_prompt`` / ``classify_entities``).
 """
 
 from __future__ import annotations
@@ -79,6 +83,13 @@ class TaxonomyMatchCache(InstructorPRC):
     ``given_id`` is built by the engine from
     ``(entity_id, parent_path, level_name)``, ``text_id`` hashes the
     user-message body (entity name/description + candidate list).
+
+    ``response_model`` defaults to ``MatchesResponse``. Drivers that want
+    tighter control over what the model emits (e.g. a schema without
+    ``mode_of_operation`` for projects that don't use modes) should pass
+    their own Pydantic class — the same one they handed to
+    ``build_system_prompt(match_schema=...)`` so prompt and structural
+    enforcement stay in sync.
     """
 
     def __init__(
@@ -88,12 +99,13 @@ class TaxonomyMatchCache(InstructorPRC):
         model: str = DEFAULT_MODEL,
         store_results: bool = True,
         filter_by_model: bool = False,
+        response_model: type[BaseModel] = MatchesResponse,
     ):
         super().__init__(
             session=session,
             prompt_str=system_prompt,
             prompt_name="hierarchical_taxonomy_match",
-            response_model=MatchesResponse,
+            response_model=response_model,
             model=model,
             filter_by_model=filter_by_model,
             store_results=store_results,

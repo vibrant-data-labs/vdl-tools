@@ -150,18 +150,22 @@ for still appear with all level columns null.
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from typing import Any, Iterable
 
 import pandas as pd
+from pydantic import BaseModel
 
+from vdl_tools.shared_tools.openai.openai_api_utils import is_reasoning_model
 from vdl_tools.shared_tools.taxonomy_mapping.taxonomy_mapping_cache import (
     MatchesResponse,
     ScopeDecision,
     ScopeRecoveryCache,
     TaxonomyMatchCache,
 )
+from vdl_tools.shared_tools.tools.logger import logger
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +361,7 @@ def build_system_prompt(
     modes: list[dict] | None = None,
     rules: dict[str, str] | None = None,
     include_confidence: bool = False,
+    match_schema: type[BaseModel] | None = None,
 ) -> str:
     """Assemble a hierarchical-taxonomy classification system prompt.
 
@@ -388,6 +393,17 @@ def build_system_prompt(
         Optional dict mapping any of the keys in ``PROMPT_RULE_KEYS``
         to a full override body (without leading number). Missing
         keys fall back to ``_default_rule_bodies(levels)``.
+    match_schema
+        Optional Pydantic class describing the per-match shape. When
+        provided, its JSON schema is rendered into the prompt in place
+        of the hardcoded shape. **Pass the same class to
+        ``classify_entities(match_schema=...)``** so the prompt and the
+        structural enforcement at the API layer match — otherwise the
+        model is forced (under OpenAI strict mode) to emit fields the
+        prompt doesn't describe. The ``modes`` / ``include_confidence``
+        flags still control the prose explanatory sections; the caller
+        is responsible for keeping the schema's fields in sync with
+        those flags.
     """
     overrides = rules or {}
 
@@ -399,8 +415,15 @@ def build_system_prompt(
     # genuine bidirectional precision/recall knob.
     conf_field = '"confidence": <number 0-1>, ' if include_confidence else ''
 
-    # JSON output schema — mode_of_operation included only when modes given.
-    if modes:
+    # JSON output schema.
+    # When ``match_schema`` is supplied, render its JSON schema literally
+    # so the prompt prose matches the strict-mode enforcement the API
+    # layer will apply. Otherwise fall back to the hardcoded shape
+    # (legacy callers that haven't moved to per-project schemas yet).
+    if match_schema is not None:
+        rendered = json.dumps(match_schema.model_json_schema(), indent=2)
+        schema = "  " + rendered.replace("\n", "\n  ")
+    elif modes:
         mode_union = " | ".join(f'"{m["name"]}"' for m in modes)
         schema = (
             '  {"matches": [{"index": <int>, '
@@ -534,6 +557,13 @@ def _clean_matches(
     indices, duplicates, and (when set) matches below
     ``confidence_threshold``. Returns dicts shaped like the legacy
     ``call_openai_match`` output so the rest of the walk is unchanged.
+
+    Uses ``getattr`` for ``mode_of_operation`` / ``confidence`` so this
+    works whether the driver's ``match_schema`` includes those fields
+    or not. A schema without ``mode_of_operation`` yields ``mode=""``,
+    which means the indirect-fanout-stop can never fire for that
+    driver — matching the legacy behavior of prompts built without
+    ``modes=``.
     """
     n = len(candidates)
     cleaned: list[dict[str, Any]] = []
@@ -543,17 +573,17 @@ def _clean_matches(
         if idx == 0:
             continue
         if not (1 <= idx <= n):
-            print(f"  [warn] out-of-range index at {level_name}: {idx} (n={n})")
+            logger.warning(f"  [warn] out-of-range index at {level_name}: {idx} (n={n})")
             continue
         if idx in seen:
             continue
         seen.add(idx)
         name = str(candidates.iloc[idx - 1][key_col])
-        mode = (m.mode_of_operation or "").strip().lower()
+        mode = (getattr(m, "mode_of_operation", None) or "").strip().lower()
         if mode and mode not in {"direct", "enabling tech", "indirect"}:
-            print(f"  [warn] unexpected mode_of_operation at {level_name}: {mode!r}")
+            logger.warning(f"  [warn] unexpected mode_of_operation at {level_name}: {mode!r}")
             mode = ""
-        confidence = m.confidence
+        confidence = getattr(m, "confidence", None)
         if confidence is not None:
             try:
                 confidence = max(0.0, min(1.0, float(confidence)))
@@ -645,6 +675,8 @@ def classify_entities(
     seed_col: str | None = None,
     read_from_cache: bool = True,
     write_to_cache: bool = True,
+    match_schema: type[BaseModel] | None = None,
+    temperature: float | None = 0,
 ) -> pd.DataFrame:
     """Classify many entities against the taxonomy via a SQL-cached walk.
 
@@ -716,6 +748,22 @@ def classify_entities(
         When False, leave the cache untouched (read-only / passthrough).
         Also gated by the cache's constructor-level ``store_results``.
         Default True.
+    match_schema
+        Optional Pydantic class for the per-match response shape. When
+        provided, drives both the cache's structured-output constraint
+        (via ``TaxonomyMatchCache(response_model=...)``) AND the response
+        parsing here. **Pass the same class to ``build_system_prompt(
+        match_schema=...)``** so the prompt prose matches the strict-mode
+        enforcement; otherwise the model is forced to emit fields the
+        prompt didn't describe. When ``None``, the default
+        ``MatchesResponse`` is used — permissive (mode + confidence
+        nullable) for backward compatibility.
+    temperature
+        Sampling temperature for the model. Defaults to ``0`` to match
+        the legacy ``call_openai_match`` path (deterministic outputs).
+        Automatically suppressed for reasoning models (``gpt-5*``),
+        which reject the parameter — those models use their own
+        sampling internally. Pass ``None`` to omit entirely.
     """
     levels = normalize_levels(levels)
     last_idx = levels[-1]["idx"]
@@ -723,14 +771,22 @@ def classify_entities(
     leaf_keys = ["deepest_match", "leaf_definition", "mode_of_operation",
                  "evidence", "reason", "confidence"]
     empty_leaf = {k: None for k in leaf_keys}
+    response_model: type[BaseModel] = match_schema or MatchesResponse
 
-    print(f"Classifying {len(entities)} entities (cached, level-batched)")
+    # Reasoning models reject `temperature`; suppress it for them.
+    # Otherwise default to 0 (legacy behavior, deterministic outputs).
+    api_kwargs: dict[str, Any] = {}
+    if temperature is not None and not is_reasoning_model(model):
+        api_kwargs["temperature"] = temperature
+
+    logger.info(f"Classifying {len(entities)} entities (cached, level-batched)")
     t0 = time.time()
 
     cache = TaxonomyMatchCache(
         session=session,
         system_prompt=system_prompt,
         model=model,
+        response_model=response_model,
     )
 
     # Initialize one branch per entity. Carry each input row's columns
@@ -797,12 +853,13 @@ def classify_entities(
 
         # Phase B — one bulk call for this level.
         if requests:
-            print(f"  [{lvl['name']}] {len(requests)} request(s)")
+            logger.info(f"  [{lvl['name']}] {len(requests)} request(s)")
             responses = cache.bulk_get_cache_or_run(
                 given_ids_texts=[(gid, txt) for gid, txt, _, _ in requests],
                 read_from_cache=read_from_cache,
                 write_to_cache=write_to_cache,
                 max_workers=max_workers,
+                **api_kwargs,
             )
 
             # Phase C — parse responses; spawn child branches with the
@@ -817,9 +874,9 @@ def classify_entities(
                         leaves.append(branch)
                     continue
                 try:
-                    parsed = MatchesResponse.model_validate_json(resp["response_text"])
+                    parsed = response_model.model_validate_json(resp["response_text"])
                 except Exception as exc:  # noqa: BLE001
-                    print(f"  [warn] bad response at {lvl['name']} "
+                    logger.warning(f"  [warn] bad response at {lvl['name']} "
                           f"for {branch['entity_id']}: {exc}")
                     if branch["leaf"] is not empty_leaf:
                         leaves.append(branch)
@@ -925,7 +982,7 @@ def classify_entities(
                 empty[f"{oc} confidence"] = None
         all_records.append({**base, **empty})
 
-    print(f"\nTotal elapsed: {time.time() - t0:.1f}s")
+    logger.info(f"\nTotal elapsed: {time.time() - t0:.1f}s")
 
     front = [id_col, name_col, text_col]
     extras = [c for c in entities.columns if c not in front]
@@ -1081,6 +1138,7 @@ def recover_unmatched(
     max_workers: int = 8,
     read_from_cache: bool = True,
     write_to_cache: bool = True,
+    temperature: float | None = 0,
 ) -> pd.DataFrame:
     """Second-stage scope check on entities the walk left unmatched.
 
@@ -1141,7 +1199,7 @@ def recover_unmatched(
 
     results: dict[Any, tuple] = {}
     if unmatched_ids:
-        print(f"Recovering {len(unmatched_ids)} unmatched entities with {model}")
+        logger.info(f"Recovering {len(unmatched_ids)} unmatched entities with {model}")
         rep = (df[df[id_col].isin(unmatched_ids)]
                .drop_duplicates(id_col).set_index(id_col))
 
@@ -1160,11 +1218,16 @@ def recover_unmatched(
             requests.append((str(uid), user_text))
             uid_by_str[str(uid)] = uid
 
+        api_kwargs: dict[str, Any] = {}
+        if temperature is not None and not is_reasoning_model(model):
+            api_kwargs["temperature"] = temperature
+
         responses = cache.bulk_get_cache_or_run(
             given_ids_texts=requests,
             read_from_cache=read_from_cache,
             write_to_cache=write_to_cache,
             max_workers=max_workers,
+            **api_kwargs,
         )
 
         for str_uid, user_text in requests:

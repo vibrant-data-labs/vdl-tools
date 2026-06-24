@@ -47,8 +47,10 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Literal
 
 import pandas as pd
+from pydantic import BaseModel
 
 import vdl_tools.shared_tools.taxonomy_mapping.hierarchical_taxonomy_mapping as _htm
 from vdl_tools.shared_tools.taxonomy_mapping.hierarchical_taxonomy_mapping import (
@@ -56,6 +58,62 @@ from vdl_tools.shared_tools.taxonomy_mapping.hierarchical_taxonomy_mapping impor
     classify_entities,
 )
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
+
+
+# ---------------------------------------------------------------------------
+# Per-project match schema
+# ---------------------------------------------------------------------------
+# OE uses three modes (direct / enabling tech / indirect) — same set for
+# the organization and research prompt variants. The schema is
+# constrained to those three literals so the model can't emit anything
+# else under strict-mode structured output. The "with confidence"
+# variant adds a required ``confidence: float`` for the
+# ``confidence_threshold`` knob.
+#
+# Hand the same class to ``build_system_prompt(match_schema=...)`` and
+# ``classify_entities(match_schema=...)`` so prompt prose matches the
+# strict-mode enforcement at the API layer.
+
+_OE_MODE = Literal["direct", "enabling tech", "indirect"]
+
+
+class OneEarthMatch(BaseModel):
+    """Per-match shape for organization / research OE prompts (no confidence)."""
+
+    index: int
+    mode_of_operation: _OE_MODE
+    evidence: str = ""
+    reason: str = ""
+
+
+class OneEarthMatchesResponse(BaseModel):
+    matches: list[OneEarthMatch] = []
+
+
+class OneEarthMatchWithConfidence(BaseModel):
+    """Per-match shape with confidence enabled (used with confidence_threshold)."""
+
+    index: int
+    mode_of_operation: _OE_MODE
+    evidence: str = ""
+    reason: str = ""
+    confidence: float
+
+
+class OneEarthMatchesWithConfidenceResponse(BaseModel):
+    matches: list[OneEarthMatchWithConfidence] = []
+
+
+def oneearth_match_schema(include_confidence: bool = False) -> type[BaseModel]:
+    """Return the OE match-response Pydantic class for a given confidence flag.
+
+    Mirrors the ``include_confidence`` flag passed to
+    ``build_oneearth_system_prompt`` / ``build_system_prompt``.
+    """
+    return (
+        OneEarthMatchesWithConfidenceResponse if include_confidence
+        else OneEarthMatchesResponse
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +388,7 @@ def build_oneearth_system_prompt(include_confidence: bool = False) -> str:
         modes=ONEEARTH_MODES,
         rules=ONEEARTH_RULE_OVERRIDES,
         include_confidence=include_confidence,
+        match_schema=oneearth_match_schema(include_confidence),
     )
     return prompt + "\n\n" + ONEEARTH_CROSS_PILLAR_ROUTING
 
@@ -679,6 +738,7 @@ ONEEARTH_RESEARCH_SYSTEM_PROMPT = build_system_prompt(
     domain_intro=ONEEARTH_RESEARCH_DOMAIN_INTRO,
     modes=ONEEARTH_RESEARCH_MODES,
     rules=ONEEARTH_RESEARCH_RULE_OVERRIDES,
+    match_schema=oneearth_match_schema(include_confidence=False),
 )
 
 
@@ -908,8 +968,18 @@ def map_to_oneearth(
         taxonomy_path = find_latest_taxonomy()
     tables = load_taxonomy(taxonomy_path)
 
+    # Derive the per-match Pydantic schema alongside the system_prompt so
+    # the prompt prose and the strict-mode structured-output constraint
+    # at the API layer match. The schema's mode_of_operation is a
+    # Literal over the three OE modes; confidence is only required when
+    # the confidence-threshold knob is in use.
+    confidence_on = (
+        confidence_threshold is not None and prompt_mode == "organization"
+    )
+    match_schema = oneearth_match_schema(include_confidence=confidence_on)
+
     if system_prompt is None:
-        if confidence_threshold is not None and prompt_mode == "organization":
+        if confidence_on:
             # The confidence knob needs the confidence-enabled schema.
             system_prompt = build_oneearth_system_prompt(include_confidence=True)
         elif prompt_mode not in _PROMPT_BY_MODE:
@@ -937,6 +1007,7 @@ def map_to_oneearth(
             emit_per_level=emit_per_level,
             read_from_cache=read_from_cache,
             write_to_cache=write_to_cache,
+            match_schema=match_schema,
         )
         if recover_unmatched:
             # Default top-level column + category choices from the level spec +
@@ -964,6 +1035,7 @@ def map_to_oneearth(
                 descent_fanout_cap=descent_fanout_cap, max_workers=max_workers,
                 confidence_threshold=confidence_threshold, emit_per_level=emit_per_level,
                 read_from_cache=read_from_cache, write_to_cache=write_to_cache,
+                match_schema=match_schema,
             )
 
     collapsed_df = collapse_to_one_row_per_uid(per_row_df, id_col=id_col)
@@ -974,6 +1046,7 @@ def _walk_recovered_entities(
     per_row_df: pd.DataFrame, *, session, tables, system_prompt, id_col, name_col,
     text_col, model, descent_fanout_cap, max_workers, confidence_threshold,
     emit_per_level, read_from_cache=True, write_to_cache=True,
+    match_schema: type[BaseModel] | None = None,
 ) -> pd.DataFrame:
     """Seed the walk at each recovery-recovered entity's pillar and descend.
 
@@ -1020,6 +1093,7 @@ def _walk_recovered_entities(
         confidence_threshold=confidence_threshold, emit_per_level=emit_per_level,
         seed_col=recovered_col,
         read_from_cache=read_from_cache, write_to_cache=write_to_cache,
+        match_schema=match_schema,
     )
 
     kept = per_row_df[~per_row_df[id_col].isin(rec_ids)]
