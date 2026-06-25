@@ -78,6 +78,7 @@ from pydantic import BaseModel
 
 from vdl_tools.shared_tools.openai.prompt_response_cache_instructor import InstructorPRC
 from vdl_tools.shared_tools.openai.prompt_response_cache_sql import DEFAULT_MODEL
+from vdl_tools.shared_tools.openai.openai_api_utils import is_reasoning_model
 
 
 # ---------------------------------------------------------------------------
@@ -833,6 +834,7 @@ def run_judge_evaluation(
     driver_script_name: str = "evaluate_*.py",
     read_from_cache: bool = True,
     write_to_cache: bool = True,
+    temperature: float | None = 0,
 ) -> None:
     """Run the full judge pipeline: collect bundles, judge, summarize, write outputs.
 
@@ -877,6 +879,11 @@ def run_judge_evaluation(
         model_name)`` and overwrite each other's cache row, thrashing
         forever on every entity whose user prompt differs between the
         two passes. Default ``""`` (no prefix).
+    temperature
+        Sampling temperature for the judge model. Defaults to ``0`` for
+        deterministic judging (matching the legacy path). Automatically
+        suppressed for reasoning models (``gpt-5*``), which reject it.
+        Pass ``None`` to omit entirely.
     """
     if not per_row_path.exists():
         raise FileNotFoundError(f"Per-row file not found: {per_row_path}")
@@ -926,8 +933,10 @@ def run_judge_evaluation(
         # When from_scored is used, also try the verdicts file derived
         # from from_scored's location rather than output_path's.
         candidate_v = from_scored.with_name(
-            from_scored.stem.replace("_quality_scored",
-                                      f"_quality_{config.verdict_top_label.lower()}_verdicts")
+            from_scored.stem.replace(
+                "_quality_scored",
+                f"_quality_{config.verdict_top_label.lower()}_verdicts"
+            )
             + from_scored.suffix
         )
         if candidate_v.exists():
@@ -988,11 +997,18 @@ def run_judge_evaluation(
             requests.append((given_id, user_text))
             bundle_by_given_id[given_id] = (eid, b)
 
+        # Restore deterministic judging (temperature=0); reasoning models
+        # (gpt-5*) reject the param, so suppress it for them.
+        api_kwargs: dict[str, Any] = {}
+        if temperature is not None and not is_reasoning_model(judge_model):
+            api_kwargs["temperature"] = temperature
+
         responses = cache.bulk_get_cache_or_run(
             given_ids_texts=requests,
             max_workers=workers,
             read_from_cache=read_from_cache,
             write_to_cache=write_to_cache,
+            **api_kwargs,
         )
         session.commit()
 

@@ -84,6 +84,7 @@ from pydantic import BaseModel
 
 from vdl_tools.shared_tools.openai.prompt_response_cache_instructor import InstructorPRC
 from vdl_tools.shared_tools.openai.prompt_response_cache_sql import DEFAULT_MODEL
+from vdl_tools.shared_tools.openai.openai_api_utils import is_reasoning_model
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +281,7 @@ def check_taxonomy_coherence(
     definition_col: str = "Definition",
     read_from_cache: bool = True,
     write_to_cache: bool = True,
+    temperature: float | None = 0,
 ) -> pd.DataFrame:
     """Audit parent-child coherence at every non-leaf level transition.
 
@@ -314,6 +316,11 @@ def check_taxonomy_coherence(
         Forwarded to ``bulk_get_cache_or_run``. Defaults of ``True``
         match legacy behavior; pass ``read_from_cache=False`` to force a
         full re-run, or ``write_to_cache=False`` for a read-only audit.
+    temperature
+        Sampling temperature for the audit model. Defaults to ``0`` for
+        deterministic audits (matching the legacy path). Automatically
+        suppressed for reasoning models (``gpt-5*``), which reject it.
+        Pass ``None`` to omit entirely.
 
     Returns
     -------
@@ -378,11 +385,18 @@ def check_taxonomy_coherence(
         )
         requests.append((given_id, user_text))
 
+    # Restore deterministic audits (temperature=0); reasoning models
+    # (gpt-5*) reject the param, so suppress it for them.
+    api_kwargs: dict[str, Any] = {}
+    if temperature is not None and not is_reasoning_model(model):
+        api_kwargs["temperature"] = temperature
+
     responses = cache.bulk_get_cache_or_run(
         given_ids_texts=requests,
         max_workers=max_workers,
         read_from_cache=read_from_cache,
         write_to_cache=write_to_cache,
+        **api_kwargs,
     )
 
     rows: list[dict[str, Any]] = []

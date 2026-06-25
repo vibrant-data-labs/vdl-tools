@@ -17,10 +17,10 @@ This is the data + prompt half. The CFT-specific driver (loading the
 CFT JSON, sampling, writing the xlsx triplet, comparing to the prior
 ``One Earth *`` columns) lives in ``run_oe_hierarchical_mapping.py``.
 
-Eventual home: ``vdl_tools/shared_tools/taxonomy_mapping/``. Once moved
-there, ``SHARED_TAXONOMY_DIR`` should be relativized via
-``vdl_tools.shared_tools.project_config`` rather than the absolute path
-used here for now.
+The taxonomy xlsx location is caller-supplied: pass ``taxonomy_path``
+(an xlsx) or ``taxonomy_dir`` (searched for the latest
+``OE Solutions Terms *VDL.xlsx``) to ``map_to_oneearth``. There is no
+built-in default path.
 
 High-level usage
 ----------------
@@ -855,6 +855,7 @@ def map_to_oneearth(
     model: str = MODEL,
     max_workers: int = DEFAULT_WORKERS,
     taxonomy_path: Path | None = None,
+    taxonomy_dir: Path | None = None,
     descent_fanout_cap: int = DESCENT_FANOUT_CAP,
     prompt_mode: str = "organization",
     system_prompt: str | None = None,
@@ -906,9 +907,13 @@ def map_to_oneearth(
         When False, leave the cache untouched (read-only / passthrough).
         Default True.
     taxonomy_path
-        Optional override for the taxonomy xlsx. Defaults to
-        ``find_latest_taxonomy()`` which picks the latest VDL-edited
-        ``OE Solutions Terms *VDL.xlsx`` from ``SHARED_TAXONOMY_DIR``.
+        Path to the taxonomy xlsx. If omitted, ``taxonomy_dir`` must be
+        provided and the latest ``OE Solutions Terms *VDL.xlsx`` found in
+        it (via ``find_latest_taxonomy``) is used.
+    taxonomy_dir
+        Directory searched for the latest ``OE Solutions Terms *VDL.xlsx``
+        when ``taxonomy_path`` is not given. One of ``taxonomy_path`` /
+        ``taxonomy_dir`` is required — there is no built-in default path.
     descent_fanout_cap
         Maximum number of children to descend into when a level returns
         multiple matches. Default 3.
@@ -965,7 +970,13 @@ def map_to_oneearth(
         raise ValueError("walk_recovered=True requires recover_unmatched=True")
 
     if taxonomy_path is None:
-        taxonomy_path = find_latest_taxonomy()
+        if taxonomy_dir is None:
+            raise ValueError(
+                "map_to_oneearth: pass taxonomy_path=<xlsx> or taxonomy_dir="
+                "<dir searched via find_latest_taxonomy>. There is no "
+                "built-in default taxonomy location."
+            )
+        taxonomy_path = find_latest_taxonomy(taxonomy_dir)
     tables = load_taxonomy(taxonomy_path)
 
     # Derive the per-match Pydantic schema alongside the system_prompt so
@@ -1107,7 +1118,6 @@ __all__ = [
     "MODEL",
     "DESCENT_FANOUT_CAP",
     "DEFAULT_WORKERS",
-    "SHARED_TAXONOMY_DIR",
     "PILLAR_DETAIL_SHEETS",
     "ONEEARTH_LEVELS",
     # Organization-tuned prompt (default).
@@ -1131,7 +1141,6 @@ __all__ = [
 
 
 if __name__ == "__main__":
-    taxonomy_dir = find_latest_taxonomy(Path("../shared-data-clean/data/taxonomies/oneearth"))
     entities = pd.DataFrame([
         {"id": 1, "name": "CCS", "description": "CCS is a project developer focusing on building carbon capture and storage facilities. They also make fertilizer from captured carbon dioxide."},
         {"id": 2, "name": "Electric Semis", "description": "Electric Semis is an auto manufacturer focusing on building electric semi-trucks. They also build battery storage systems."},
@@ -1139,7 +1148,7 @@ if __name__ == "__main__":
     ])
     results = map_to_oneearth(
         entities=entities,
-        taxonomy_path=taxonomy_dir,
+        taxonomy_dir=Path("../shared-data-clean/data/taxonomies/oneearth"),
         id_col="id",
         name_col="name",
         text_col="description",
