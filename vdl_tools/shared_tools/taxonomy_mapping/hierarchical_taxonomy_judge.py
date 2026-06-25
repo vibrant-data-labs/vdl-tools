@@ -827,6 +827,7 @@ def run_judge_evaluation(
     output_path: Path | None = None,
     from_scored: Path | None = None,
     method: str = "new",
+    given_id_prefix: str = "",
     judge_model: str = "gpt-4.1",
     workers: int = 32,
     driver_script_name: str = "evaluate_*.py",
@@ -867,6 +868,15 @@ def run_judge_evaluation(
         ``True`` match legacy behavior; pass ``read_from_cache=False``
         to force a re-run, or ``write_to_cache=False`` for a read-only
         judging pass.
+    given_id_prefix
+        Optional namespace prepended to each entity's cache ``given_id``
+        as ``"<prefix>::<entity_id>"``. Use when judging the same
+        entities twice over different classifier outputs in the same
+        session (e.g. comparing an old baseline vs. a new run) — without
+        a distinct prefix the two passes share ``(prompt_id, given_id,
+        model_name)`` and overwrite each other's cache row, thrashing
+        forever on every entity whose user prompt differs between the
+        two passes. Default ``""`` (no prefix).
     """
     if not per_row_path.exists():
         raise FileNotFoundError(f"Per-row file not found: {per_row_path}")
@@ -956,15 +966,25 @@ def run_judge_evaluation(
         )
 
         # Build one (given_id, user_text) per entity. given_id is the
-        # entity id; text is the user-message body (name + description +
-        # the classifier's matches at every level). Changing any of
-        # those invalidates only that entity's cached judgment.
+        # entity id (optionally prefixed); text is the user-message body
+        # (name + description + the classifier's matches at every level).
+        # Changing any of those invalidates only that entity's cached
+        # judgment.
+        #
+        # ``given_id_prefix`` lets a caller judge the same entity twice
+        # over different classifier outputs in the same DB without the
+        # two runs overwriting each other's cache row — the cache PK is
+        # ``(prompt_id, given_id, model_name)``, so two passes that
+        # share ``str(eid)`` but differ in user prompt would thrash.
+        # Pass e.g. ``given_id_prefix="new"`` and ``"old"`` to namespace
+        # them.
+        prefix = f"{given_id_prefix}::" if given_id_prefix else ""
         requests: list[tuple[str, str]] = []
         bundle_by_given_id: dict[str, tuple[Any, dict[str, Any]]] = {}
         for eid, b in bundles.items():
             user_text = build_user_prompt(b["name"], b["description"],
                                           b["matches"], config)
-            given_id = str(eid)
+            given_id = f"{prefix}{eid}"
             requests.append((given_id, user_text))
             bundle_by_given_id[given_id] = (eid, b)
 
