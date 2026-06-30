@@ -363,10 +363,11 @@ ONEEARTH_LEVELS = [
 # ---------------------------------------------------------------------------
 # One Earth system prompt — assembled from generic skeleton + OE overrides
 # ---------------------------------------------------------------------------
-# Same three-layer customization the Drawdown driver uses: domain intro,
-# modes-of-operation (copied verbatim — definitions are domain-agnostic),
-# and rule overrides. ``evidence_only`` and ``multiple_matches`` use the
-# engine's defaults.
+# The prose prompt has two customization layers: a domain intro and rule
+# overrides (``evidence_only`` and ``multiple_matches`` use the engine's
+# defaults). The mode-of-operation definitions and the per-match response
+# shape live on the Pydantic ``OneEarthMatch`` classes above, NOT in this
+# prose — see ``oneearth_match_schema``.
 
 ONEEARTH_DOMAIN_INTRO = (
     "You are classifying an organization against the One Earth Climate "
@@ -497,16 +498,21 @@ ONEEARTH_CROSS_PILLAR_ROUTING = (
 
 
 def build_oneearth_system_prompt(include_confidence: bool = False) -> str:
-    """Assemble the canonical One Earth organization system prompt.
+    """Assemble the canonical One Earth organization system prompt (prose only).
 
     Generic prose skeleton + OE rule overrides + the standalone
     cross-pillar routing section. The mode definitions, the confidence
-    semantics, and the selection-vs-self-filter behavior all live on
-    the Pydantic response class (selected by
+    semantics, and the selection-vs-self-filter behavior all live on the
+    Pydantic response class (selected by
     ``oneearth_match_schema(include_confidence=...)``) — pass that same
     class to ``classify_entities(match_schema=...)`` so the model sees
     the schema's Field descriptions + response-class docstring via
     InstructorPRC's schema append.
+
+    ``include_confidence`` no longer affects the prose (confidence is a
+    schema-only concern now); the org prompt is identical either way. The
+    parameter is retained so existing call sites don't break — pick the
+    confidence-enabled SCHEMA via ``oneearth_match_schema`` instead.
     """
     prompt = build_system_prompt(
         levels=ONEEARTH_LEVELS,
@@ -523,21 +529,22 @@ ONEEARTH_SYSTEM_PROMPT = build_oneearth_system_prompt()
 # Research-project prompt variant
 # ---------------------------------------------------------------------------
 # The default prompt above is calibrated for organizations (companies,
-# NGOs, land trusts) — its modes describe what an "entity" does and its
-# rule overrides are full of organization-shaped examples ("land trust",
-# "Audubon-style organization", "regenerative-farming co-op"). Research-
-# grant abstracts (NSF, NIH, USAspending) describe investigations rather
-# than operations, and the org-tuned framing causes the LLM to miss
-# applied / mechanism research that legitimately maps to deployment-
-# shaped taxonomy nodes.
+# NGOs, land trusts) — its mode definitions describe what an "entity"
+# does and its rule overrides are full of organization-shaped examples
+# ("land trust", "Audubon-style organization", "regenerative-farming
+# co-op"). Research-grant abstracts (NSF, NIH, USAspending) describe
+# investigations rather than operations, and the org-tuned framing
+# causes the LLM to miss applied / mechanism research that legitimately
+# maps to deployment-shaped taxonomy nodes.
 #
-# The constants below provide a coordinated alternative — domain intro
-# framed for research projects, modes-of-operation reworded around
-# research roles (while keeping the engine's canonical mode names), and
-# rule overrides with research-shaped examples and exclusions. Callers
-# select the variant via ``map_to_oneearth(prompt_mode="research")``.
-# All three pieces move as a triple; mixing the org domain_intro with
-# research modes (or vice versa) produces incoherent prompts.
+# The research variant moves as a coordinated triple: the domain intro
+# and rule overrides below (prose) plus the ``OneEarthResearchMatch``
+# schema above (whose ``mode_of_operation`` Field reworded the mode
+# definitions around research roles, keeping the canonical mode names).
+# Callers select the variant via ``map_to_oneearth(prompt_mode=
+# "research")``, which pairs ``ONEEARTH_RESEARCH_SYSTEM_PROMPT`` with
+# ``oneearth_match_schema(research=True)``. Mixing the org prose with the
+# research schema (or vice versa) produces incoherent prompts.
 
 ONEEARTH_RESEARCH_DOMAIN_INTRO = (
     "You are classifying a description of a scientific research project "
@@ -997,24 +1004,26 @@ def map_to_oneearth(
     prompt_mode
         ``"organization"`` (default): the standard OE system prompt,
         calibrated for organizations (companies, NGOs, land trusts).
-        ``"research"``: a research-project variant that swaps domain
-        intro, modes-of-operation, and rule overrides as a coordinated
-        triple — framed for grant abstracts (NSF, NIH, USAspending).
-        Same taxonomy and walk, different framing. The three pieces
-        move together; mixing org and research framing produces
-        incoherent prompts. Ignored when ``system_prompt`` is set.
+        ``"research"``: a research-project variant — framed for grant
+        abstracts (NSF, NIH, USAspending). Selecting a mode pairs the
+        matching prose prompt with the matching ``match_schema`` (org vs
+        ``OneEarthResearchMatch``); both move together. Same taxonomy and
+        walk, different framing. Ignored when ``system_prompt`` is set
+        (in which case the org schema is used).
     system_prompt
         Escape hatch for callers that want to assemble a fully custom
         system prompt via ``build_system_prompt``. When provided, it
-        overrides ``prompt_mode`` entirely.
+        overrides ``prompt_mode`` entirely (and the organization match
+        schema is used).
     confidence_threshold
-        Precision/recall knob in [0, 1]. When set, the ``system_prompt``
-        must be confidence-enabled (``build_system_prompt(
-        include_confidence=True)``); the model emits a per-match
-        confidence and matches below the threshold are dropped. LOWER
-        keeps more (weaker) matches — fewer no-mappings, more false
-        positives; HIGHER keeps only strong matches. ``None`` (default)
-        applies no confidence scoring or filtering.
+        Precision/recall knob in [0, 1]. When set (organization mode
+        only), the confidence-enabled schema
+        (``OneEarthMatchesWithConfidenceResponse``) is selected so the
+        model emits a per-match confidence, and matches below the
+        threshold are dropped. LOWER keeps more (weaker) matches — fewer
+        no-mappings, more false positives; HIGHER keeps only strong
+        matches. ``None`` (default) applies no confidence scoring or
+        filtering.
     emit_per_level
         When True, the per-row frame gains ``<level> evidence`` /
         ``<level> reason`` / ``<level> confidence`` columns for every

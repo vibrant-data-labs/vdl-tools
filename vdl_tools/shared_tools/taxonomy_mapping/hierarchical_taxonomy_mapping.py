@@ -20,14 +20,17 @@ for that level to the model and ask for the best match(es):
 
 The walk yields one record per leaf in the resulting match tree — a leaf
 is a match that was either at the deepest level, had no children matched,
-truncated by the descent fan-out cap, or (when the prompt produces a
+truncated by the descent fan-out cap, or (when the ``match_schema`` has a
 ``mode_of_operation`` field) tagged ``indirect`` alongside other siblings.
 
 This module is taxonomy-agnostic. Callers (driver scripts) supply:
 
     * a level spec (see below),
-    * a system prompt string describing the matching task — assemble one
-      with ``build_system_prompt`` (see "System prompt" below),
+    * a system prompt string describing the matching task — assemble the
+      prose with ``build_system_prompt`` (see "System prompt" below),
+    * a Pydantic ``match_schema`` describing the per-match response shape
+      and carrying the per-field / selection guidance (see "Response
+      schema" below),
     * a taxonomy xlsx whose sheet names align with the level spec,
     * an entities DataFrame with id / name / text columns,
     * a SQLAlchemy session for the prompt/response cache (see "Caching").
@@ -79,10 +82,13 @@ applied by ``normalize_levels``; most levels need not set them.
 System prompt
 -------------
 The ``system_prompt`` passed to ``classify_entities`` can be any string,
-but in practice you should build it with ``build_system_prompt``, which
-assembles a generic skeleton (task framing, JSON output schema, eight
-numbered matching-rule slots, output constraints) and lets you customize
-the parts that vary per taxonomy.
+but in practice you should build the prose with ``build_system_prompt``,
+which assembles a generic skeleton (``domain_intro``, task framing, and
+eight numbered matching-rule slots) and lets you customize the parts
+that vary per taxonomy. It deliberately does NOT describe the JSON
+output shape — that lives on the Pydantic ``match_schema`` (see
+"Response schema" below), which ``InstructorPRC`` appends to the prompt
+automatically.
 
 The skeleton was extracted from the Drawdown driver, so the rule set
 and structure reflect what worked there. The eight rule keys, in order,
@@ -102,27 +108,22 @@ Each rule has a generic default that contains no domain examples
 energy" ambiguity — transfer to any taxonomy). Override any subset by
 passing ``rules={"<key>": "<full body without leading number>"}``.
 
-Three layers of customization, from least to most invasive:
+Two layers of prose customization:
 
     1. ``domain_intro`` (required) — opening paragraph framing what the
-       taxonomy classifies. Replaces the climate-mitigation framing
-       used by Drawdown.
-    2. ``modes`` (optional) — list of ``{"name", "definition"}`` dicts.
-       When provided, ``mode_of_operation`` appears in the JSON schema
-       and a "Mode of operation" section follows the schema. When
-       ``None``, both are omitted entirely. The default rule bodies do
-       not reference modes; if your modes belong inside specific rules,
-       supply rule overrides for those rules (Drawdown does this for
-       ``prominence`` and ``advocacy_depth``).
-    3. ``rules`` (optional) — dict mapping any of the eight keys above
+       taxonomy classifies.
+    2. ``rules`` (optional) — dict mapping any of the eight keys above
        to a full override. Use this when a generic default's wording
        isn't tight enough for your domain — typically because it needs
        domain-specific examples or terminology that improves model
-       accuracy.
+       accuracy. Domain-specific selection rules (e.g. One Earth's
+       cross-pillar routing) also go here, or are appended by the driver
+       after ``build_system_prompt`` returns.
 
-The Drawdown driver demonstrates all three layers — see
-``DRAWDOWN_DOMAIN_INTRO``, ``DRAWDOWN_MODES``, and
-``DRAWDOWN_RULE_OVERRIDES`` in ``drawdown_hierarchical_taxonomy_mapping.py``.
+The Drawdown and One Earth drivers demonstrate both layers — see
+``DRAWDOWN_DOMAIN_INTRO`` / ``DRAWDOWN_RULE_OVERRIDES`` in
+``drawdown_hierarchical_taxonomy_mapping.py`` and ``ONEEARTH_DOMAIN_INTRO``
+/ ``ONEEARTH_RULE_OVERRIDES`` in ``oe_hierarchical_taxonomy_mapping.py``.
 
 For a brand-new taxonomy with no special rules, the minimum is::
 
@@ -130,6 +131,38 @@ For a brand-new taxonomy with no special rules, the minimum is::
         levels=my_levels,
         domain_intro="You are classifying X against a hierarchical taxonomy of Y...",
     )
+
+Response schema
+---------------
+``classify_entities`` takes a Pydantic ``match_schema`` (defaulting to
+``MatchesResponse`` from ``taxonomy_mapping_cache``) that defines the
+per-match response shape AND carries all schema-level instruction:
+
+    * **Per-field guidance** — ``Field(description=...)`` on each field:
+      a ``mode_of_operation`` field's allowed values and their
+      definitions, the "1-based index" note, evidence / reason guidance.
+    * **Selection-level guidance** — the response class's docstring
+      (e.g. "self-filter weak candidates" vs "surface every plausible
+      candidate with low confidence").
+
+``InstructorPRC`` appends ``match_schema.schema_json()`` to the system
+prompt, so the model sees the field descriptions and the response class
+docstring there. Because the structural constraint (the schema) and its
+human-readable guidance are the same object, the prompt and the API's
+strict-mode enforcement cannot drift apart. The driver is responsible
+for pairing the right ``match_schema`` with the prose it built — see
+``oneearth_match_schema()`` next to ``build_oneearth_system_prompt()``
+for the pattern.
+
+Two consequences worth knowing:
+
+    * A field present in the schema is REQUIRED under strict mode (only
+      ``null`` allowed if typed ``T | None``). Don't include
+      ``mode_of_operation`` / ``confidence`` in a schema for a taxonomy
+      that doesn't use them, or the model is forced to emit them anyway.
+    * ``mode_of_operation == "indirect"`` with multiple sibling matches
+      triggers the "indirect-fanout stop". A schema without that field
+      yields ``mode == ""`` in the engine, so the stop never fires.
 
 Output schema
 -------------
@@ -598,7 +631,7 @@ def classify_entities(
     workers do API I/O only.
 
     Cache keys:
-        prompt_id = hash(system_prompt + MatchesResponse schema)
+        prompt_id = hash(system_prompt + match_schema JSON schema)
         given_id  = "<entity_id>|<level_name>|<sorted parent_path>"
         text_id   = hash(entity_name + description + level_name + candidates)
 
@@ -642,8 +675,10 @@ def classify_entities(
         Concurrency cap for the cache's API worker pool, applied per
         level batch.
     confidence_threshold
-        Drop matches whose confidence is below this. Requires the
-        system_prompt to have been built with ``include_confidence=True``.
+        Drop matches whose confidence is below this. Requires
+        ``match_schema`` to include a ``confidence`` field (e.g. OE's
+        ``OneEarthMatchesWithConfidenceResponse``); matches with no
+        confidence value are never dropped.
     emit_per_level
         When True, output gains ``<level> evidence / reason / confidence``
         columns for every level matched along the path.
@@ -659,15 +694,18 @@ def classify_entities(
         Also gated by the cache's constructor-level ``store_results``.
         Default True.
     match_schema
-        Optional Pydantic class for the per-match response shape. When
-        provided, drives both the cache's structured-output constraint
-        (via ``TaxonomyMatchCache(response_model=...)``) AND the response
-        parsing here. **Pass the same class to ``build_system_prompt(
-        match_schema=...)``** so the prompt prose matches the strict-mode
-        enforcement; otherwise the model is forced to emit fields the
-        prompt didn't describe. When ``None``, the default
-        ``MatchesResponse`` is used — permissive (mode + confidence
-        nullable) for backward compatibility.
+        Optional Pydantic class for the per-match response shape. Drives
+        the cache's structured-output constraint (via
+        ``TaxonomyMatchCache(response_model=...)``), the response parsing
+        here, AND — because ``InstructorPRC`` appends its
+        ``schema_json()`` to the system prompt — the model-facing
+        per-field / selection guidance (carried on the class's
+        ``Field(description=...)`` and its docstring; see "Response
+        schema" in the module docstring). The driver is responsible for
+        pairing this with the prose it passed to ``build_system_prompt``;
+        the two are not auto-validated against each other. When ``None``,
+        the default ``MatchesResponse`` is used — permissive (mode +
+        confidence nullable).
     temperature
         Sampling temperature for the model. Defaults to ``0`` to match
         the legacy ``call_openai_match`` path (deterministic outputs).
