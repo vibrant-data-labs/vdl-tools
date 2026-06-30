@@ -1,3 +1,4 @@
+import contextlib
 import logging
 
 from openai import AsyncOpenAI, OpenAI
@@ -178,6 +179,107 @@ def get_completion(
         return response
     return response.output_parsed
 
+
+@contextlib.contextmanager
+def spy_openai(send: bool = True, printer=print, show_response: bool = True):
+    """Temporarily print every ``CLIENT.responses.parse`` call's payload.
+
+    Wrap any code that ends up calling the Responses API — ``get_completion``,
+    or the taxonomy-mapping / judge / coherence caches (which all funnel
+    through it) — and this prints the full request each call builds: the
+    ``model``, every extra kwarg (``temperature``, ``reasoning``, ...), the
+    ``text_format`` response class, and the ``input`` messages (or the bare
+    user string + ``instructions`` for reasoning models). The patch is
+    restored on exit.
+
+    Parameters
+    ----------
+    send : bool
+        ``True`` (default): print the request, call the real API, and
+        (if ``show_response``) print ``response.output_parsed``.
+        ``False``: print the request and raise *before* sending — no API
+        call. Use this with a single call; inside a multi-call loop the
+        raise is caught per call (recorded as an error) and the loop
+        continues, so you'd see every request but get no results.
+    printer : callable
+        Where to send output. Defaults to ``print``; pass e.g.
+        ``logger.info`` to route elsewhere.
+    show_response : bool
+        When ``send=True``, also print the parsed response. Default True.
+
+    Examples
+    --------
+    >>> from vdl_tools.shared_tools.openai.openai_api_utils import (
+    ...     get_completion, spy_openai,
+    ... )
+    >>> with spy_openai():
+    ...     get_completion(prompt="...", model="gpt-4.1", text="...",
+    ...                    text_format=MySchema)
+
+    >>> # see the request without spending a call:
+    >>> with spy_openai(send=False):
+    ...     try:
+    ...         cache.get_cache_or_run(given_id="x", text="...",
+    ...                                read_from_cache=False, write_to_cache=False)
+    ...     except RuntimeError:
+    ...         pass
+    """
+    orig = CLIENT.responses.parse
+    # ``parse`` is normally a class method (not an instance attribute), so
+    # restoring means deleting the instance-attribute shadow we add below
+    # — not reassigning, which would leave a stale bound method behind.
+    had_own_parse = "parse" in vars(CLIENT.responses)
+
+    def _wrapper(*args, **kwargs):
+        lines = ["", "=" * 72, "OpenAI responses.parse — request", "=" * 72]
+        lines.append(f"model       : {kwargs.get('model')}")
+        for k, v in kwargs.items():
+            if k in ("model", "input", "instructions", "text_format"):
+                continue
+            lines.append(f"{k:<12}: {v!r}")
+        tf = kwargs.get("text_format")
+        lines.append(f"text_format : {getattr(tf, '__name__', tf)}")
+        if args:
+            lines.append(f"(positional args: {args!r})")
+
+        if kwargs.get("instructions") is not None:
+            lines.append("\n--- instructions ---")
+            lines.append(str(kwargs["instructions"]))
+
+        inp = kwargs.get("input")
+        if isinstance(inp, list):
+            for m in inp:
+                if isinstance(m, dict):
+                    lines.append(f"\n--- input[{m.get('role', '?')}] ---")
+                    lines.append(str(m.get("content", m)))
+                else:
+                    lines.append("\n--- input[?] ---")
+                    lines.append(str(m))
+        elif inp is not None:
+            lines.append("\n--- input ---")
+            lines.append(str(inp))
+        lines.append("=" * 72)
+        printer("\n".join(lines))
+
+        if not send:
+            raise RuntimeError("spy_openai(send=False): stopped before sending")
+
+        resp = orig(*args, **kwargs)
+        if show_response:
+            printer(f"--- response.output_parsed ---\n"
+                    f"{getattr(resp, 'output_parsed', resp)}\n{'=' * 72}")
+        return resp
+
+    CLIENT.responses.parse = _wrapper
+    try:
+        yield
+    finally:
+        if had_own_parse:
+            CLIENT.responses.parse = orig
+        else:
+            # Remove our instance-attribute shadow so the original class
+            # method shows through again.
+            CLIENT.responses.__dict__.pop("parse", None)
 
 
 def contains_i_am(x):
