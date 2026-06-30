@@ -20,14 +20,15 @@ become "nullable required" — the model is forced to emit *something* for
 each, even when the prompt didn't ask. For prompts without modes (e.g.
 ED-tracker), that can spuriously trigger the engine's indirect-fanout-stop
 when the model guesses ``"indirect"``. Drivers that want tight control
-should define their own minimal Pydantic class and pass it as
-``response_model`` to ``TaxonomyMatchCache`` (and as ``match_schema`` to
-``build_system_prompt`` / ``classify_entities``).
+should define their own Pydantic class (embedding per-field guidance via
+``Field(description=...)`` and selection-level guidance on the response
+class's docstring) and pass it as ``response_model`` to
+``TaxonomyMatchCache`` / as ``match_schema`` to ``classify_entities``.
 """
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from vdl_tools.shared_tools.openai.prompt_response_cache_instructor import InstructorPRC
 from vdl_tools.shared_tools.openai.prompt_response_cache_sql import DEFAULT_MODEL
@@ -36,26 +37,67 @@ from vdl_tools.shared_tools.openai.prompt_response_cache_sql import DEFAULT_MODE
 class Match(BaseModel):
     """One candidate match at a single taxonomy level.
 
-    ``index`` is 1-based and refers to the candidate's position in the
-    numbered list rendered in the user prompt — the engine validates it
-    against the candidate count in Python (out-of-range / index=0 / duplicate
-    indices are dropped with a warning, matching the pre-cache behavior).
+    The engine validates ``index`` against the candidate count in Python
+    (out-of-range / index=0 / duplicate indices are dropped with a warning,
+    matching the pre-cache behavior).
 
     ``mode_of_operation`` and ``confidence`` stay loosely-typed strings /
-    floats so the schema accepts responses from prompts built without modes
-    or without ``include_confidence=True``. The engine normalizes unknown
-    modes to ``""`` and clamps confidence into [0, 1].
+    floats so the default schema accepts responses from prompts built
+    without modes or confidence. The engine normalizes unknown modes to
+    ``""`` and clamps confidence into [0, 1].
     """
 
-    index: int
-    mode_of_operation: str | None = None
-    evidence: str = ""
-    reason: str = ""
-    confidence: float | None = None
+    index: int = Field(
+        description=(
+            "The 1-based position of the matched candidate in the numbered "
+            "candidate list shown in the user prompt. Never return 0 or an "
+            "out-of-range index — to indicate no match, return `matches: []`."
+        ),
+    )
+    mode_of_operation: str | None = Field(
+        default=None,
+        description=(
+            "How the entity relates to the matched candidate. Use the "
+            "values defined by the project's mode-of-operation field on "
+            "its own Match subclass. Leave null when the prompt does not "
+            "ask for a mode."
+        ),
+    )
+    evidence: str = Field(
+        default="",
+        description=(
+            "Phrase(s) from the description that support the match. Quote "
+            "or closely paraphrase the supporting language. If no language "
+            "in the description supports the candidate, omit the match — "
+            "do not invent evidence."
+        ),
+    )
+    reason: str = Field(
+        default="",
+        description=(
+            "One sentence explaining how the evidence maps to the "
+            "candidate's definition."
+        ),
+    )
+    confidence: float | None = Field(
+        default=None,
+        description=(
+            "Confidence in [0, 1] that the description supports this match. "
+            "Leave null when the prompt does not ask for a confidence."
+        ),
+    )
 
 
 class MatchesResponse(BaseModel):
-    """Top-level response shape returned by the per-level match call."""
+    """Default match-set response.
+
+    Selection behavior: emit only the matches that the description clearly
+    supports — self-filter weak candidates. Drivers whose schema enables a
+    ``confidence`` field should subclass this and override the docstring to
+    say *emit every plausible candidate with low confidence; let downstream
+    threshold filter* — that selection rule is what tells the model to
+    score weak matches instead of dropping them.
+    """
 
     matches: list[Match] = []
 
@@ -87,9 +129,10 @@ class TaxonomyMatchCache(InstructorPRC):
     ``response_model`` defaults to ``MatchesResponse``. Drivers that want
     tighter control over what the model emits (e.g. a schema without
     ``mode_of_operation`` for projects that don't use modes) should pass
-    their own Pydantic class — the same one they handed to
-    ``build_system_prompt(match_schema=...)`` so prompt and structural
-    enforcement stay in sync.
+    their own Pydantic class. The model sees the class's Field
+    descriptions and class docstring via the schema JSON that
+    ``InstructorPRC`` appends to the prompt, so per-field guidance and
+    selection-level guidance both live on the schema itself.
     """
 
     def __init__(

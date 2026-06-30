@@ -50,7 +50,7 @@ from pathlib import Path
 from typing import Literal
 
 import pandas as pd
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import vdl_tools.shared_tools.taxonomy_mapping.hierarchical_taxonomy_mapping as _htm
 from vdl_tools.shared_tools.taxonomy_mapping.hierarchical_taxonomy_mapping import (
@@ -63,53 +63,206 @@ from vdl_tools.shared_tools.database_cache.database_utils import get_session
 # ---------------------------------------------------------------------------
 # Per-project match schema
 # ---------------------------------------------------------------------------
-# OE uses three modes (direct / enabling tech / indirect) — same set for
-# the organization and research prompt variants. The schema is
-# constrained to those three literals so the model can't emit anything
-# else under strict-mode structured output. The "with confidence"
-# variant adds a required ``confidence: float`` for the
-# ``confidence_threshold`` knob.
+# OE uses three modes (direct / enabling tech / indirect) for both the
+# organization and research prompt variants. The Literal constrains the
+# model to those three values under strict-mode structured output; the
+# Field descriptions on the per-variant Match subclasses carry the
+# domain-specific definitions, and the response-class docstrings carry
+# the selection behavior. ``InstructorPRC`` appends the schema JSON to
+# the prompt so the model sees all three layers (Literal constraint,
+# Field descriptions, response-class docstring) without any prose
+# scaffolding in ``build_system_prompt``.
 #
-# Hand the same class to ``build_system_prompt(match_schema=...)`` and
-# ``classify_entities(match_schema=...)`` so prompt prose matches the
-# strict-mode enforcement at the API layer.
+# Pass the right response class to ``classify_entities(match_schema=...)``
+# via ``oneearth_match_schema(...)``.
 
-_OE_MODE = Literal["direct", "enabling tech", "indirect"]
+# Mode definitions — kept as plain dicts so the Literal and the
+# Field descriptions derive from one source. Org and research share mode
+# NAMES but have different definitions.
+
+_OE_MODE_DEFINITIONS: dict[str, str] = {
+    "direct": (
+        "the entity itself deploys, operates, produces, implements, "
+        "or performs the solution activity (e.g. builds solar farms, "
+        "runs regenerative agriculture, manufactures low-carbon "
+        "cement, restores wetlands)."
+    ),
+    "enabling tech": (
+        "the entity develops or supplies technology, hardware, "
+        "software, tools, materials, financing, or services that "
+        "make the solution possible for others to deploy, but does "
+        "not deploy it itself at scale (e.g. sells sensors to wind "
+        "farms, builds software for grid operators, provides capital "
+        "to project developers)."
+    ),
+    "indirect": (
+        "the entity works on public policy, advocacy, awareness, "
+        "education, standards, research without deployment, "
+        "convening, or other non-deployment levers of change that "
+        "shape whether or how the solution is adopted."
+    ),
+}
+
+_OE_RESEARCH_MODE_DEFINITIONS: dict[str, str] = {
+    "direct": (
+        "the project itself implements, deploys, restores, "
+        "sequesters, manufactures, or runs a field demonstration "
+        "of the named solution at real-world scale — e.g. installs "
+        "a microgrid, restores wetlands at a specific site, runs a "
+        "methane-leak monitoring deployment, plants cover crops on "
+        "working farms, field-trials a geoengineering intervention. "
+        "This is the rarest mode in research-grant data; most "
+        "research is upstream of deployment."
+    ),
+    "enabling tech": (
+        "the project develops, validates, characterizes, "
+        "prototypes, or investigates the mechanism behind a "
+        "specific named technology, material, process, or practice "
+        "that maps to a taxonomy node. This covers BOTH applied "
+        "R&D (synthesizing battery electrolytes, designing a "
+        "perovskite PV cell, building a methane-detection sensor) "
+        "AND mechanism / foundational research where the abstract "
+        "names both the mechanism AND a specific solution domain "
+        "it informs (e.g. plant nutrient-sensing for low-fertilizer "
+        "crops, soil-microbe interactions for carbon stabilization, "
+        "computational methods explicitly for clean-energy materials). "
+        "Most research-grant abstracts that match the taxonomy "
+        "fall in this mode."
+    ),
+    "indirect": (
+        "the project produces field-building infrastructure or "
+        "soft levers for the climate field — climate-science "
+        "instrumentation that supports many solutions, satellite "
+        "monitoring, lifecycle assessments, multi-pillar policy / "
+        "regulatory analysis, capacity-building research, "
+        "education / outreach research. Typically Cross-Cutting; "
+        "use this mode when the research output is a tool or "
+        "framework rather than the development of a specific "
+        "named solution."
+    ),
+}
+
+# Both variants share the same Literal — keys must agree across the
+# two definition dicts. (3.11+: Literal[*dict.keys()] unpacking.)
+assert tuple(_OE_MODE_DEFINITIONS) == tuple(_OE_RESEARCH_MODE_DEFINITIONS), (
+    "OE org and research mode dicts must share key order"
+)
+_OE_MODE = Literal[*_OE_MODE_DEFINITIONS]
+
+
+def _mode_field(definitions: dict[str, str]):
+    """Build the Field for ``mode_of_operation`` with definitions inline."""
+    return Field(
+        description=(
+            "How the entity relates to the matched candidate. Pick the "
+            "mode that best fits the entity's primary relationship.\n"
+            + "\n".join(f"- {k}: {v}" for k, v in definitions.items())
+        ),
+    )
+
+
+_INDEX_FIELD = Field(
+    description=(
+        "The 1-based position of the matched candidate in the numbered "
+        "candidate list shown in the user prompt. Never return 0 or an "
+        "out-of-range index — to indicate no match, return `matches: []`."
+    ),
+)
+_EVIDENCE_FIELD = Field(
+    default="",
+    description=(
+        "Phrase(s) from the entity description that support the match. "
+        "Quote or closely paraphrase the supporting language. If no "
+        "language in the description supports the candidate, omit the "
+        "match — do not invent evidence."
+    ),
+)
+_REASON_FIELD = Field(
+    default="",
+    description=(
+        "One sentence explaining how the evidence maps to the candidate's "
+        "definition."
+    ),
+)
 
 
 class OneEarthMatch(BaseModel):
-    """Per-match shape for organization / research OE prompts (no confidence)."""
+    """Per-match shape for the organization OE prompt (no confidence)."""
 
-    index: int
-    mode_of_operation: _OE_MODE
-    evidence: str = ""
-    reason: str = ""
+    index: int = _INDEX_FIELD
+    mode_of_operation: _OE_MODE = _mode_field(_OE_MODE_DEFINITIONS)
+    evidence: str = _EVIDENCE_FIELD
+    reason: str = _REASON_FIELD
 
 
 class OneEarthMatchesResponse(BaseModel):
+    """Default OE selection behavior: emit only the matches the
+    description clearly supports — self-filter weak candidates. A match
+    requires a specific phrase from the description that names the
+    candidate's activity."""
+
     matches: list[OneEarthMatch] = []
 
 
-class OneEarthMatchWithConfidence(BaseModel):
-    """Per-match shape with confidence enabled (used with confidence_threshold)."""
+class OneEarthMatchWithConfidence(OneEarthMatch):
+    """Per-match shape with confidence enabled (used with
+    ``confidence_threshold``)."""
 
-    index: int
-    mode_of_operation: _OE_MODE
-    evidence: str = ""
-    reason: str = ""
-    confidence: float
+    confidence: float = Field(
+        description=(
+            "Confidence in [0, 1] that the description supports this "
+            "match. 1 = the description names the activity explicitly; "
+            "lower values reflect weaker or more inferential support."
+        ),
+    )
 
 
 class OneEarthMatchesWithConfidenceResponse(BaseModel):
+    """Confidence-enabled OE selection behavior: surface every candidate
+    the description could plausibly support — including weak ones, with
+    low confidence — rather than self-filtering. A downstream threshold
+    decides which to keep. Do not omit a plausible candidate just because
+    it is uncertain; emit it with a low confidence value instead."""
+
     matches: list[OneEarthMatchWithConfidence] = []
 
 
-def oneearth_match_schema(include_confidence: bool = False) -> type[BaseModel]:
-    """Return the OE match-response Pydantic class for a given confidence flag.
+class OneEarthResearchMatch(BaseModel):
+    """Per-match shape for the research-project OE prompt."""
 
-    Mirrors the ``include_confidence`` flag passed to
-    ``build_oneearth_system_prompt`` / ``build_system_prompt``.
+    index: int = _INDEX_FIELD
+    mode_of_operation: _OE_MODE = _mode_field(_OE_RESEARCH_MODE_DEFINITIONS)
+    evidence: str = _EVIDENCE_FIELD
+    reason: str = _REASON_FIELD
+
+
+class OneEarthResearchMatchesResponse(BaseModel):
+    """Research-prompt selection behavior: a match requires the abstract
+    to name a research activity (development, validation, mechanism
+    investigation, etc.) targeting the candidate's domain — not just
+    passing climate vocabulary in a broader-impacts statement."""
+
+    matches: list[OneEarthResearchMatch] = []
+
+
+def oneearth_match_schema(
+    *,
+    include_confidence: bool = False,
+    research: bool = False,
+) -> type[BaseModel]:
+    """Return the OE match-response Pydantic class for a given variant.
+
+    ``include_confidence`` enables the confidence field (only meaningful
+    for the organization prompt). ``research=True`` returns the
+    research-project variant, which uses different mode definitions and
+    does not support confidence.
     """
+    if research:
+        if include_confidence:
+            raise ValueError(
+                "research variant does not support include_confidence yet"
+            )
+        return OneEarthResearchMatchesResponse
     return (
         OneEarthMatchesWithConfidenceResponse if include_confidence
         else OneEarthMatchesResponse
@@ -242,39 +395,9 @@ ONEEARTH_DOMAIN_INTRO = (
     "angle, or generic economic development."
 )
 
-# Copied verbatim from the Drawdown driver — the definitions are
-# domain-agnostic and transfer cleanly.
-ONEEARTH_MODES = [
-    {
-        "name": "direct",
-        "definition": (
-            "the entity itself deploys, operates, produces, implements, "
-            "or performs the solution activity (e.g. builds solar farms, "
-            "runs regenerative agriculture, manufactures low-carbon "
-            "cement, restores wetlands)."
-        ),
-    },
-    {
-        "name": "enabling tech",
-        "definition": (
-            "the entity develops or supplies technology, hardware, "
-            "software, tools, materials, financing, or services that "
-            "make the solution possible for others to deploy, but does "
-            "not deploy it itself at scale (e.g. sells sensors to wind "
-            "farms, builds software for grid operators, provides capital "
-            "to project developers)."
-        ),
-    },
-    {
-        "name": "indirect",
-        "definition": (
-            "the entity works on public policy, advocacy, awareness, "
-            "education, standards, research without deployment, "
-            "convening, or other non-deployment levers of change that "
-            "shape whether or how the solution is adopted."
-        ),
-    },
-]
+# NOTE: mode-of-operation definitions live in ``_OE_MODE_DEFINITIONS`` at
+# the top of this file (consumed by the ``OneEarthMatch.mode_of_operation``
+# Field description). No standalone ``ONEEARTH_MODES`` constant.
 
 ONEEARTH_RULE_OVERRIDES = {
     "domain_relevance": (
@@ -376,19 +499,19 @@ ONEEARTH_CROSS_PILLAR_ROUTING = (
 def build_oneearth_system_prompt(include_confidence: bool = False) -> str:
     """Assemble the canonical One Earth organization system prompt.
 
-    Generic skeleton + OE rule overrides (domain_relevance with a
-    Pillar-level inclusion bias, generic cross_sector, prominence) + the
-    standalone cross-pillar routing section. ``include_confidence=True``
-    adds the per-match confidence schema/instruction for the
-    confidence-threshold knob.
+    Generic prose skeleton + OE rule overrides + the standalone
+    cross-pillar routing section. The mode definitions, the confidence
+    semantics, and the selection-vs-self-filter behavior all live on
+    the Pydantic response class (selected by
+    ``oneearth_match_schema(include_confidence=...)``) — pass that same
+    class to ``classify_entities(match_schema=...)`` so the model sees
+    the schema's Field descriptions + response-class docstring via
+    InstructorPRC's schema append.
     """
     prompt = build_system_prompt(
         levels=ONEEARTH_LEVELS,
         domain_intro=ONEEARTH_DOMAIN_INTRO,
-        modes=ONEEARTH_MODES,
         rules=ONEEARTH_RULE_OVERRIDES,
-        include_confidence=include_confidence,
-        match_schema=oneearth_match_schema(include_confidence),
     )
     return prompt + "\n\n" + ONEEARTH_CROSS_PILLAR_ROUTING
 
@@ -452,53 +575,9 @@ ONEEARTH_RESEARCH_DOMAIN_INTRO = (
 # canonical mode names (direct / enabling tech / indirect) so the
 # engine's hardcoded validation accepts the values without warning and
 # downstream mode-aware logic (e.g. indirect-fanout stop) keeps working.
-ONEEARTH_RESEARCH_MODES = [
-    {
-        "name": "direct",
-        "definition": (
-            "the project itself implements, deploys, restores, "
-            "sequesters, manufactures, or runs a field demonstration "
-            "of the named solution at real-world scale — e.g. installs "
-            "a microgrid, restores wetlands at a specific site, runs a "
-            "methane-leak monitoring deployment, plants cover crops on "
-            "working farms, field-trials a geoengineering intervention. "
-            "This is the rarest mode in research-grant data; most "
-            "research is upstream of deployment."
-        ),
-    },
-    {
-        "name": "enabling tech",
-        "definition": (
-            "the project develops, validates, characterizes, "
-            "prototypes, or investigates the mechanism behind a "
-            "specific named technology, material, process, or practice "
-            "that maps to a taxonomy node. This covers BOTH applied "
-            "R&D (synthesizing battery electrolytes, designing a "
-            "perovskite PV cell, building a methane-detection sensor) "
-            "AND mechanism / foundational research where the abstract "
-            "names both the mechanism AND a specific solution domain "
-            "it informs (e.g. plant nutrient-sensing for low-fertilizer "
-            "crops, soil-microbe interactions for carbon stabilization, "
-            "computational methods explicitly for clean-energy materials). "
-            "Most research-grant abstracts that match the taxonomy "
-            "fall in this mode."
-        ),
-    },
-    {
-        "name": "indirect",
-        "definition": (
-            "the project produces field-building infrastructure or "
-            "soft levers for the climate field — climate-science "
-            "instrumentation that supports many solutions, satellite "
-            "monitoring, lifecycle assessments, multi-pillar policy / "
-            "regulatory analysis, capacity-building research, "
-            "education / outreach research. Typically Cross-Cutting; "
-            "use this mode when the research output is a tool or "
-            "framework rather than the development of a specific "
-            "named solution."
-        ),
-    },
-]
+# Research-flavored mode definitions live in
+# ``_OE_RESEARCH_MODE_DEFINITIONS`` at the top of this file (consumed by
+# the ``OneEarthResearchMatch.mode_of_operation`` Field description).
 
 ONEEARTH_RESEARCH_RULE_OVERRIDES = {
     "domain_relevance": (
@@ -736,9 +815,7 @@ ONEEARTH_RESEARCH_RULE_OVERRIDES = {
 ONEEARTH_RESEARCH_SYSTEM_PROMPT = build_system_prompt(
     levels=ONEEARTH_LEVELS,
     domain_intro=ONEEARTH_RESEARCH_DOMAIN_INTRO,
-    modes=ONEEARTH_RESEARCH_MODES,
     rules=ONEEARTH_RESEARCH_RULE_OVERRIDES,
-    match_schema=oneearth_match_schema(include_confidence=False),
 )
 
 
@@ -979,15 +1056,17 @@ def map_to_oneearth(
         taxonomy_path = find_latest_taxonomy(taxonomy_dir)
     tables = load_taxonomy(taxonomy_path)
 
-    # Derive the per-match Pydantic schema alongside the system_prompt so
-    # the prompt prose and the strict-mode structured-output constraint
-    # at the API layer match. The schema's mode_of_operation is a
-    # Literal over the three OE modes; confidence is only required when
-    # the confidence-threshold knob is in use.
+    # Pick the per-match Pydantic class to match the system_prompt
+    # variant. Confidence is only meaningful under the organization
+    # prompt; research uses its own Match class with research-flavored
+    # mode definitions.
     confidence_on = (
         confidence_threshold is not None and prompt_mode == "organization"
     )
-    match_schema = oneearth_match_schema(include_confidence=confidence_on)
+    match_schema = oneearth_match_schema(
+        include_confidence=confidence_on,
+        research=(prompt_mode == "research"),
+    )
 
     if system_prompt is None:
         if confidence_on:
@@ -1122,14 +1201,20 @@ __all__ = [
     "ONEEARTH_LEVELS",
     # Organization-tuned prompt (default).
     "ONEEARTH_DOMAIN_INTRO",
-    "ONEEARTH_MODES",
     "ONEEARTH_RULE_OVERRIDES",
     "ONEEARTH_SYSTEM_PROMPT",
     # Research-project-tuned prompt (prompt_mode="research").
     "ONEEARTH_RESEARCH_DOMAIN_INTRO",
-    "ONEEARTH_RESEARCH_MODES",
     "ONEEARTH_RESEARCH_RULE_OVERRIDES",
     "ONEEARTH_RESEARCH_SYSTEM_PROMPT",
+    # Per-project Pydantic match schemas (pass to classify_entities).
+    "OneEarthMatch",
+    "OneEarthMatchesResponse",
+    "OneEarthMatchWithConfidence",
+    "OneEarthMatchesWithConfidenceResponse",
+    "OneEarthResearchMatch",
+    "OneEarthResearchMatchesResponse",
+    "oneearth_match_schema",
     "find_latest_taxonomy",
     "load_taxonomy",
     "collapse_to_one_row_per_uid",

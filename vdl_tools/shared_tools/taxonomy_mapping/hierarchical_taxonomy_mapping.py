@@ -150,7 +150,6 @@ for still appear with all level columns null.
 
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
 from typing import Any, Iterable
@@ -337,20 +336,14 @@ def _default_rule_bodies(levels: list[dict]) -> dict[str, str]:
     }
 
 
-_OUTPUT_CONSTRAINTS = (
-    "Output constraints:\n"
-    "- `index` must be the integer shown before a candidate in the "
-    "list. Indices are 1-based and must match a number actually shown "
-    "in the candidate list. Do not invent indices and do not return "
-    "names. To indicate no match, return `matches: []` — never return "
-    "index 0 or any index outside the listed range."
-)
-
 _TASK_FRAMING = (
     "You will be given an entity description and a numbered list of "
     "candidate nodes (name + definition) at a single level of the "
     "hierarchy. Identify which node(s) the description shows the "
-    "entity is actually working on."
+    "entity is actually working on. Output strict JSON matching the "
+    "response schema you are given — per-field guidance lives in the "
+    "schema's field descriptions and selection-level guidance lives "
+    "on the response class's docstring."
 )
 
 
@@ -358,21 +351,20 @@ def build_system_prompt(
     *,
     levels: list[dict],
     domain_intro: str,
-    modes: list[dict] | None = None,
     rules: dict[str, str] | None = None,
-    include_confidence: bool = False,
-    match_schema: type[BaseModel] | None = None,
 ) -> str:
     """Assemble a hierarchical-taxonomy classification system prompt.
 
-    Composes a generic skeleton — ``domain_intro``, task framing, JSON
-    output schema, an optional Mode-of-operation section, eight
-    matching-rule slots, and output constraints — with any caller-
-    supplied overrides. Each rule has a generic default that contains
-    no domain examples (except rules 2 and 5, whose examples transfer
-    to any taxonomy). Pass ``rules={"<key>": "<override text>"}`` to
-    replace any rule with domain-specific wording; missing keys keep
-    their generic default.
+    Composes a generic prose skeleton: ``domain_intro``, task framing,
+    eight matching-rule slots (with overrides). The JSON output shape,
+    per-field guidance (mode definitions, confidence semantics), and
+    selection-level guidance (when to surface weak candidates) ALL live
+    on the Pydantic response class the driver passes to
+    ``classify_entities(match_schema=...)``. ``InstructorPRC`` appends
+    that class's JSON schema to the prompt, so the model sees field
+    descriptions and the response class's docstring there. Keeping those
+    on the schema is what makes prompt and structural enforcement
+    impossible to drift apart.
 
     Parameters
     ----------
@@ -382,83 +374,15 @@ def build_system_prompt(
         at <top> and <mid> levels" wording.
     domain_intro
         Opening paragraph framing what the taxonomy classifies.
-    modes
-        Optional list of mode dicts, each with ``name`` and
-        ``definition``. When provided, ``mode_of_operation`` appears
-        in the JSON schema and a "Mode of operation" section follows
-        the schema. When ``None``, both are omitted entirely. The
-        default rule bodies do not reference modes; supply rule
-        overrides if mode-aware language belongs in your rules.
     rules
         Optional dict mapping any of the keys in ``PROMPT_RULE_KEYS``
         to a full override body (without leading number). Missing
-        keys fall back to ``_default_rule_bodies(levels)``.
-    match_schema
-        Optional Pydantic class describing the per-match shape. When
-        provided, its JSON schema is rendered into the prompt in place
-        of the hardcoded shape. **Pass the same class to
-        ``classify_entities(match_schema=...)``** so the prompt and the
-        structural enforcement at the API layer match — otherwise the
-        model is forced (under OpenAI strict mode) to emit fields the
-        prompt doesn't describe. The ``modes`` / ``include_confidence``
-        flags still control the prose explanatory sections; the caller
-        is responsible for keeping the schema's fields in sync with
-        those flags.
+        keys fall back to ``_default_rule_bodies(levels)``. Domain-
+        specific selection rules (e.g. cross-pillar routing for OE)
+        also go here, either as overrides of a default rule or
+        appended by the driver after ``build_system_prompt`` returns.
     """
     overrides = rules or {}
-
-    # Optional confidence field — when present, each match carries a
-    # 0-1 confidence and downstream code can threshold on it (see
-    # ``confidence_threshold``). Enabling it also changes the matching
-    # disposition: the model surfaces plausible-but-weak candidates with
-    # low confidence instead of self-filtering, so the threshold becomes a
-    # genuine bidirectional precision/recall knob.
-    conf_field = '"confidence": <number 0-1>, ' if include_confidence else ''
-
-    # JSON output schema.
-    # When ``match_schema`` is supplied, render its JSON schema literally
-    # so the prompt prose matches the strict-mode enforcement the API
-    # layer will apply. Otherwise fall back to the hardcoded shape
-    # (legacy callers that haven't moved to per-project schemas yet).
-    if match_schema is not None:
-        rendered = json.dumps(match_schema.model_json_schema(), indent=2)
-        schema = "  " + rendered.replace("\n", "\n  ")
-    elif modes:
-        mode_union = " | ".join(f'"{m["name"]}"' for m in modes)
-        schema = (
-            '  {"matches": [{"index": <int>, '
-            f'"mode_of_operation": {mode_union}, '
-            + conf_field +
-            '"evidence": "<phrase(s) from the description that '
-            'support the match>", '
-            '"reason": "<how the evidence maps to the candidate '
-            'definition>"}]}'
-        )
-    else:
-        schema = (
-            '  {"matches": [{"index": <int>, '
-            + conf_field +
-            '"evidence": "<phrase(s) from the description that '
-            'support the match>", '
-            '"reason": "<how the evidence maps to the candidate '
-            'definition>"}]}'
-        )
-
-    # Optional mode-of-operation section.
-    if modes:
-        mode_lines = [
-            "Mode of operation — for each selected candidate, classify "
-            "HOW the entity relates to the matched candidate:"
-        ]
-        for m in modes:
-            mode_lines.append(f"- '{m['name']}': {m['definition']}")
-        mode_lines.append(
-            "Pick the mode that best fits the entity's primary "
-            "relationship to the matched candidate."
-        )
-        modes_section: str | None = "\n".join(mode_lines)
-    else:
-        modes_section = None
 
     defaults = _default_rule_bodies(levels)
     numbered_rules: list[str] = []
@@ -469,22 +393,8 @@ def build_system_prompt(
     parts: list[str] = [
         domain_intro,
         _TASK_FRAMING,
-        f"Return JSON of the form:\n{schema}",
+        "Matching rules:\n" + "\n".join(numbered_rules),
     ]
-    if modes_section is not None:
-        parts.append(modes_section)
-    parts.append("Matching rules:\n" + "\n".join(numbered_rules))
-    if include_confidence:
-        parts.append(
-            "Confidence. For each match, include a `confidence` in [0,1] "
-            "reflecting how strongly the description supports it (1 = the "
-            "description names the activity explicitly; lower = weaker or "
-            "more inferential support). Surface every candidate that "
-            "plausibly fits, including weak or uncertain ones with low "
-            "confidence — do not omit a plausible candidate just because "
-            "it is uncertain. A downstream threshold decides which to keep."
-        )
-    parts.append(_OUTPUT_CONSTRAINTS)
 
     return "\n\n".join(parts)
 
