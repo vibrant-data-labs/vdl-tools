@@ -17,262 +17,59 @@ This is the data + prompt half. The CFT-specific driver (loading the
 CFT JSON, sampling, writing the xlsx triplet, comparing to the prior
 ``One Earth *`` columns) lives in ``run_oe_hierarchical_mapping.py``.
 
-The taxonomy xlsx location is caller-supplied: pass ``taxonomy_path``
-(an xlsx) or ``taxonomy_dir`` (searched for the latest
-``OE Solutions Terms *VDL.xlsx``) to ``map_to_oneearth``. There is no
-built-in default path.
+Eventual home: ``vdl_tools/shared_tools/taxonomy_mapping/``. Once moved
+there, ``SHARED_TAXONOMY_DIR`` should be relativized via
+``vdl_tools.shared_tools.project_config`` rather than the absolute path
+used here for now.
 
 High-level usage
 ----------------
-    from vdl_tools.shared_tools.database_cache.database_utils import get_session
+    from openai import OpenAI
     from oe_hierarchical_taxonomy_mapping import map_to_oneearth
 
-    with get_session() as session:
-        per_row_df, collapsed_df = map_to_oneearth(
-            entities=my_dataframe,
-            id_col="uid",
-            name_col="Name",
-            text_col="Description",
-            session=session,
-        )
+    client = OpenAI(api_key=...)
+    per_row_df, collapsed_df = map_to_oneearth(
+        entities=my_dataframe,
+        id_col="uid",
+        name_col="Name",
+        text_col="Description",
+        client=client,
+    )
 
-The library re-exports ``build_system_prompt`` and ``classify_entities``
-from the generic engine for callers that want to drive the walk
-themselves with custom level specs / prompts. All OpenAI calls flow
-through the SQL prompt/response cache — see
-``hierarchical_taxonomy_mapping``'s "Caching" docstring section.
+The library re-exports ``build_system_prompt``, ``classify_entities``,
+``classify_entity`` from the generic engine for callers that want to
+drive the walk themselves with custom level specs / prompts.
 """
 
 from __future__ import annotations
 
-import contextlib
 import re
 from pathlib import Path
-from typing import Literal
 
 import pandas as pd
-from pydantic import BaseModel, Field
+from openai import OpenAI
 
-import vdl_tools.shared_tools.taxonomy_mapping.hierarchical_taxonomy_mapping as _htm
-from vdl_tools.shared_tools.taxonomy_mapping.hierarchical_taxonomy_mapping import (
+# Repointed to the sibling ``uncached_`` engine so this frozen pre-refactor
+# ("uncached") OE module pairs with the pre-refactor engine, independent of
+# the refactored ``hierarchical_taxonomy_mapping`` on this branch.
+import vdl_tools.shared_tools.taxonomy_mapping.uncached_hierarchical_taxonomy_mapping as _htm
+from vdl_tools.shared_tools.taxonomy_mapping.uncached_hierarchical_taxonomy_mapping import (
     build_system_prompt,
     classify_entities,
+    classify_entity,
 )
-from vdl_tools.shared_tools.database_cache.database_utils import get_session
-
-
-# ---------------------------------------------------------------------------
-# Per-project match schema
-# ---------------------------------------------------------------------------
-# OE uses three modes (direct / enabling tech / indirect) for both the
-# organization and research prompt variants. The Literal constrains the
-# model to those three values under strict-mode structured output; the
-# Field descriptions on the per-variant Match subclasses carry the
-# domain-specific definitions, and the response-class docstrings carry
-# the selection behavior. ``InstructorPRC`` appends the schema JSON to
-# the prompt so the model sees all three layers (Literal constraint,
-# Field descriptions, response-class docstring) without any prose
-# scaffolding in ``build_system_prompt``.
-#
-# Pass the right response class to ``classify_entities(match_schema=...)``
-# via ``oneearth_match_schema(...)``.
-
-# Mode definitions — kept as plain dicts so the Literal and the
-# Field descriptions derive from one source. Org and research share mode
-# NAMES but have different definitions.
-
-_OE_MODE_DEFINITIONS: dict[str, str] = {
-    "direct": (
-        "the entity itself deploys, operates, produces, implements, "
-        "or performs the solution activity (e.g. builds solar farms, "
-        "runs regenerative agriculture, manufactures low-carbon "
-        "cement, restores wetlands)."
-    ),
-    "enabling tech": (
-        "the entity develops or supplies technology, hardware, "
-        "software, tools, materials, financing, or services that "
-        "make the solution possible for others to deploy, but does "
-        "not deploy it itself at scale (e.g. sells sensors to wind "
-        "farms, builds software for grid operators, provides capital "
-        "to project developers)."
-    ),
-    "indirect": (
-        "the entity works on public policy, advocacy, awareness, "
-        "education, standards, research without deployment, "
-        "convening, or other non-deployment levers of change that "
-        "shape whether or how the solution is adopted."
-    ),
-}
-
-_OE_RESEARCH_MODE_DEFINITIONS: dict[str, str] = {
-    "direct": (
-        "the project itself implements, deploys, restores, "
-        "sequesters, manufactures, or runs a field demonstration "
-        "of the named solution at real-world scale — e.g. installs "
-        "a microgrid, restores wetlands at a specific site, runs a "
-        "methane-leak monitoring deployment, plants cover crops on "
-        "working farms, field-trials a geoengineering intervention. "
-        "This is the rarest mode in research-grant data; most "
-        "research is upstream of deployment."
-    ),
-    "enabling tech": (
-        "the project develops, validates, characterizes, "
-        "prototypes, or investigates the mechanism behind a "
-        "specific named technology, material, process, or practice "
-        "that maps to a taxonomy node. This covers BOTH applied "
-        "R&D (synthesizing battery electrolytes, designing a "
-        "perovskite PV cell, building a methane-detection sensor) "
-        "AND mechanism / foundational research where the abstract "
-        "names both the mechanism AND a specific solution domain "
-        "it informs (e.g. plant nutrient-sensing for low-fertilizer "
-        "crops, soil-microbe interactions for carbon stabilization, "
-        "computational methods explicitly for clean-energy materials). "
-        "Most research-grant abstracts that match the taxonomy "
-        "fall in this mode."
-    ),
-    "indirect": (
-        "the project produces field-building infrastructure or "
-        "soft levers for the climate field — climate-science "
-        "instrumentation that supports many solutions, satellite "
-        "monitoring, lifecycle assessments, multi-pillar policy / "
-        "regulatory analysis, capacity-building research, "
-        "education / outreach research. Typically Cross-Cutting; "
-        "use this mode when the research output is a tool or "
-        "framework rather than the development of a specific "
-        "named solution."
-    ),
-}
-
-# Both variants share the same Literal — keys must agree across the
-# two definition dicts. (3.11+: Literal[*dict.keys()] unpacking.)
-assert tuple(_OE_MODE_DEFINITIONS) == tuple(_OE_RESEARCH_MODE_DEFINITIONS), (
-    "OE org and research mode dicts must share key order"
-)
-_OE_MODE = Literal[*_OE_MODE_DEFINITIONS]
-
-
-def _mode_field(definitions: dict[str, str]):
-    """Build the Field for ``mode_of_operation`` with definitions inline."""
-    return Field(
-        description=(
-            "How the entity relates to the matched candidate. Pick the "
-            "mode that best fits the entity's primary relationship.\n"
-            + "\n".join(f"- {k}: {v}" for k, v in definitions.items())
-        ),
-    )
-
-
-_INDEX_FIELD = Field(
-    description=(
-        "The 1-based position of the matched candidate in the numbered "
-        "candidate list shown in the user prompt. Never return 0 or an "
-        "out-of-range index — to indicate no match, return `matches: []`."
-    ),
-)
-_EVIDENCE_FIELD = Field(
-    default="",
-    description=(
-        "Phrase(s) from the entity description that support the match. "
-        "Quote or closely paraphrase the supporting language. If no "
-        "language in the description supports the candidate, omit the "
-        "match — do not invent evidence."
-    ),
-)
-_REASON_FIELD = Field(
-    default="",
-    description=(
-        "One sentence explaining how the evidence maps to the candidate's "
-        "definition."
-    ),
-)
-
-
-class OneEarthMatch(BaseModel):
-    """Per-match shape for the organization OE prompt (no confidence)."""
-
-    index: int = _INDEX_FIELD
-    mode_of_operation: _OE_MODE = _mode_field(_OE_MODE_DEFINITIONS)
-    evidence: str = _EVIDENCE_FIELD
-    reason: str = _REASON_FIELD
-
-
-class OneEarthMatchesResponse(BaseModel):
-    """Default OE selection behavior: emit only the matches the
-    description clearly supports — self-filter weak candidates. A match
-    requires a specific phrase from the description that names the
-    candidate's activity."""
-
-    matches: list[OneEarthMatch] = []
-
-
-class OneEarthMatchWithConfidence(OneEarthMatch):
-    """Per-match shape with confidence enabled (used with
-    ``confidence_threshold``)."""
-
-    confidence: float = Field(
-        description=(
-            "Confidence in [0, 1] that the description supports this "
-            "match. 1 = the description names the activity explicitly; "
-            "lower values reflect weaker or more inferential support."
-        ),
-    )
-
-
-class OneEarthMatchesWithConfidenceResponse(BaseModel):
-    """Confidence-enabled OE selection behavior: surface every candidate
-    the description could plausibly support — including weak ones, with
-    low confidence — rather than self-filtering. A downstream threshold
-    decides which to keep. Do not omit a plausible candidate just because
-    it is uncertain; emit it with a low confidence value instead."""
-
-    matches: list[OneEarthMatchWithConfidence] = []
-
-
-class OneEarthResearchMatch(BaseModel):
-    """Per-match shape for the research-project OE prompt."""
-
-    index: int = _INDEX_FIELD
-    mode_of_operation: _OE_MODE = _mode_field(_OE_RESEARCH_MODE_DEFINITIONS)
-    evidence: str = _EVIDENCE_FIELD
-    reason: str = _REASON_FIELD
-
-
-class OneEarthResearchMatchesResponse(BaseModel):
-    """Research-prompt selection behavior: a match requires the abstract
-    to name a research activity (development, validation, mechanism
-    investigation, etc.) targeting the candidate's domain — not just
-    passing climate vocabulary in a broader-impacts statement."""
-
-    matches: list[OneEarthResearchMatch] = []
-
-
-def oneearth_match_schema(
-    *,
-    include_confidence: bool = False,
-    research: bool = False,
-) -> type[BaseModel]:
-    """Return the OE match-response Pydantic class for a given variant.
-
-    ``include_confidence`` enables the confidence field (only meaningful
-    for the organization prompt). ``research=True`` returns the
-    research-project variant, which uses different mode definitions and
-    does not support confidence.
-    """
-    if research:
-        if include_confidence:
-            raise ValueError(
-                "research variant does not support include_confidence yet"
-            )
-        return OneEarthResearchMatchesResponse
-    return (
-        OneEarthMatchesWithConfidenceResponse if include_confidence
-        else OneEarthMatchesResponse
-    )
 
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
+
+# TODO: relativize SHARED_TAXONOMY_DIR via vdl_tools.shared_tools.project_config
+# when this file moves to vdl_tools/shared_tools/taxonomy_mapping/.
+SHARED_TAXONOMY_DIR = Path(
+    "/Users/rjw/Dropbox/VDL/shared-data-clean/data/taxonomies/oneearth"
+)
+
 MODEL = "gpt-5.4-nano"
 DESCENT_FANOUT_CAP = 3
 DEFAULT_WORKERS = 32  # I/O-bound on the OpenAI API; large pools are fine.
@@ -293,7 +90,7 @@ PILLAR_DETAIL_SHEETS = (
 # ---------------------------------------------------------------------------
 
 def find_latest_taxonomy(
-    taxonomy_dir: Path,
+    taxonomy_dir: Path = SHARED_TAXONOMY_DIR,
 ) -> Path:
     """Return the latest VDL-edited OE Solutions Terms xlsx in ``taxonomy_dir``.
 
@@ -364,11 +161,10 @@ ONEEARTH_LEVELS = [
 # ---------------------------------------------------------------------------
 # One Earth system prompt — assembled from generic skeleton + OE overrides
 # ---------------------------------------------------------------------------
-# The prose prompt has two customization layers: a domain intro and rule
-# overrides (``evidence_only`` and ``multiple_matches`` use the engine's
-# defaults). The mode-of-operation definitions and the per-match response
-# shape live on the Pydantic ``OneEarthMatch`` classes above, NOT in this
-# prose — see ``oneearth_match_schema``.
+# Same three-layer customization the Drawdown driver uses: domain intro,
+# modes-of-operation (copied verbatim — definitions are domain-agnostic),
+# and rule overrides. ``evidence_only`` and ``multiple_matches`` use the
+# engine's defaults.
 
 ONEEARTH_DOMAIN_INTRO = (
     "You are classifying an organization against the One Earth Climate "
@@ -397,9 +193,39 @@ ONEEARTH_DOMAIN_INTRO = (
     "angle, or generic economic development."
 )
 
-# NOTE: mode-of-operation definitions live in ``_OE_MODE_DEFINITIONS`` at
-# the top of this file (consumed by the ``OneEarthMatch.mode_of_operation``
-# Field description). No standalone ``ONEEARTH_MODES`` constant.
+# Copied verbatim from the Drawdown driver — the definitions are
+# domain-agnostic and transfer cleanly.
+ONEEARTH_MODES = [
+    {
+        "name": "direct",
+        "definition": (
+            "the entity itself deploys, operates, produces, implements, "
+            "or performs the solution activity (e.g. builds solar farms, "
+            "runs regenerative agriculture, manufactures low-carbon "
+            "cement, restores wetlands)."
+        ),
+    },
+    {
+        "name": "enabling tech",
+        "definition": (
+            "the entity develops or supplies technology, hardware, "
+            "software, tools, materials, financing, or services that "
+            "make the solution possible for others to deploy, but does "
+            "not deploy it itself at scale (e.g. sells sensors to wind "
+            "farms, builds software for grid operators, provides capital "
+            "to project developers)."
+        ),
+    },
+    {
+        "name": "indirect",
+        "definition": (
+            "the entity works on public policy, advocacy, awareness, "
+            "education, standards, research without deployment, "
+            "convening, or other non-deployment levers of change that "
+            "shape whether or how the solution is adopted."
+        ),
+    },
+]
 
 ONEEARTH_RULE_OVERRIDES = {
     "domain_relevance": (
@@ -499,26 +325,20 @@ ONEEARTH_CROSS_PILLAR_ROUTING = (
 
 
 def build_oneearth_system_prompt(include_confidence: bool = False) -> str:
-    """Assemble the canonical One Earth organization system prompt (prose only).
+    """Assemble the canonical One Earth organization system prompt.
 
-    Generic prose skeleton + OE rule overrides + the standalone
-    cross-pillar routing section. The mode definitions, the confidence
-    semantics, and the selection-vs-self-filter behavior all live on the
-    Pydantic response class (selected by
-    ``oneearth_match_schema(include_confidence=...)``) — pass that same
-    class to ``classify_entities(match_schema=...)`` so the model sees
-    the schema's Field descriptions + response-class docstring via
-    InstructorPRC's schema append.
-
-    ``include_confidence`` no longer affects the prose (confidence is a
-    schema-only concern now); the org prompt is identical either way. The
-    parameter is retained so existing call sites don't break — pick the
-    confidence-enabled SCHEMA via ``oneearth_match_schema`` instead.
+    Generic skeleton + OE rule overrides (domain_relevance with a
+    Pillar-level inclusion bias, generic cross_sector, prominence) + the
+    standalone cross-pillar routing section. ``include_confidence=True``
+    adds the per-match confidence schema/instruction for the
+    confidence-threshold knob.
     """
     prompt = build_system_prompt(
         levels=ONEEARTH_LEVELS,
         domain_intro=ONEEARTH_DOMAIN_INTRO,
+        modes=ONEEARTH_MODES,
         rules=ONEEARTH_RULE_OVERRIDES,
+        include_confidence=include_confidence,
     )
     return prompt + "\n\n" + ONEEARTH_CROSS_PILLAR_ROUTING
 
@@ -530,22 +350,21 @@ ONEEARTH_SYSTEM_PROMPT = build_oneearth_system_prompt()
 # Research-project prompt variant
 # ---------------------------------------------------------------------------
 # The default prompt above is calibrated for organizations (companies,
-# NGOs, land trusts) — its mode definitions describe what an "entity"
-# does and its rule overrides are full of organization-shaped examples
-# ("land trust", "Audubon-style organization", "regenerative-farming
-# co-op"). Research-grant abstracts (NSF, NIH, USAspending) describe
-# investigations rather than operations, and the org-tuned framing
-# causes the LLM to miss applied / mechanism research that legitimately
-# maps to deployment-shaped taxonomy nodes.
+# NGOs, land trusts) — its modes describe what an "entity" does and its
+# rule overrides are full of organization-shaped examples ("land trust",
+# "Audubon-style organization", "regenerative-farming co-op"). Research-
+# grant abstracts (NSF, NIH, USAspending) describe investigations rather
+# than operations, and the org-tuned framing causes the LLM to miss
+# applied / mechanism research that legitimately maps to deployment-
+# shaped taxonomy nodes.
 #
-# The research variant moves as a coordinated triple: the domain intro
-# and rule overrides below (prose) plus the ``OneEarthResearchMatch``
-# schema above (whose ``mode_of_operation`` Field reworded the mode
-# definitions around research roles, keeping the canonical mode names).
-# Callers select the variant via ``map_to_oneearth(prompt_mode=
-# "research")``, which pairs ``ONEEARTH_RESEARCH_SYSTEM_PROMPT`` with
-# ``oneearth_match_schema(research=True)``. Mixing the org prose with the
-# research schema (or vice versa) produces incoherent prompts.
+# The constants below provide a coordinated alternative — domain intro
+# framed for research projects, modes-of-operation reworded around
+# research roles (while keeping the engine's canonical mode names), and
+# rule overrides with research-shaped examples and exclusions. Callers
+# select the variant via ``map_to_oneearth(prompt_mode="research")``.
+# All three pieces move as a triple; mixing the org domain_intro with
+# research modes (or vice versa) produces incoherent prompts.
 
 ONEEARTH_RESEARCH_DOMAIN_INTRO = (
     "You are classifying a description of a scientific research project "
@@ -583,9 +402,53 @@ ONEEARTH_RESEARCH_DOMAIN_INTRO = (
 # canonical mode names (direct / enabling tech / indirect) so the
 # engine's hardcoded validation accepts the values without warning and
 # downstream mode-aware logic (e.g. indirect-fanout stop) keeps working.
-# Research-flavored mode definitions live in
-# ``_OE_RESEARCH_MODE_DEFINITIONS`` at the top of this file (consumed by
-# the ``OneEarthResearchMatch.mode_of_operation`` Field description).
+ONEEARTH_RESEARCH_MODES = [
+    {
+        "name": "direct",
+        "definition": (
+            "the project itself implements, deploys, restores, "
+            "sequesters, manufactures, or runs a field demonstration "
+            "of the named solution at real-world scale — e.g. installs "
+            "a microgrid, restores wetlands at a specific site, runs a "
+            "methane-leak monitoring deployment, plants cover crops on "
+            "working farms, field-trials a geoengineering intervention. "
+            "This is the rarest mode in research-grant data; most "
+            "research is upstream of deployment."
+        ),
+    },
+    {
+        "name": "enabling tech",
+        "definition": (
+            "the project develops, validates, characterizes, "
+            "prototypes, or investigates the mechanism behind a "
+            "specific named technology, material, process, or practice "
+            "that maps to a taxonomy node. This covers BOTH applied "
+            "R&D (synthesizing battery electrolytes, designing a "
+            "perovskite PV cell, building a methane-detection sensor) "
+            "AND mechanism / foundational research where the abstract "
+            "names both the mechanism AND a specific solution domain "
+            "it informs (e.g. plant nutrient-sensing for low-fertilizer "
+            "crops, soil-microbe interactions for carbon stabilization, "
+            "computational methods explicitly for clean-energy materials). "
+            "Most research-grant abstracts that match the taxonomy "
+            "fall in this mode."
+        ),
+    },
+    {
+        "name": "indirect",
+        "definition": (
+            "the project produces field-building infrastructure or "
+            "soft levers for the climate field — climate-science "
+            "instrumentation that supports many solutions, satellite "
+            "monitoring, lifecycle assessments, multi-pillar policy / "
+            "regulatory analysis, capacity-building research, "
+            "education / outreach research. Typically Cross-Cutting; "
+            "use this mode when the research output is a tool or "
+            "framework rather than the development of a specific "
+            "named solution."
+        ),
+    },
+]
 
 ONEEARTH_RESEARCH_RULE_OVERRIDES = {
     "domain_relevance": (
@@ -823,6 +686,7 @@ ONEEARTH_RESEARCH_RULE_OVERRIDES = {
 ONEEARTH_RESEARCH_SYSTEM_PROMPT = build_system_prompt(
     levels=ONEEARTH_LEVELS,
     domain_intro=ONEEARTH_RESEARCH_DOMAIN_INTRO,
+    modes=ONEEARTH_RESEARCH_MODES,
     rules=ONEEARTH_RESEARCH_RULE_OVERRIDES,
 )
 
@@ -924,9 +788,8 @@ def build_recovery_scope_prompt(taxonomy_path: Path | None = None) -> str:
         + "Decide whether the organization's OWN work is in scope for any "
         "pillar above (an implicit climate mechanism is acceptable; an "
         "incidental co-benefit of otherwise out-of-scope work is not). "
-        "Return JSON: {\"in_scope\": true|false, \"category\": \"<exact "
-        "pillar name from the list above, or null if not in scope>\", "
-        "\"reason\": \"<one sentence>\"}."
+        "Return JSON: {\"in_scope\": true|false, \"pillar\": \"<exact pillar "
+        "name or null>\", \"reason\": \"<one sentence>\"}."
     )
 
 
@@ -936,11 +799,10 @@ def map_to_oneearth(
     id_col: str,
     name_col: str,
     text_col: str,
-    session=None,
+    client: OpenAI,
     model: str = MODEL,
     max_workers: int = DEFAULT_WORKERS,
     taxonomy_path: Path | None = None,
-    taxonomy_dir: Path | None = None,
     descent_fanout_cap: int = DESCENT_FANOUT_CAP,
     prompt_mode: str = "organization",
     system_prompt: str | None = None,
@@ -950,9 +812,6 @@ def map_to_oneearth(
     recovery_model: str = "gpt-4.1-mini",
     recovery_scope_prompt: str | None = None,
     walk_recovered: bool = False,
-    read_from_cache: bool = True,
-    write_to_cache: bool = True,
-    filter_by_model: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Classify a DataFrame of entities against the One Earth taxonomy.
 
@@ -975,73 +834,43 @@ def map_to_oneearth(
     text_col
         Column with the entity description. The LLM matches against the
         text in this column.
-    session
-        SQLAlchemy session used by the SQL prompt/response cache. Build
-        via ``vdl_tools.shared_tools.database_cache.database_utils.
-        get_session``; the caller's ``with get_session() as session:``
-        block scopes the transaction and remains open and owned by the
-        caller (this function never commits or closes a session it did
-        not create). When ``None`` (default), a session is opened and
-        closed internally for the duration of the call.
+    client
+        An ``openai.OpenAI`` client. Caller supplies it so this library
+        does not depend on a project-specific config-file location.
     model
         OpenAI model id. Default ``MODEL`` (currently ``gpt-5.4-nano``).
     max_workers
-        Concurrency cap for the cache's API worker pool, applied per
-        level batch. The hierarchical walk is I/O-bound on the OpenAI
-        API; large pools (16, 32, 64) are fine.
-    read_from_cache
-        When False, bypass cached rows and re-issue every API call
-        (force-refresh). Default True.
-    write_to_cache
-        When False, leave the cache untouched (read-only / passthrough).
-        Default True.
-    filter_by_model
-        When True (default), cache rows are scoped by model name, so the
-        same taxonomy + prompt classified under different models (e.g.
-        ``gpt-5.4-nano`` vs ``gpt-4.1``) get separate cache entries. This
-        is the safe default for the A/B model-comparison workflow this
-        module supports: with ``False`` a second run under a different
-        model would silently reuse the first model's cached answers,
-        corrupting the comparison. Threaded into the classification walk,
-        the recovery pass, and the seeded re-walk so all three isolate by
-        model consistently. Flipping this to True costs nothing on
-        same-model re-runs — the cache's composite PK always stamps the
-        model on write, so existing rows still hit; only cross-model
-        reuse (which you want to avoid) becomes a miss.
+        Thread pool size for parallel classification. The hierarchical
+        walk is I/O-bound on the OpenAI API; large pools (16, 32, 64)
+        are fine. Use 1 for a single-threaded debug path.
     taxonomy_path
-        Path to the taxonomy xlsx. If omitted, ``taxonomy_dir`` must be
-        provided and the latest ``OE Solutions Terms *VDL.xlsx`` found in
-        it (via ``find_latest_taxonomy``) is used.
-    taxonomy_dir
-        Directory searched for the latest ``OE Solutions Terms *VDL.xlsx``
-        when ``taxonomy_path`` is not given. One of ``taxonomy_path`` /
-        ``taxonomy_dir`` is required — there is no built-in default path.
+        Optional override for the taxonomy xlsx. Defaults to
+        ``find_latest_taxonomy()`` which picks the latest VDL-edited
+        ``OE Solutions Terms *VDL.xlsx`` from ``SHARED_TAXONOMY_DIR``.
     descent_fanout_cap
         Maximum number of children to descend into when a level returns
         multiple matches. Default 3.
     prompt_mode
         ``"organization"`` (default): the standard OE system prompt,
         calibrated for organizations (companies, NGOs, land trusts).
-        ``"research"``: a research-project variant — framed for grant
-        abstracts (NSF, NIH, USAspending). Selecting a mode pairs the
-        matching prose prompt with the matching ``match_schema`` (org vs
-        ``OneEarthResearchMatch``); both move together. Same taxonomy and
-        walk, different framing. Ignored when ``system_prompt`` is set
-        (in which case the org schema is used).
+        ``"research"``: a research-project variant that swaps domain
+        intro, modes-of-operation, and rule overrides as a coordinated
+        triple — framed for grant abstracts (NSF, NIH, USAspending).
+        Same taxonomy and walk, different framing. The three pieces
+        move together; mixing org and research framing produces
+        incoherent prompts. Ignored when ``system_prompt`` is set.
     system_prompt
         Escape hatch for callers that want to assemble a fully custom
         system prompt via ``build_system_prompt``. When provided, it
-        overrides ``prompt_mode`` entirely (and the organization match
-        schema is used).
+        overrides ``prompt_mode`` entirely.
     confidence_threshold
-        Precision/recall knob in [0, 1]. When set (organization mode
-        only), the confidence-enabled schema
-        (``OneEarthMatchesWithConfidenceResponse``) is selected so the
-        model emits a per-match confidence, and matches below the
-        threshold are dropped. LOWER keeps more (weaker) matches — fewer
-        no-mappings, more false positives; HIGHER keeps only strong
-        matches. ``None`` (default) applies no confidence scoring or
-        filtering.
+        Precision/recall knob in [0, 1]. When set, the ``system_prompt``
+        must be confidence-enabled (``build_system_prompt(
+        include_confidence=True)``); the model emits a per-match
+        confidence and matches below the threshold are dropped. LOWER
+        keeps more (weaker) matches — fewer no-mappings, more false
+        positives; HIGHER keeps only strong matches. ``None`` (default)
+        applies no confidence scoring or filtering.
     emit_per_level
         When True, the per-row frame gains ``<level> evidence`` /
         ``<level> reason`` / ``<level> confidence`` columns for every
@@ -1074,29 +903,11 @@ def map_to_oneearth(
         raise ValueError("walk_recovered=True requires recover_unmatched=True")
 
     if taxonomy_path is None:
-        if taxonomy_dir is None:
-            raise ValueError(
-                "map_to_oneearth: pass taxonomy_path=<xlsx> or taxonomy_dir="
-                "<dir searched via find_latest_taxonomy>. There is no "
-                "built-in default taxonomy location."
-            )
-        taxonomy_path = find_latest_taxonomy(taxonomy_dir)
+        taxonomy_path = find_latest_taxonomy()
     tables = load_taxonomy(taxonomy_path)
 
-    # Pick the per-match Pydantic class to match the system_prompt
-    # variant. Confidence is only meaningful under the organization
-    # prompt; research uses its own Match class with research-flavored
-    # mode definitions.
-    confidence_on = (
-        confidence_threshold is not None and prompt_mode == "organization"
-    )
-    match_schema = oneearth_match_schema(
-        include_confidence=confidence_on,
-        research=(prompt_mode == "research"),
-    )
-
     if system_prompt is None:
-        if confidence_on:
+        if confidence_threshold is not None and prompt_mode == "organization":
             # The confidence knob needs the confidence-enabled schema.
             system_prompt = build_oneearth_system_prompt(include_confidence=True)
         elif prompt_mode not in _PROMPT_BY_MODE:
@@ -1107,73 +918,54 @@ def map_to_oneearth(
         else:
             system_prompt = _PROMPT_BY_MODE[prompt_mode]
 
-    # Own the session lifecycle only when the caller didn't supply one.
-    # get_session() force-commits and closes the session it yields, so
-    # wrapping a caller-owned session here would surprise-commit and close
-    # it out from under the caller's own `with get_session()` block. When
-    # the caller passed a session, use it directly and leave commit/close
-    # to them; classify_entities / recover_unmatched commit internally.
-    owns_session = session is None
-    session_cm = get_session() if owns_session else contextlib.nullcontext(session)
-    with session_cm as session:
-        per_row_df = classify_entities(
-            session=session,
-            tables=tables,
-            levels=ONEEARTH_LEVELS,
-            system_prompt=system_prompt,
-            entities=entities,
+    per_row_df = classify_entities(
+        client=client,
+        tables=tables,
+        levels=ONEEARTH_LEVELS,
+        system_prompt=system_prompt,
+        entities=entities,
+        id_col=id_col,
+        name_col=name_col,
+        text_col=text_col,
+        model=model,
+        descent_fanout_cap=descent_fanout_cap,
+        max_workers=max_workers,
+        confidence_threshold=confidence_threshold,
+        emit_per_level=emit_per_level,
+    )
+    if recover_unmatched:
+        # Default top-level column + category choices from the level spec +
+        # tables; override only the scope prompt with the OE-specific rich one.
+        per_row_df = _htm.recover_unmatched(
+            per_row_df,
+            client=client,
+            model=recovery_model,
             id_col=id_col,
             name_col=name_col,
             text_col=text_col,
-            model=model,
-            descent_fanout_cap=descent_fanout_cap,
+            levels=ONEEARTH_LEVELS,
+            tables=tables,
+            scope_prompt=recovery_scope_prompt or build_recovery_scope_prompt(
+                taxonomy_path),
             max_workers=max_workers,
-            confidence_threshold=confidence_threshold,
-            emit_per_level=emit_per_level,
-            read_from_cache=read_from_cache,
-            write_to_cache=write_to_cache,
-            match_schema=match_schema,
-            filter_by_model=filter_by_model,
         )
-        if recover_unmatched:
-            # Default top-level column + category choices from the level spec +
-            # tables; override only the scope prompt with the OE-specific rich one.
-            per_row_df = _htm.recover_unmatched(
-                per_row_df,
-                session=session,
-                model=recovery_model,
-                id_col=id_col,
-                name_col=name_col,
-                text_col=text_col,
-                levels=ONEEARTH_LEVELS,
-                tables=tables,
-                scope_prompt=recovery_scope_prompt or build_recovery_scope_prompt(
-                    taxonomy_path),
-                max_workers=max_workers,
-                read_from_cache=read_from_cache,
-                write_to_cache=write_to_cache,
-                filter_by_model=filter_by_model,
-            )
 
-        if walk_recovered:
-            per_row_df = _walk_recovered_entities(
-                per_row_df, session=session, tables=tables, system_prompt=system_prompt,
-                id_col=id_col, name_col=name_col, text_col=text_col, model=model,
-                descent_fanout_cap=descent_fanout_cap, max_workers=max_workers,
-                confidence_threshold=confidence_threshold, emit_per_level=emit_per_level,
-                read_from_cache=read_from_cache, write_to_cache=write_to_cache,
-                match_schema=match_schema, filter_by_model=filter_by_model,
-            )
+    if walk_recovered:
+        per_row_df = _walk_recovered_entities(
+            per_row_df, client=client, tables=tables, system_prompt=system_prompt,
+            id_col=id_col, name_col=name_col, text_col=text_col, model=model,
+            descent_fanout_cap=descent_fanout_cap, max_workers=max_workers,
+            confidence_threshold=confidence_threshold, emit_per_level=emit_per_level,
+        )
 
     collapsed_df = collapse_to_one_row_per_uid(per_row_df, id_col=id_col)
     return per_row_df, collapsed_df
 
 
 def _walk_recovered_entities(
-    per_row_df: pd.DataFrame, *, session, tables, system_prompt, id_col, name_col,
+    per_row_df: pd.DataFrame, *, client, tables, system_prompt, id_col, name_col,
     text_col, model, descent_fanout_cap, max_workers, confidence_threshold,
-    emit_per_level, read_from_cache=True, write_to_cache=True,
-    match_schema: type[BaseModel] | None = None, filter_by_model: bool = True,
+    emit_per_level,
 ) -> pd.DataFrame:
     """Seed the walk at each recovery-recovered entity's pillar and descend.
 
@@ -1213,14 +1005,12 @@ def _walk_recovered_entities(
                   .drop(columns=[c for c in class_cols if c in per_row_df.columns]))
 
     seeded = classify_entities(
-        session=session, tables=tables, levels=ONEEARTH_LEVELS,
+        client=client, tables=tables, levels=ONEEARTH_LEVELS,
         system_prompt=system_prompt, entities=seed_input, id_col=id_col,
         name_col=name_col, text_col=text_col, model=model,
         descent_fanout_cap=descent_fanout_cap, max_workers=max_workers,
         confidence_threshold=confidence_threshold, emit_per_level=emit_per_level,
         seed_col=recovered_col,
-        read_from_cache=read_from_cache, write_to_cache=write_to_cache,
-        match_schema=match_schema, filter_by_model=filter_by_model,
     )
 
     kept = per_row_df[~per_row_df[id_col].isin(rec_ids)]
@@ -1234,24 +1024,19 @@ __all__ = [
     "MODEL",
     "DESCENT_FANOUT_CAP",
     "DEFAULT_WORKERS",
+    "SHARED_TAXONOMY_DIR",
     "PILLAR_DETAIL_SHEETS",
     "ONEEARTH_LEVELS",
     # Organization-tuned prompt (default).
     "ONEEARTH_DOMAIN_INTRO",
+    "ONEEARTH_MODES",
     "ONEEARTH_RULE_OVERRIDES",
     "ONEEARTH_SYSTEM_PROMPT",
     # Research-project-tuned prompt (prompt_mode="research").
     "ONEEARTH_RESEARCH_DOMAIN_INTRO",
+    "ONEEARTH_RESEARCH_MODES",
     "ONEEARTH_RESEARCH_RULE_OVERRIDES",
     "ONEEARTH_RESEARCH_SYSTEM_PROMPT",
-    # Per-project Pydantic match schemas (pass to classify_entities).
-    "OneEarthMatch",
-    "OneEarthMatchesResponse",
-    "OneEarthMatchWithConfidence",
-    "OneEarthMatchesWithConfidenceResponse",
-    "OneEarthResearchMatch",
-    "OneEarthResearchMatchesResponse",
-    "oneearth_match_schema",
     "find_latest_taxonomy",
     "load_taxonomy",
     "collapse_to_one_row_per_uid",
@@ -1259,22 +1044,5 @@ __all__ = [
     # Engine re-exports
     "build_system_prompt",
     "classify_entities",
+    "classify_entity",
 ]
-
-
-if __name__ == "__main__":
-    entities = pd.DataFrame([
-        {"id": 1, "name": "CCS", "description": "CCS is a project developer focusing on building carbon capture and storage facilities. They also make fertilizer from captured carbon dioxide."},
-        {"id": 2, "name": "Electric Semis", "description": "Electric Semis is an auto manufacturer focusing on building electric semi-trucks. They also build battery storage systems."},
-        {"id": 3, "name": "Forest Defense Fund", "description": "Forest Defense Fund is a non-profit organization focusing on protecting forests and wildlife."},
-    ])
-    results = map_to_oneearth(
-        entities=entities,
-        taxonomy_dir=Path("../shared-data-clean/data/taxonomies/oneearth"),
-        id_col="id",
-        name_col="name",
-        text_col="description",
-        read_from_cache=True,
-        write_to_cache=True,
-    )
-    print(results)

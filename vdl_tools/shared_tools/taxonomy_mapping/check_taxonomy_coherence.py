@@ -47,19 +47,30 @@ Usage
 -----
 Library entry point::
 
+    from vdl_tools.shared_tools.database_cache.database_utils import get_session
     from vdl_tools.shared_tools.taxonomy_mapping.check_taxonomy_coherence import (
         check_taxonomy_coherence,
     )
 
-    df = check_taxonomy_coherence(
-        tables=tables,            # dict[int, pd.DataFrame] keyed by level idx
-        levels=ONEEARTH_LEVELS,   # list of level dicts, same shape as the engine uses
-        client=client,
-        model="gpt-5.4-nano",
-        max_workers=16,
-        definition_col="Definition",
-    )
+    with get_session() as session:
+        df = check_taxonomy_coherence(
+            tables=tables,            # dict[int, pd.DataFrame] keyed by level idx
+            levels=ONEEARTH_LEVELS,   # list of level dicts, same shape as the engine uses
+            session=session,
+            model="gpt-5.4-nano",
+            max_workers=16,
+            definition_col="Definition",
+        )
     df.to_excel("coherence_audit.xlsx", index=False)
+
+All OpenAI calls flow through the SQL prompt/response cache
+(``CoherenceAuditCache`` extends ``InstructorPRC``). Cache keys: the
+fixed system prompt + the ``AuditResponse`` schema -> ``prompt_id``;
+``f"{parent_level}|{parent_name}|{hash(user prompt body)}"`` ->
+``given_id`` (the content hash disambiguates same-named parents that
+recur at one level under different parents); hash of the user prompt
+body (parent definition + children) -> ``text_id``. Re-running the
+audit against an unchanged taxonomy is a no-API run.
 
 The output frame has one row per parent node with: parent level/name,
 n_children, verdict (ok/minor_gaps/major_gaps), summary, coverage_gaps,
@@ -68,12 +79,15 @@ the same data as a human-readable Markdown report.
 """
 from __future__ import annotations
 
-import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
 from typing import Any, Iterable
 
 import pandas as pd
-from openai import OpenAI
+from pydantic import BaseModel
+
+from vdl_tools.shared_tools.openai.prompt_response_cache_instructor import InstructorPRC
+from vdl_tools.shared_tools.openai.prompt_response_cache_sql import DEFAULT_MODEL
+from vdl_tools.shared_tools.openai.openai_api_utils import is_reasoning_model
 
 
 # ---------------------------------------------------------------------------
@@ -204,64 +218,82 @@ def _children_of(
     return out
 
 
-def _audit_one(
-    *,
-    client: OpenAI,
-    model: str,
-    parent_level: str,
-    child_level: str,
-    parent_name: str,
-    parent_definition: str,
-    children: list[dict[str, str]],
-) -> dict[str, Any]:
-    """Call the LLM for one parent-children group and parse the JSON."""
-    user = _build_user_prompt(
-        parent_level=parent_level,
-        child_level=child_level,
-        parent_name=parent_name,
-        parent_definition=parent_definition,
-        children=children,
-    )
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user},
-        ],
-        response_format={"type": "json_object"},
-        temperature=0,
-    )
-    raw = resp.choices[0].message.content or "{}"
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return {
-            "verdict": "parse_error",
-            "summary": f"non-JSON model output: {raw[:200]}",
-            "coverage_gaps": [],
-            "completeness_gaps": [],
-            "suggested_edits": "",
-        }
+# ---------------------------------------------------------------------------
+# Pydantic response schema + cache class
+# ---------------------------------------------------------------------------
+
+class Gap(BaseModel):
+    """One coverage / completeness / cohesion finding for a parent-child group."""
+
+    child: str = ""
+    issue: str = ""
 
 
-def _gaps_to_text(gaps: list[dict[str, str]] | None) -> str:
-    """Flatten a list of {child, issue} dicts into a single cell string."""
+class AuditResponse(BaseModel):
+    """Structured-output schema for one parent's coherence audit."""
+
+    verdict: str = "unknown"  # "ok" | "minor_gaps" | "major_gaps"
+    summary: str = ""
+    coverage_gaps: list[Gap] = []
+    completeness_gaps: list[Gap] = []
+    cohesion_gaps: list[Gap] = []
+    suggested_edits: str = ""
+
+
+class CoherenceAuditCache(InstructorPRC):
+    """SQL-cached cache class for the coherence audit.
+
+    One instance per (system_prompt, model). Reused across every
+    parent-children group in a single ``check_taxonomy_coherence`` call.
+    """
+
+    def __init__(
+        self,
+        session,
+        model: str = DEFAULT_MODEL,
+        store_results: bool = True,
+        filter_by_model: bool = False,
+    ):
+        super().__init__(
+            session=session,
+            prompt_str=SYSTEM_PROMPT,
+            prompt_name="taxonomy_coherence_audit",
+            response_model=AuditResponse,
+            model=model,
+            filter_by_model=filter_by_model,
+            store_results=store_results,
+        )
+
+
+def _gaps_to_text(gaps: Iterable[Gap]) -> str:
+    """Flatten a list of ``Gap`` objects into a single cell string."""
     if not gaps:
         return ""
-    return "\n".join(f"- {g.get('child','?')}: {g.get('issue','')}".strip()
-                     for g in gaps)
+    return "\n".join(
+        f"- {(g.child or '?')}: {g.issue}".strip() for g in gaps
+    )
 
 
 def check_taxonomy_coherence(
     *,
     tables: dict[int, pd.DataFrame],
     levels: list[dict[str, Any]],
-    client: OpenAI,
+    session,
     model: str,
     max_workers: int = 16,
     definition_col: str = "Definition",
+    read_from_cache: bool = True,
+    write_to_cache: bool = True,
+    temperature: float | None = 0,
+    filter_by_model: bool = True,
 ) -> pd.DataFrame:
     """Audit parent-child coherence at every non-leaf level transition.
+
+    Every per-parent OpenAI call flows through the SQL prompt/response
+    cache: one ``CoherenceAuditCache.bulk_get_cache_or_run`` for the
+    whole audit, parallelism bounded by ``max_workers`` (cache's
+    internal pool — the SQLAlchemy session is touched only on the main
+    thread).
 
     Parameters
     ----------
@@ -275,20 +307,38 @@ def check_taxonomy_coherence(
         dicts with ``idx``, ``name``, ``key_col``, ``parent_filters``.
         The last level is treated as a leaf and is never audited as a
         parent.
-    client, model
-        OpenAI client + model id used for the audit calls. JSON
-        response format is required.
+    session
+        SQLAlchemy session for the SQL prompt/response cache. Build via
+        ``vdl_tools.shared_tools.database_cache.database_utils.get_session``.
+    model
+        OpenAI model id.
     max_workers
-        Thread pool size — audits run in parallel, one parent per task.
+        Concurrency cap for the cache's API worker pool.
     definition_col
         Column name carrying the definition text on every level frame.
+    read_from_cache, write_to_cache
+        Forwarded to ``bulk_get_cache_or_run``. Defaults of ``True``
+        match legacy behavior; pass ``read_from_cache=False`` to force a
+        full re-run, or ``write_to_cache=False`` for a read-only audit.
+    temperature
+        Sampling temperature for the audit model. Defaults to ``0`` for
+        deterministic audits (matching the legacy path). Automatically
+        suppressed for reasoning models (``gpt-5*``), which reject it.
+        Pass ``None`` to omit entirely.
+    filter_by_model
+        When True (default), scope ``CoherenceAuditCache`` lookups by
+        ``model`` so auditing the same taxonomy under a different model
+        does not silently reuse the prior model's cached audits. The
+        cache write PK always stamps ``model_name``, so this is cost-free
+        on same-model re-runs; pass False to restore the legacy
+        cross-model-sharing behavior.
 
     Returns
     -------
     A DataFrame with one row per audited parent: ``parent_level``,
     ``parent_name``, ``n_children``, ``verdict``, ``summary``,
-    ``coverage_gaps``, ``completeness_gaps``, ``suggested_edits``,
-    ``parent_definition``.
+    ``coverage_gaps``, ``completeness_gaps``, ``cohesion_gaps``,
+    ``suggested_edits``, ``parent_definition``.
     """
     tasks: list[dict[str, Any]] = []
 
@@ -325,38 +375,91 @@ def check_taxonomy_coherence(
     print(f"Auditing {len(tasks)} parent-children groups "
           f"with {max_workers} worker(s) using {model}")
 
+    if not tasks:
+        return pd.DataFrame()
+
+    cache = CoherenceAuditCache(
+        session=session, model=model, filter_by_model=filter_by_model)
+
+    # Build (given_id, user_text) pairs. The system prompt + AuditResponse
+    # schema (captured in prompt_id) distinguish this audit from other
+    # tools. Within one taxonomy, level + name is NOT unique — the same
+    # node name can recur under different parents (e.g. "Buildings" under
+    # two pillars), and those parents have different children. Since
+    # ``bulk_get_cache_or_run`` returns a dict keyed by given_id alone,
+    # a bare "level|name" key would let two such parents collide and share
+    # one response. Append a short hash of the user prompt (parent
+    # definition + children) so distinct parents get distinct keys; two
+    # parents with genuinely identical audits still collapse (correct),
+    # and an unchanged taxonomy re-runs to a full cache hit because the
+    # hash is content-derived.
+    requests: list[tuple[str, str]] = []
+    for t in tasks:
+        user_text = _build_user_prompt(
+            parent_level=t["parent_level"],
+            child_level=t["child_level"],
+            parent_name=t["parent_name"],
+            parent_definition=t["parent_definition"],
+            children=t["children"],
+        )
+        content_hash = hashlib.sha1(user_text.encode("utf-8")).hexdigest()[:8]
+        given_id = f"{t['parent_level']}|{t['parent_name']}|{content_hash}"
+        requests.append((given_id, user_text))
+
+    # Restore deterministic audits (temperature=0); reasoning models
+    # (gpt-5*) reject the param, so suppress it for them.
+    api_kwargs: dict[str, Any] = {}
+    if temperature is not None and not is_reasoning_model(model):
+        api_kwargs["temperature"] = temperature
+
+    responses = cache.bulk_get_cache_or_run(
+        given_ids_texts=requests,
+        max_workers=max_workers,
+        read_from_cache=read_from_cache,
+        write_to_cache=write_to_cache,
+        **api_kwargs,
+    )
+
     rows: list[dict[str, Any]] = []
-
-    def _run(task: dict[str, Any]) -> dict[str, Any]:
-        out = _audit_one(client=client, model=model, **task)
-        return {
-            "parent_level": task["parent_level"],
-            "parent_name": task["parent_name"],
-            "n_children": len(task["children"]),
-            "verdict": out.get("verdict", "unknown"),
-            "summary": out.get("summary", ""),
-            "coverage_gaps": _gaps_to_text(out.get("coverage_gaps")),
-            "completeness_gaps": _gaps_to_text(out.get("completeness_gaps")),
-            "cohesion_gaps": _gaps_to_text(out.get("cohesion_gaps")),
-            "suggested_edits": out.get("suggested_edits", "") or "",
-            "parent_definition": task["parent_definition"],
+    for t, (given_id, _) in zip(tasks, requests):
+        base = {
+            "parent_level": t["parent_level"],
+            "parent_name": t["parent_name"],
+            "n_children": len(t["children"]),
+            "parent_definition": t["parent_definition"],
         }
+        resp = responses.get(given_id)
+        if resp is None:
+            rows.append({**base,
+                         "verdict": "parse_error",
+                         "summary": "API call failed",
+                         "coverage_gaps": "",
+                         "completeness_gaps": "",
+                         "cohesion_gaps": "",
+                         "suggested_edits": ""})
+            continue
+        try:
+            audit = AuditResponse.model_validate_json(resp["response_text"])
+        except Exception as exc:  # noqa: BLE001
+            rows.append({**base,
+                         "verdict": "parse_error",
+                         "summary": f"parse error: {exc}",
+                         "coverage_gaps": "",
+                         "completeness_gaps": "",
+                         "cohesion_gaps": "",
+                         "suggested_edits": ""})
+            continue
+        rows.append({
+            **base,
+            "verdict": audit.verdict or "unknown",
+            "summary": audit.summary or "",
+            "coverage_gaps": _gaps_to_text(audit.coverage_gaps),
+            "completeness_gaps": _gaps_to_text(audit.completeness_gaps),
+            "cohesion_gaps": _gaps_to_text(audit.cohesion_gaps),
+            "suggested_edits": audit.suggested_edits or "",
+        })
 
-    if max_workers <= 1:
-        for t in tasks:
-            r = _run(t)
-            rows.append(r)
-            print(f"  [{r['parent_level']}] {r['parent_name']} -> "
-                  f"{r['verdict']} ({r['n_children']} children)")
-    else:
-        with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            futures = {ex.submit(_run, t): t for t in tasks}
-            for i, fut in enumerate(as_completed(futures), start=1):
-                r = fut.result()
-                rows.append(r)
-                print(f"  [{i}/{len(tasks)}] [{r['parent_level']}] "
-                      f"{r['parent_name']} -> {r['verdict']} "
-                      f"({r['n_children']} children)")
+    session.commit()
 
     out_df = pd.DataFrame(rows)
     # Stable ordering: level order (per `levels`), then parent name.

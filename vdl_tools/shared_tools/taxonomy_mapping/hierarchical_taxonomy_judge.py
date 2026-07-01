@@ -69,14 +69,16 @@ LLM calls.
 from __future__ import annotations
 
 import ast
-import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Literal, Mapping
 
 import pandas as pd
-from openai import OpenAI
+from pydantic import BaseModel
+
+from vdl_tools.shared_tools.openai.prompt_response_cache_instructor import InstructorPRC
+from vdl_tools.shared_tools.openai.prompt_response_cache_sql import DEFAULT_MODEL
+from vdl_tools.shared_tools.openai.openai_api_utils import is_reasoning_model
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +99,86 @@ DEFAULT_STRICTNESS = """Strictness:
 
 
 # ---------------------------------------------------------------------------
+# Structured-output schema for the judge call
+# ---------------------------------------------------------------------------
+# The judge response is a fixed shape across all configs:
+#
+#   {
+#     "matches_by_level": [
+#       {"level": "Pillar", "matches": [{"match": "...", "score": "good|weak|bad", "reason": "..."}, ...]},
+#       ...
+#     ],
+#     "alignment_verdict": {"verdict": "correct|wrong|...", "reason": "..."}
+#   }
+#
+# A list-of-LevelMatches (rather than a dict keyed by level name) keeps the
+# Pydantic schema strict enough for OpenAI's structured-output mode, which
+# rejects open-ended object types. The level label inside the prompt — and
+# the verdict's enum values — still vary per ``JudgeConfig``, but the
+# top-level keys are fixed.
+
+class MatchScore(BaseModel):
+    """One per-match scoring entry."""
+
+    match: str = ""
+    score: str = ""  # "good" | "weak" | "bad"
+    reason: str = ""
+
+
+class LevelMatches(BaseModel):
+    """All scored matches for one taxonomy level."""
+
+    level: str = ""
+    matches: list[MatchScore] = []
+
+
+class AlignmentVerdict(BaseModel):
+    """Top-level alignment verdict for the entity as a whole."""
+
+    verdict: str = ""  # "correct" | "wrong" | "ambiguous" | "mixed" | "no_<X>_expected"
+    reason: str = ""
+
+
+class JudgmentResponse(BaseModel):
+    """Full structured-output response from one judge call."""
+
+    matches_by_level: list[LevelMatches] = []
+    alignment_verdict: AlignmentVerdict | None = None
+
+
+class JudgeCache(InstructorPRC):
+    """SQL-backed cache for one judge run.
+
+    Construct once per (system_prompt, model); reuse across every entity
+    in a single ``run_judge_evaluation`` call. Cache rows are keyed by
+    (prompt_id, given_id, text_id): the system prompt + the
+    ``JudgmentResponse`` schema together set ``prompt_id``; the
+    per-entity ``entity_id`` is the ``given_id``; ``text_id`` hashes the
+    user-message body (entity name + description + the classifier's
+    matches at every level). Changing the classifier's output for an
+    entity invalidates only that entity's cached judgment.
+    """
+
+    def __init__(
+        self,
+        session,
+        system_prompt: str,
+        model: str = DEFAULT_MODEL,
+        store_results: bool = True,
+        filter_by_model: bool = False,
+    ):
+        super().__init__(
+            session=session,
+            prompt_str=system_prompt,
+            prompt_name="hierarchical_taxonomy_judge",
+            response_model=JudgmentResponse,
+            model=model,
+            filter_by_model=filter_by_model,
+            store_results=store_results,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
@@ -109,11 +191,13 @@ class JudgeConfig:
     drivers override what they need:
 
     - **All projects** must supply: ``levels``, ``taxonomy_intro``,
-      ``new_level_cols``, ``load_taxonomy_tables``,
-      ``build_openai_client``.
+      ``new_level_cols``, ``load_taxonomy_tables``. The judge call
+      itself flows through the SQL prompt-response cache, so a
+      SQLAlchemy ``session`` is passed at run time to
+      ``run_judge_evaluation`` rather than configured here.
     - **Sector-based domains** (Drawdown) override
       ``verdict_top_label="Sector"`` (which auto-derives
-      ``verdict_key``, ``verdict_no_match_value``, output column).
+      ``verdict_no_match_value``, output column).
     - **Research / non-org entity domains** (hopper_dean) override
       ``entity_id_col``, ``entity_name_col``,
       ``entity_description_col``, ``entity_label_in_prompt``,
@@ -161,10 +245,9 @@ class JudgeConfig:
     entity_label_plural: str = "entities"           # "entities" / "projects" — used in report prose
     description_label_in_prompt: str = "Description"  # "Description:" / "Abstract:"
 
-    # ---- Taxonomy + OpenAI client builders ----
+    # ---- Taxonomy loader ----
     load_taxonomy_tables: Callable[[], dict[int, pd.DataFrame]] = None
     taxonomy_label_path_fn: Callable[[], Path] | None = None  # optional; reports the taxonomy file name
-    build_openai_client: Callable[[], OpenAI] = None
 
     # ---- Prompt customization (overrides) ----
     scoring_rubric: str = DEFAULT_SCORING_RUBRIC
@@ -175,11 +258,6 @@ class JudgeConfig:
     failure_sample_n: int = 10
 
     # ---- Derived properties ----
-    @property
-    def verdict_key(self) -> str:
-        # e.g., "pillar_alignment", "sector_alignment"
-        return f"{self.verdict_top_label.lower()}_alignment"
-
     @property
     def verdict_no_match_value(self) -> str:
         # e.g., "no_pillar_expected", "no_sector_expected"
@@ -201,8 +279,6 @@ class JudgeConfig:
 
 def build_judge_system_prompt(config: JudgeConfig) -> str:
     """Assemble the judge system prompt from the config."""
-    levels_lines = "\n  ".join(f'"{lbl}":     [...]' for lbl in config.level_labels)
-
     verdict_spec = (
         f"PART 2 — {config.verdict_top_label} alignment verdict. Given the "
         f"description, decide whether the chosen {config.verdict_top_label}(s) "
@@ -214,21 +290,24 @@ def build_judge_system_prompt(config: JudgeConfig) -> str:
         f'- "{config.verdict_no_match_value}": the description does not describe work in scope; the entity should have returned no {config.verdict_top_label} match.'
     )
 
+    level_label_list = ", ".join(f'"{lbl}"' for lbl in config.level_labels)
     output_schema = (
         "Output JSON of the form:\n"
         "{\n"
-        '  "matches": {\n'
-        + "\n".join(f'    "{lbl}":     [{{"match": "<exact name>", "score": "good|weak|bad", "reason": "<one sentence>"}}],'
-                    for lbl in config.level_labels)
-        + "\n  },\n"
-        f'  "{config.verdict_key}": {{\n'
+        '  "matches_by_level": [\n'
+        '    {"level": "<one of: ' + level_label_list + '>",\n'
+        '     "matches": [{"match": "<exact name>", "score": "good|weak|bad", "reason": "<one sentence>"}]},\n'
+        "    ...\n"
+        "  ],\n"
+        '  "alignment_verdict": {\n'
         f'    "verdict": "correct|wrong|ambiguous|mixed|{config.verdict_no_match_value}",\n'
         '    "reason": "<one sentence>"\n'
         "  }\n"
         "}\n\n"
-        "The order of matches must match the order shown in the input. "
-        "Use the exact match names you were shown. If a level has no matches, "
-        'omit it from "matches".'
+        "Emit one entry per level shown in the input, in the same order. "
+        "Use the exact match names you were shown. If a level has no "
+        'matches in the input, emit an entry with an empty "matches" '
+        "list."
     )
 
     return "\n\n".join([
@@ -435,71 +514,43 @@ def build_user_prompt(
     )
 
 
-def judge_entity(
-    client: OpenAI,
-    model: str,
+def _parse_judgment(
     eid: str,
     name: str,
-    description: str,
     matches: dict[str, list[tuple[str, str]]],
+    judgment: JudgmentResponse | None,
     config: JudgeConfig,
-    system_prompt: str,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-    """Score every match for one entity, plus the top-level verdict.
+    """Convert one parsed ``JudgmentResponse`` into per-match rows + verdict row.
 
-    Returns ``(per-match rows, verdict row)``. Verdict row is ``None``
-    when the judge call failed (the per-match rows list is empty in
-    that case).
+    Returns ``(per-match rows, verdict row)``. Both are empty/None when
+    ``judgment`` is ``None`` — i.e., the API call failed and the cache
+    surfaced no response.
     """
-    user_prompt = build_user_prompt(name, description, matches, config)
-
-    try:
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0,
-        )
-    except Exception as exc:  # noqa: BLE001
-        display_name = str(name)[:60]
-        print(f"  [error] {display_name}: {exc}")
-        return [], None
-
-    raw = resp.choices[0].message.content or "{}"
-    try:
-        judgment = json.loads(raw)
-    except json.JSONDecodeError:
-        print(f"  [warn] bad JSON for {str(name)[:60]}: {raw[:200]}")
+    if judgment is None:
         return [], None
 
     rows: list[dict[str, Any]] = []
-    matches_block = judgment.get("matches") or {}
-    if isinstance(matches_block, dict):
-        for level_label, scored in matches_block.items():
-            if not isinstance(scored, list):
+    for level_block in judgment.matches_by_level:
+        level_label = (level_block.level or "").strip()
+        if not level_label:
+            continue
+        for entry in level_block.matches:
+            score = (entry.score or "").strip().lower()
+            if score not in {"good", "weak", "bad"}:
                 continue
-            for entry in scored:
-                if not isinstance(entry, dict):
-                    continue
-                score = str(entry.get("score", "")).strip().lower()
-                if score not in {"good", "weak", "bad"}:
-                    continue
-                rows.append({
-                    config.entity_id_col: eid,
-                    config.entity_name_col: name,
-                    "level": level_label,
-                    "match": str(entry.get("match", "")).strip(),
-                    "score": score,
-                    "reason": str(entry.get("reason", "")).strip(),
-                })
+            rows.append({
+                config.entity_id_col: eid,
+                config.entity_name_col: name,
+                "level": level_label,
+                "match": (entry.match or "").strip(),
+                "score": score,
+                "reason": (entry.reason or "").strip(),
+            })
 
-    pa = judgment.get(config.verdict_key) or {}
-    if isinstance(pa, dict):
-        verdict = str(pa.get("verdict", "")).strip().lower()
-        verdict_reason = str(pa.get("reason", "")).strip()
+    if judgment.alignment_verdict is not None:
+        verdict = (judgment.alignment_verdict.verdict or "").strip().lower()
+        verdict_reason = (judgment.alignment_verdict.reason or "").strip()
     else:
         verdict, verdict_reason = "", ""
 
@@ -773,12 +824,18 @@ def run_judge_evaluation(
     config: JudgeConfig,
     per_row_path: Path,
     *,
+    session=None,
     output_path: Path | None = None,
     from_scored: Path | None = None,
     method: str = "new",
+    given_id_prefix: str = "",
     judge_model: str = "gpt-4.1",
     workers: int = 32,
     driver_script_name: str = "evaluate_*.py",
+    read_from_cache: bool = True,
+    write_to_cache: bool = True,
+    temperature: float | None = 0,
+    filter_by_model: bool = True,
 ) -> None:
     """Run the full judge pipeline: collect bundles, judge, summarize, write outputs.
 
@@ -788,6 +845,9 @@ def run_judge_evaluation(
         Per-project ``JudgeConfig``.
     per_row_path
         Path to the per-row xlsx or CSV produced by the classifier.
+    session
+        SQLAlchemy session for the SQL prompt/response cache. Required
+        unless ``from_scored`` is set (in which case no API calls happen).
     output_path
         Override the scored-matches output path. Default: alongside
         the per-row file with ``_quality_scored`` appended to the
@@ -802,10 +862,39 @@ def run_judge_evaluation(
     judge_model
         OpenAI model id for the judge.
     workers
-        Thread pool size for parallel judge calls.
+        Concurrency cap for the cache's API worker pool.
     driver_script_name
         Filename of the driver script that called this — used in the
         report's "Generated by …" line for provenance.
+    read_from_cache, write_to_cache
+        Forwarded to ``JudgeCache.bulk_get_cache_or_run``. Defaults of
+        ``True`` match legacy behavior; pass ``read_from_cache=False``
+        to force a re-run, or ``write_to_cache=False`` for a read-only
+        judging pass.
+    given_id_prefix
+        Optional namespace prepended to each entity's cache ``given_id``
+        as ``"<prefix>::<entity_id>"``. Use when judging the same
+        entities twice over different classifier outputs in the same
+        session (e.g. comparing an old baseline vs. a new run) — without
+        a distinct prefix the two passes share ``(prompt_id, given_id,
+        model_name)`` and overwrite each other's cache row, thrashing
+        forever on every entity whose user prompt differs between the
+        two passes. Default ``""`` (no prefix).
+    filter_by_model
+        When True (default), scope ``JudgeCache`` lookups by
+        ``judge_model`` so re-judging the same entities under a
+        different judge model does not silently reuse the prior model's
+        cached verdicts. Orthogonal to ``given_id_prefix``: the prefix
+        namespaces *different classifier outputs* judged by one model,
+        while this namespaces *different judge models* over the same
+        output. Cost-free on same-model re-runs (the write PK always
+        stamps ``model_name``); pass False to restore the legacy
+        cross-model-sharing behavior.
+    temperature
+        Sampling temperature for the judge model. Defaults to ``0`` for
+        deterministic judging (matching the legacy path). Automatically
+        suppressed for reasoning models (``gpt-5*``), which reject it.
+        Pass ``None`` to omit entirely.
     """
     if not per_row_path.exists():
         raise FileNotFoundError(f"Per-row file not found: {per_row_path}")
@@ -855,8 +944,10 @@ def run_judge_evaluation(
         # When from_scored is used, also try the verdicts file derived
         # from from_scored's location rather than output_path's.
         candidate_v = from_scored.with_name(
-            from_scored.stem.replace("_quality_scored",
-                                      f"_quality_{config.verdict_top_label.lower()}_verdicts")
+            from_scored.stem.replace(
+                "_quality_scored",
+                f"_quality_{config.verdict_top_label.lower()}_verdicts"
+            )
             + from_scored.suffix
         )
         if candidate_v.exists():
@@ -871,6 +962,13 @@ def run_judge_evaluation(
             )
         print(f"  {len(scored_df)} scored matches loaded")
     else:
+        if session is None:
+            raise ValueError(
+                "run_judge_evaluation: `session` is required for live judge "
+                "calls (only `from_scored` runs can omit it). Build one with "
+                "`vdl_tools.shared_tools.database_cache.database_utils.get_session`."
+            )
+
         tables = config.load_taxonomy_tables()
         lookups = build_definition_lookups(tables, config)
 
@@ -881,46 +979,71 @@ def run_judge_evaluation(
 
         system_prompt = build_judge_system_prompt(config)
         print(f"Calling judge ({judge_model}) with {workers} worker(s)...")
-        client = config.build_openai_client()
+        cache = JudgeCache(
+            session=session,
+            system_prompt=system_prompt,
+            model=judge_model,
+            filter_by_model=filter_by_model,
+        )
+
+        # Build one (given_id, user_text) per entity. given_id is the
+        # entity id (optionally prefixed); text is the user-message body
+        # (name + description + the classifier's matches at every level).
+        # Changing any of those invalidates only that entity's cached
+        # judgment.
+        #
+        # ``given_id_prefix`` lets a caller judge the same entity twice
+        # over different classifier outputs in the same DB without the
+        # two runs overwriting each other's cache row — the cache PK is
+        # ``(prompt_id, given_id, model_name)``, so two passes that
+        # share ``str(eid)`` but differ in user prompt would thrash.
+        # Pass e.g. ``given_id_prefix="new"`` and ``"old"`` to namespace
+        # them.
+        prefix = f"{given_id_prefix}::" if given_id_prefix else ""
+        requests: list[tuple[str, str]] = []
+        bundle_by_given_id: dict[str, tuple[Any, dict[str, Any]]] = {}
+        for eid, b in bundles.items():
+            user_text = build_user_prompt(b["name"], b["description"],
+                                          b["matches"], config)
+            given_id = f"{prefix}{eid}"
+            requests.append((given_id, user_text))
+            bundle_by_given_id[given_id] = (eid, b)
+
+        # Restore deterministic judging (temperature=0); reasoning models
+        # (gpt-5*) reject the param, so suppress it for them.
+        api_kwargs: dict[str, Any] = {}
+        if temperature is not None and not is_reasoning_model(judge_model):
+            api_kwargs["temperature"] = temperature
+
+        responses = cache.bulk_get_cache_or_run(
+            given_ids_texts=requests,
+            max_workers=workers,
+            read_from_cache=read_from_cache,
+            write_to_cache=write_to_cache,
+            **api_kwargs,
+        )
+        session.commit()
 
         all_rows: list[dict[str, Any]] = []
         all_verdicts: list[dict[str, Any]] = []
-
-        if workers <= 1:
-            for i, (eid, b) in enumerate(bundles.items(), start=1):
-                display_name = str(b["name"])[:80]
-                print(f"  [{i}/{len(bundles)}] {display_name}")
-                rows, verdict = judge_entity(
-                    client, judge_model, eid, b["name"], b["description"],
-                    b["matches"], config, system_prompt,
-                )
-                all_rows.extend(rows)
-                if verdict is not None:
-                    all_verdicts.append(verdict)
-        else:
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                futures = {
-                    pool.submit(
-                        judge_entity,
-                        client, judge_model, eid, b["name"], b["description"],
-                        b["matches"], config, system_prompt,
-                    ): (eid, b["name"])
-                    for eid, b in bundles.items()
-                }
-                done = 0
-                for fut in as_completed(futures):
-                    eid, name = futures[fut]
-                    done += 1
-                    rows, verdict = fut.result()
-                    display = str(name)[:60]
-                    v_str = verdict.get("verdict") if verdict else "ERR"
-                    print(
-                        f"  [{done}/{len(futures)}] {display} -> "
-                        f"{len(rows)} scored matches, verdict={v_str}"
-                    )
-                    all_rows.extend(rows)
-                    if verdict is not None:
-                        all_verdicts.append(verdict)
+        for given_id, _ in requests:
+            eid, b = bundle_by_given_id[given_id]
+            resp = responses.get(given_id)
+            if resp is None:
+                # API failed and got recorded as an error row; no
+                # judgment available for this entity.
+                continue
+            try:
+                judgment = JudgmentResponse.model_validate_json(resp["response_text"])
+            except Exception as exc:  # noqa: BLE001
+                print(f"  [warn] bad JSON for {str(b['name'])[:60]}: {exc}")
+                continue
+            rows, verdict = _parse_judgment(
+                eid, b["name"], b["matches"], judgment, config,
+            )
+            all_rows.extend(rows)
+            if verdict is not None:
+                all_verdicts.append(verdict)
 
         scored_df = pd.DataFrame(all_rows)
         _write_table(scored_df, output_path)
@@ -969,6 +1092,11 @@ def run_judge_evaluation(
 
 __all__ = [
     "JudgeConfig",
+    "JudgeCache",
+    "JudgmentResponse",
+    "MatchScore",
+    "LevelMatches",
+    "AlignmentVerdict",
     "DEFAULT_SCORING_RUBRIC",
     "DEFAULT_STRICTNESS",
     "build_judge_system_prompt",
@@ -976,7 +1104,6 @@ __all__ = [
     "lookup_def",
     "collect_entity_matches",
     "has_any_matches",
-    "judge_entity",
     "summarize",
     "per_entity_means",
     "failure_samples",
