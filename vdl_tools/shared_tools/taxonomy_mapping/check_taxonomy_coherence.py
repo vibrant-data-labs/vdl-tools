@@ -66,9 +66,11 @@ Library entry point::
 All OpenAI calls flow through the SQL prompt/response cache
 (``CoherenceAuditCache`` extends ``InstructorPRC``). Cache keys: the
 fixed system prompt + the ``AuditResponse`` schema -> ``prompt_id``;
-``f"{parent_level}|{parent_name}"`` -> ``given_id``; hash of the user
-prompt body (parent definition + children) -> ``text_id``. Re-running
-the audit against an unchanged taxonomy is a no-API run.
+``f"{parent_level}|{parent_name}|{hash(user prompt body)}"`` ->
+``given_id`` (the content hash disambiguates same-named parents that
+recur at one level under different parents); hash of the user prompt
+body (parent definition + children) -> ``text_id``. Re-running the
+audit against an unchanged taxonomy is a no-API run.
 
 The output frame has one row per parent node with: parent level/name,
 n_children, verdict (ok/minor_gaps/major_gaps), summary, coverage_gaps,
