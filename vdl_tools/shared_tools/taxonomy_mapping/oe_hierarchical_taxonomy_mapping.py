@@ -45,6 +45,7 @@ through the SQL prompt/response cache — see
 
 from __future__ import annotations
 
+import contextlib
 import re
 from pathlib import Path
 from typing import Literal
@@ -978,7 +979,10 @@ def map_to_oneearth(
         SQLAlchemy session used by the SQL prompt/response cache. Build
         via ``vdl_tools.shared_tools.database_cache.database_utils.
         get_session``; the caller's ``with get_session() as session:``
-        block scopes the transaction.
+        block scopes the transaction and remains open and owned by the
+        caller (this function never commits or closes a session it did
+        not create). When ``None`` (default), a session is opened and
+        closed internally for the duration of the call.
     model
         OpenAI model id. Default ``MODEL`` (currently ``gpt-5.4-nano``).
     max_workers
@@ -1103,7 +1107,15 @@ def map_to_oneearth(
         else:
             system_prompt = _PROMPT_BY_MODE[prompt_mode]
 
-    with get_session(session=session) as session:
+    # Own the session lifecycle only when the caller didn't supply one.
+    # get_session() force-commits and closes the session it yields, so
+    # wrapping a caller-owned session here would surprise-commit and close
+    # it out from under the caller's own `with get_session()` block. When
+    # the caller passed a session, use it directly and leave commit/close
+    # to them; classify_entities / recover_unmatched commit internally.
+    owns_session = session is None
+    session_cm = get_session() if owns_session else contextlib.nullcontext(session)
+    with session_cm as session:
         per_row_df = classify_entities(
             session=session,
             tables=tables,
