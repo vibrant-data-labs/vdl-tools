@@ -77,6 +77,7 @@ the same data as a human-readable Markdown report.
 """
 from __future__ import annotations
 
+import hashlib
 from typing import Any, Iterable
 
 import pandas as pd
@@ -369,13 +370,20 @@ def check_taxonomy_coherence(
 
     cache = CoherenceAuditCache(session=session, model=model)
 
-    # Build (given_id, user_text) pairs. given_id is taxonomy-agnostic —
-    # the system prompt + AuditResponse schema (captured in prompt_id)
-    # already distinguish this audit from other tools; level + name
-    # uniquely identify a parent within one taxonomy.
+    # Build (given_id, user_text) pairs. The system prompt + AuditResponse
+    # schema (captured in prompt_id) distinguish this audit from other
+    # tools. Within one taxonomy, level + name is NOT unique — the same
+    # node name can recur under different parents (e.g. "Buildings" under
+    # two pillars), and those parents have different children. Since
+    # ``bulk_get_cache_or_run`` returns a dict keyed by given_id alone,
+    # a bare "level|name" key would let two such parents collide and share
+    # one response. Append a short hash of the user prompt (parent
+    # definition + children) so distinct parents get distinct keys; two
+    # parents with genuinely identical audits still collapse (correct),
+    # and an unchanged taxonomy re-runs to a full cache hit because the
+    # hash is content-derived.
     requests: list[tuple[str, str]] = []
     for t in tasks:
-        given_id = f"{t['parent_level']}|{t['parent_name']}"
         user_text = _build_user_prompt(
             parent_level=t["parent_level"],
             child_level=t["child_level"],
@@ -383,6 +391,8 @@ def check_taxonomy_coherence(
             parent_definition=t["parent_definition"],
             children=t["children"],
         )
+        content_hash = hashlib.sha1(user_text.encode("utf-8")).hexdigest()[:8]
+        given_id = f"{t['parent_level']}|{t['parent_name']}|{content_hash}"
         requests.append((given_id, user_text))
 
     # Restore deterministic audits (temperature=0); reasoning models
