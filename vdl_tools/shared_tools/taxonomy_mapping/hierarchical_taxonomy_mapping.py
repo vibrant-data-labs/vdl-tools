@@ -841,61 +841,81 @@ def classify_entities(
                         leaves.append(branch)
                     continue
 
-                matches = _clean_matches(
-                    parsed.matches, candidates, key_col, lvl["name"],
-                    confidence_threshold,
-                )
-                if not matches:
+                # Descent / fan-out. Any unexpected failure here (dtype
+                # mismatch on the candidate filter, empty `.iloc[0]`, a
+                # malformed candidate table, etc.) must NOT abort the
+                # whole batch after the paid bulk call already ran.
+                # Isolate it per branch: log and degrade to no-match,
+                # matching the legacy `_classify_one` null-row behavior.
+                # Child branches are staged locally and only committed
+                # once the whole branch succeeds, so a mid-fan-out
+                # exception cannot leave partial descendants behind.
+                try:
+                    matches = _clean_matches(
+                        parsed.matches, candidates, key_col, lvl["name"],
+                        confidence_threshold,
+                    )
+                    if not matches:
+                        if branch["leaf"] is not empty_leaf:
+                            leaves.append(branch)
+                        continue
+
+                    branch_leaves: list[dict[str, Any]] = []
+                    branch_active: list[dict[str, Any]] = []
+                    for i, m in enumerate(matches):
+                        cand_row = candidates[candidates[key_col] == m["name"]].iloc[0]
+                        new_names = dict(branch["names"])
+                        new_names[out_col] = m["name"]
+                        new_parent_path = dict(branch["parent_path"])
+                        if not is_last_level:
+                            new_parent_path[child_filter_col] = cand_row[child_filter_value_col]
+                        new_leaf = {
+                            "deepest_match": lvl["name"],
+                            "leaf_definition": str(cand_row["Definition"]).strip(),
+                            "mode_of_operation": m["mode_of_operation"],
+                            "evidence": m["evidence"],
+                            "reason": m["reason"],
+                            "confidence": m.get("confidence"),
+                        }
+                        new_path_meta = dict(branch["path_meta"])
+                        new_path_meta[out_col] = {
+                            "evidence": m["evidence"],
+                            "reason": m["reason"],
+                            "confidence": m.get("confidence"),
+                            "mode_of_operation": m["mode_of_operation"],
+                        }
+                        new_branch = {
+                            "entity_id": branch["entity_id"],
+                            "entity_name": branch["entity_name"],
+                            "entity_description": branch["entity_description"],
+                            "names": new_names,
+                            "parent_path": new_parent_path,
+                            "leaf": new_leaf,
+                            "path_meta": new_path_meta,
+                            "start_idx": branch["start_idx"],
+                        }
+                        # Indirect-fanout stop: an `indirect` (advocacy /
+                        # policy / education) match descends only when it
+                        # is the SOLE match at this step. Multiple indirect
+                        # siblings = broad advocacy; naming any specific
+                        # child would be guesswork, so record at the
+                        # current level instead.
+                        indirect_fanout = (
+                            m["mode_of_operation"] == "indirect"
+                            and len(matches) > 1
+                        )
+                        if is_last_level or i >= descent_fanout_cap or indirect_fanout:
+                            branch_leaves.append(new_branch)
+                        else:
+                            branch_active.append(new_branch)
+                    leaves.extend(branch_leaves)
+                    next_active.extend(branch_active)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(f"  [warn] descent failed at {lvl['name']} "
+                          f"for {branch['entity_id']}: {exc}")
                     if branch["leaf"] is not empty_leaf:
                         leaves.append(branch)
                     continue
-
-                for i, m in enumerate(matches):
-                    cand_row = candidates[candidates[key_col] == m["name"]].iloc[0]
-                    new_names = dict(branch["names"])
-                    new_names[out_col] = m["name"]
-                    new_parent_path = dict(branch["parent_path"])
-                    if not is_last_level:
-                        new_parent_path[child_filter_col] = cand_row[child_filter_value_col]
-                    new_leaf = {
-                        "deepest_match": lvl["name"],
-                        "leaf_definition": str(cand_row["Definition"]).strip(),
-                        "mode_of_operation": m["mode_of_operation"],
-                        "evidence": m["evidence"],
-                        "reason": m["reason"],
-                        "confidence": m.get("confidence"),
-                    }
-                    new_path_meta = dict(branch["path_meta"])
-                    new_path_meta[out_col] = {
-                        "evidence": m["evidence"],
-                        "reason": m["reason"],
-                        "confidence": m.get("confidence"),
-                        "mode_of_operation": m["mode_of_operation"],
-                    }
-                    new_branch = {
-                        "entity_id": branch["entity_id"],
-                        "entity_name": branch["entity_name"],
-                        "entity_description": branch["entity_description"],
-                        "names": new_names,
-                        "parent_path": new_parent_path,
-                        "leaf": new_leaf,
-                        "path_meta": new_path_meta,
-                        "start_idx": branch["start_idx"],
-                    }
-                    # Indirect-fanout stop: an `indirect` (advocacy /
-                    # policy / education) match descends only when it
-                    # is the SOLE match at this step. Multiple indirect
-                    # siblings = broad advocacy; naming any specific
-                    # child would be guesswork, so record at the
-                    # current level instead.
-                    indirect_fanout = (
-                        m["mode_of_operation"] == "indirect"
-                        and len(matches) > 1
-                    )
-                    if is_last_level or i >= descent_fanout_cap or indirect_fanout:
-                        leaves.append(new_branch)
-                    else:
-                        next_active.append(new_branch)
 
         active = next_active
         if not active:
