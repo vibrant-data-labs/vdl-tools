@@ -951,6 +951,7 @@ def map_to_oneearth(
     walk_recovered: bool = False,
     read_from_cache: bool = True,
     write_to_cache: bool = True,
+    filter_by_model: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Classify a DataFrame of entities against the One Earth taxonomy.
 
@@ -990,6 +991,19 @@ def map_to_oneearth(
     write_to_cache
         When False, leave the cache untouched (read-only / passthrough).
         Default True.
+    filter_by_model
+        When True (default), cache rows are scoped by model name, so the
+        same taxonomy + prompt classified under different models (e.g.
+        ``gpt-5.4-nano`` vs ``gpt-4.1``) get separate cache entries. This
+        is the safe default for the A/B model-comparison workflow this
+        module supports: with ``False`` a second run under a different
+        model would silently reuse the first model's cached answers,
+        corrupting the comparison. Threaded into the classification walk,
+        the recovery pass, and the seeded re-walk so all three isolate by
+        model consistently. Flipping this to True costs nothing on
+        same-model re-runs — the cache's composite PK always stamps the
+        model on write, so existing rows still hit; only cross-model
+        reuse (which you want to avoid) becomes a miss.
     taxonomy_path
         Path to the taxonomy xlsx. If omitted, ``taxonomy_dir`` must be
         provided and the latest ``OE Solutions Terms *VDL.xlsx`` found in
@@ -1107,6 +1121,7 @@ def map_to_oneearth(
             read_from_cache=read_from_cache,
             write_to_cache=write_to_cache,
             match_schema=match_schema,
+            filter_by_model=filter_by_model,
         )
         if recover_unmatched:
             # Default top-level column + category choices from the level spec +
@@ -1125,6 +1140,7 @@ def map_to_oneearth(
                 max_workers=max_workers,
                 read_from_cache=read_from_cache,
                 write_to_cache=write_to_cache,
+                filter_by_model=filter_by_model,
             )
 
         if walk_recovered:
@@ -1134,7 +1150,7 @@ def map_to_oneearth(
                 descent_fanout_cap=descent_fanout_cap, max_workers=max_workers,
                 confidence_threshold=confidence_threshold, emit_per_level=emit_per_level,
                 read_from_cache=read_from_cache, write_to_cache=write_to_cache,
-                match_schema=match_schema,
+                match_schema=match_schema, filter_by_model=filter_by_model,
             )
 
     collapsed_df = collapse_to_one_row_per_uid(per_row_df, id_col=id_col)
@@ -1145,7 +1161,7 @@ def _walk_recovered_entities(
     per_row_df: pd.DataFrame, *, session, tables, system_prompt, id_col, name_col,
     text_col, model, descent_fanout_cap, max_workers, confidence_threshold,
     emit_per_level, read_from_cache=True, write_to_cache=True,
-    match_schema: type[BaseModel] | None = None,
+    match_schema: type[BaseModel] | None = None, filter_by_model: bool = True,
 ) -> pd.DataFrame:
     """Seed the walk at each recovery-recovered entity's pillar and descend.
 
@@ -1192,7 +1208,7 @@ def _walk_recovered_entities(
         confidence_threshold=confidence_threshold, emit_per_level=emit_per_level,
         seed_col=recovered_col,
         read_from_cache=read_from_cache, write_to_cache=write_to_cache,
-        match_schema=match_schema,
+        match_schema=match_schema, filter_by_model=filter_by_model,
     )
 
     kept = per_row_df[~per_row_df[id_col].isin(rec_ids)]

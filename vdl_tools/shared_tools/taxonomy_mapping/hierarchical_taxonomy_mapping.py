@@ -1118,6 +1118,7 @@ def recover_unmatched(
     read_from_cache: bool = True,
     write_to_cache: bool = True,
     temperature: float | None = 0,
+    filter_by_model: bool = False,
 ) -> pd.DataFrame:
     """Second-stage scope check on entities the walk left unmatched.
 
@@ -1149,6 +1150,12 @@ def recover_unmatched(
     prompt must instruct the model to populate the ``category`` field of
     the structured-output schema with the exact name of an in-scope
     top-level node (or null); ``ScopeDecision`` is the source of truth.
+
+    ``filter_by_model`` (default False, matching the engine default)
+    scopes the ``ScopeRecoveryCache`` rows by model name. Pass True when
+    A/B-comparing recovery models against the same scope prompt so the
+    second model does not silently reuse the first's cached decisions;
+    ``map_to_oneearth`` forwards its own ``filter_by_model`` here.
     """
     if top_level_col is None or category_choices is None or scope_prompt is None:
         if levels is None or tables is None:
@@ -1186,6 +1193,7 @@ def recover_unmatched(
             session=session,
             scope_prompt=scope_prompt,
             model=model,
+            filter_by_model=filter_by_model,
         )
 
         requests: list[tuple[str, str]] = []

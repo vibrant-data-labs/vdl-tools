@@ -283,6 +283,7 @@ def check_taxonomy_coherence(
     read_from_cache: bool = True,
     write_to_cache: bool = True,
     temperature: float | None = 0,
+    filter_by_model: bool = True,
 ) -> pd.DataFrame:
     """Audit parent-child coherence at every non-leaf level transition.
 
@@ -322,6 +323,13 @@ def check_taxonomy_coherence(
         deterministic audits (matching the legacy path). Automatically
         suppressed for reasoning models (``gpt-5*``), which reject it.
         Pass ``None`` to omit entirely.
+    filter_by_model
+        When True (default), scope ``CoherenceAuditCache`` lookups by
+        ``model`` so auditing the same taxonomy under a different model
+        does not silently reuse the prior model's cached audits. The
+        cache write PK always stamps ``model_name``, so this is cost-free
+        on same-model re-runs; pass False to restore the legacy
+        cross-model-sharing behavior.
 
     Returns
     -------
@@ -368,7 +376,8 @@ def check_taxonomy_coherence(
     if not tasks:
         return pd.DataFrame()
 
-    cache = CoherenceAuditCache(session=session, model=model)
+    cache = CoherenceAuditCache(
+        session=session, model=model, filter_by_model=filter_by_model)
 
     # Build (given_id, user_text) pairs. The system prompt + AuditResponse
     # schema (captured in prompt_id) distinguish this audit from other

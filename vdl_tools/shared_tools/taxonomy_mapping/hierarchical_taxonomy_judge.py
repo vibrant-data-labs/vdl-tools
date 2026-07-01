@@ -835,6 +835,7 @@ def run_judge_evaluation(
     read_from_cache: bool = True,
     write_to_cache: bool = True,
     temperature: float | None = 0,
+    filter_by_model: bool = True,
 ) -> None:
     """Run the full judge pipeline: collect bundles, judge, summarize, write outputs.
 
@@ -879,6 +880,16 @@ def run_judge_evaluation(
         model_name)`` and overwrite each other's cache row, thrashing
         forever on every entity whose user prompt differs between the
         two passes. Default ``""`` (no prefix).
+    filter_by_model
+        When True (default), scope ``JudgeCache`` lookups by
+        ``judge_model`` so re-judging the same entities under a
+        different judge model does not silently reuse the prior model's
+        cached verdicts. Orthogonal to ``given_id_prefix``: the prefix
+        namespaces *different classifier outputs* judged by one model,
+        while this namespaces *different judge models* over the same
+        output. Cost-free on same-model re-runs (the write PK always
+        stamps ``model_name``); pass False to restore the legacy
+        cross-model-sharing behavior.
     temperature
         Sampling temperature for the judge model. Defaults to ``0`` for
         deterministic judging (matching the legacy path). Automatically
@@ -972,6 +983,7 @@ def run_judge_evaluation(
             session=session,
             system_prompt=system_prompt,
             model=judge_model,
+            filter_by_model=filter_by_model,
         )
 
         # Build one (given_id, user_text) per entity. given_id is the
