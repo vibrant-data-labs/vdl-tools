@@ -620,6 +620,7 @@ def classify_entities(
     write_to_cache: bool = True,
     match_schema: type[BaseModel] | None = None,
     temperature: float | None = 0,
+    filter_by_model: bool = False,
 ) -> pd.DataFrame:
     """Classify many entities against the taxonomy via a SQL-cached walk.
 
@@ -712,6 +713,15 @@ def classify_entities(
         Automatically suppressed for reasoning models (``gpt-5*``),
         which reject the parameter — those models use their own
         sampling internally. Pass ``None`` to omit entirely.
+    filter_by_model
+        When True, cache rows are scoped by model name, so the same
+        prompt + text under different models (e.g. ``gpt-4.1`` vs
+        ``gpt-5.4-nano``) get separate cache entries. Default False
+        shares rows across models — which means a lookup can return
+        another model's answer for an identical prompt + text. **Set
+        this True whenever you run more than one model against the same
+        taxonomy**, otherwise a model switch silently reuses the prior
+        model's cached results.
     """
     levels = normalize_levels(levels)
     last_idx = levels[-1]["idx"]
@@ -735,6 +745,7 @@ def classify_entities(
         system_prompt=system_prompt,
         model=model,
         response_model=response_model,
+        filter_by_model=filter_by_model,
     )
 
     # Initialize one branch per entity. Carry each input row's columns
