@@ -1067,8 +1067,12 @@ def collapse_to_one_row_per_uid(
 # (``taxonomy_mapping.add_mapping_to_orgs`` + the ``distr_df`` half of
 # ``add_taxonomy_mapping``), operating on ``classify_entities``' per-row
 # output instead of embedding matches. Everything here is expressible in
-# terms of (per_row, levels, id_col, name_col, mapping_name) — no domain
-# knowledge — so project drivers stay thin.
+# terms of (per_row_mapping_df, levels, id_col, name_col, mapping_name) —
+# no domain knowledge — so project drivers stay thin.
+#
+# ``per_row_mapping_df`` throughout is the DataFrame returned by
+# ``classify_entities``: one row per (entity, matched leaf path), plus one
+# all-null row per entity the walk left unmatched.
 
 def _path_depth(row, output_cols: list[str]) -> int:
     """0-based index of the deepest non-empty level value in a per-row record.
@@ -1085,33 +1089,34 @@ def _path_depth(row, output_cols: list[str]) -> int:
 
 
 def select_primary_paths(
-    per_row: pd.DataFrame,
+    per_row_mapping_df: pd.DataFrame,
     levels: list[dict],
     id_col: str,
     strategy="deepest",
 ) -> pd.DataFrame:
-    """Pick one "primary" match row per id from the per-row output.
+    """Pick one "primary" match row per id from the per-row mapping frame.
 
     ``strategy="deepest"`` keeps the row whose deepest non-empty level is
     deepest (first row on ties — per-row order is walk order, so this is
     deterministic). A callable can be passed instead — it receives
-    ``(per_row, levels, id_col)`` and must return the same shape — which is
-    the hook where an LLM primary-picker (the hierarchical successor of
-    ``run_primary_category_selection``) can slot in later.
+    ``(per_row_mapping_df, levels, id_col)`` and must return the same shape
+    — which is the hook where an LLM primary-picker (the hierarchical
+    successor of ``run_primary_category_selection``) can slot in later.
 
     Returns one row per id with columns ``[id_col, *output_cols,
     "cat_level"]`` where ``cat_level`` is the primary path's 0-based depth
     (pd.NA for ids with no match; their level values are all null).
     """
     if callable(strategy):
-        return strategy(per_row, levels, id_col)
+        return strategy(per_row_mapping_df, levels, id_col)
     if strategy != "deepest":
         raise ValueError(f"Unknown primary strategy {strategy!r}; expected 'deepest' or a callable")
 
     levels = normalize_levels(levels)
     output_cols = [lvl["output_col"] for lvl in levels]
 
-    work = per_row[[id_col] + [c for c in output_cols if c in per_row.columns]].copy()
+    present = [c for c in output_cols if c in per_row_mapping_df.columns]
+    work = per_row_mapping_df[[id_col] + present].copy()
     for c in output_cols:
         if c not in work.columns:
             work[c] = None
@@ -1126,7 +1131,7 @@ def select_primary_paths(
 
 def attach_mapping_columns(
     df: pd.DataFrame,
-    per_row: pd.DataFrame,
+    per_row_mapping_df: pd.DataFrame,
     levels: list[dict],
     id_col: str,
     mapping_name: str | None = None,
@@ -1158,15 +1163,15 @@ def attach_mapping_columns(
     suffix = f"_{mapping_name}" if mapping_name else ""
     category_col = mapping_name if mapping_name else "mapped_category"
 
-    grouped = per_row.groupby(id_col, sort=False)
+    grouped = per_row_mapping_df.groupby(id_col, sort=False)
     all_maps: dict[int, dict] = {}
     for i, col in enumerate(output_cols):
-        if col in per_row.columns:
+        if col in per_row_mapping_df.columns:
             all_maps[i] = grouped[col].apply(lambda s: _dedup_preserve(s.tolist())).to_dict()
         else:
             all_maps[i] = {}
 
-    primary_df = select_primary_paths(per_row, levels, id_col, strategy=primary)
+    primary_df = select_primary_paths(per_row_mapping_df, levels, id_col, strategy=primary)
     primary_df = primary_df.set_index(id_col)
 
     def _value_at_depth(r):
@@ -1193,13 +1198,13 @@ def attach_mapping_columns(
 
 
 def distribute_funding_from_matches(
-    per_row: pd.DataFrame,
+    per_row_mapping_df: pd.DataFrame,
     levels: list[dict],
     id_col: str,
     name_col: str,
     max_level: int = 2,
 ) -> pd.DataFrame:
-    """Build the per-(org, path) ``FundingFrac`` frame from per-row output.
+    """Build the per-(org, path) ``FundingFrac`` frame from the mapping frame.
 
     Exact-contract adapter onto ``redistribute_funding_fracs`` — the same
     single call that produced ``distr_df`` inside the embedding pipeline's
@@ -1225,8 +1230,8 @@ def distribute_funding_from_matches(
     levels = normalize_levels(levels)
     output_cols = [lvl["output_col"] for lvl in levels]
 
-    depths = per_row.apply(lambda r: _path_depth(r, output_cols), axis=1)
-    matched = per_row[depths >= 0]
+    depths = per_row_mapping_df.apply(lambda r: _path_depth(r, output_cols), axis=1)
+    matched = per_row_mapping_df[depths >= 0]
     paths_df = pd.DataFrame({
         id_col: matched[id_col],
         name_col: matched[name_col],
@@ -1252,24 +1257,34 @@ def distribute_funding_from_matches(
 
 def add_hierarchical_taxonomy_mapping(
     *,
-    session,
     df: pd.DataFrame,
-    tables: dict[int, pd.DataFrame],
     levels: list[dict],
-    system_prompt: str,
     id_col: str,
     name_col: str,
-    text_col: str,
-    match_schema: type[BaseModel] | None = None,
-    model: str = "gpt-4.1",
-    descent_fanout_cap: int = 3,
-    max_workers: int = 8,
     mapping_name: str | None = None,
     primary="deepest",
     distribute_funding: bool = True,
     max_distr_funding_level: int = 2,
     funding_name_col: str | None = None,
     pad_to_n_levels: int | None = None,
+    # --- classification inputs -------------------------------------------
+    # Either pass a precomputed ``per_row_mapping_df`` (skip classification
+    # entirely — the escape hatch for drivers with a custom classify wrapper,
+    # e.g. drawdown's scope-recovery ``classify_entities_extended``), or
+    # supply the inputs below and this orchestrates the classify call.
+    # ``classify_fn`` is called with the standard ``classify_entities``
+    # kwargs, so an injected wrapper must accept that signature (or bake its
+    # extras in via ``functools.partial``).
+    per_row_mapping_df: pd.DataFrame | None = None,
+    classify_fn=classify_entities,
+    session=None,
+    tables: dict[int, pd.DataFrame] | None = None,
+    system_prompt: str | None = None,
+    text_col: str | None = None,
+    match_schema: type[BaseModel] | None = None,
+    model: str = "gpt-4.1",
+    descent_fanout_cap: int = 3,
+    max_workers: int = 8,
     read_from_cache: bool = True,
     write_to_cache: bool = True,
     temperature: float | None = 0,
@@ -1282,6 +1297,15 @@ def add_hierarchical_taxonomy_mapping(
     contract, with the hierarchical inputs (levels / prompt /
     match_schema) in place of embeddings.
 
+    Classification is injectable so callers with a custom classify stage
+    aren't excluded from the post-processing: either pass a precomputed
+    ``per_row_mapping_df`` (this skips classification), or pass a
+    ``classify_fn`` (defaults to ``classify_entities``) plus the standard
+    classify inputs (``session``, ``tables``, ``system_prompt``,
+    ``text_col``, ...). Drivers like drawdown that add a scope-recovery
+    re-walk pass their recovered frame in as ``per_row_mapping_df`` and keep
+    that stage.
+
     ``funding_name_col`` lets the funding frame carry a different name
     column than the one shown to the model in prompts (defaults to
     ``name_col``). Note the prompt name feeds the cache's ``text_id``, so
@@ -1290,29 +1314,42 @@ def add_hierarchical_taxonomy_mapping(
     Performs no file I/O — callers decide where the frames land, so data
     lineage stays with the project.
 
-    Returns ``(df_with_columns, distr_df | None, per_row)``; ``per_row``
-    is returned for lineage / audit.
+    Returns ``(df_with_columns, distr_df | None, per_row_mapping_df)``; the
+    mapping frame is returned for lineage / audit.
     """
-    per_row = classify_entities(
-        session=session,
-        tables=tables,
-        levels=levels,
-        system_prompt=system_prompt,
-        entities=df,
-        id_col=id_col,
-        name_col=name_col,
-        text_col=text_col,
-        model=model,
-        descent_fanout_cap=descent_fanout_cap,
-        max_workers=max_workers,
-        read_from_cache=read_from_cache,
-        write_to_cache=write_to_cache,
-        match_schema=match_schema,
-        temperature=temperature,
-    )
+    if per_row_mapping_df is None:
+        missing = [
+            n for n, v in (
+                ("session", session), ("tables", tables),
+                ("system_prompt", system_prompt), ("text_col", text_col),
+            ) if v is None
+        ]
+        if missing:
+            raise ValueError(
+                "add_hierarchical_taxonomy_mapping needs "
+                f"{missing} to classify — supply them, or pass a precomputed "
+                "per_row_mapping_df."
+            )
+        per_row_mapping_df = classify_fn(
+            session=session,
+            tables=tables,
+            levels=levels,
+            system_prompt=system_prompt,
+            entities=df,
+            id_col=id_col,
+            name_col=name_col,
+            text_col=text_col,
+            model=model,
+            descent_fanout_cap=descent_fanout_cap,
+            max_workers=max_workers,
+            read_from_cache=read_from_cache,
+            write_to_cache=write_to_cache,
+            match_schema=match_schema,
+            temperature=temperature,
+        )
 
     df = attach_mapping_columns(
-        df, per_row, levels, id_col,
+        df, per_row_mapping_df, levels, id_col,
         mapping_name=mapping_name,
         primary=primary,
         pad_to_n_levels=pad_to_n_levels,
@@ -1321,11 +1358,11 @@ def add_hierarchical_taxonomy_mapping(
     distr = None
     if distribute_funding:
         distr = distribute_funding_from_matches(
-            per_row, levels, id_col,
+            per_row_mapping_df, levels, id_col,
             name_col=funding_name_col or name_col,
             max_level=max_distr_funding_level,
         )
-    return df, distr, per_row
+    return df, distr, per_row_mapping_df
 
 
 # ---------------------------------------------------------------------------
