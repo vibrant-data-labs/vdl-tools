@@ -1074,6 +1074,16 @@ def collapse_to_one_row_per_uid(
 # ``classify_entities``: one row per (entity, matched leaf path), plus one
 # all-null row per entity the walk left unmatched.
 
+def _clean_str(v):
+    """Trimmed level value, or ``None`` when blank / non-string.
+
+    Single source of truth for "is this level cell a real match?" — shared by
+    ``_path_depth``, the primary-path columns, and the funding frame so all
+    three agree on both emptiness and whitespace normalization.
+    """
+    return v.strip() if isinstance(v, str) and v.strip() else None
+
+
 def _path_depth(row, output_cols: list[str]) -> int:
     """0-based index of the deepest non-empty level value in a per-row record.
 
@@ -1082,8 +1092,7 @@ def _path_depth(row, output_cols: list[str]) -> int:
     """
     depth = -1
     for i, col in enumerate(output_cols):
-        v = row.get(col)
-        if isinstance(v, str) and v.strip():
+        if _clean_str(row.get(col)) is not None:
             depth = i
     return depth
 
@@ -1116,7 +1125,10 @@ def select_primary_paths(
     output_cols = [lvl["output_col"] for lvl in levels]
 
     present = [c for c in output_cols if c in per_row_mapping_df.columns]
-    work = per_row_mapping_df[[id_col] + present].copy()
+    # reset_index so idxmax labels + .loc select exactly one row per id even
+    # when a precomputed per_row_mapping_df (the escape hatch) carries a
+    # non-unique index (e.g. a pd.concat'd recovery frame).
+    work = per_row_mapping_df[[id_col] + present].reset_index(drop=True)
     for c in output_cols:
         if c not in work.columns:
             work[c] = None
@@ -1125,7 +1137,12 @@ def select_primary_paths(
     # idxmax keeps the first occurrence of the max depth per id.
     idx = work.groupby(id_col, sort=False)["_depth"].idxmax()
     primary = work.loc[idx, [id_col] + output_cols + ["_depth"]].reset_index(drop=True)
-    primary["cat_level"] = primary["_depth"].map(lambda d: pd.NA if d < 0 else int(d))
+    # Nullable Int64 (not object) so `cat_level` stays a real integer column —
+    # pd.NA for no-match ids — and legacy `> max_level` / `!= 0` comparisons
+    # don't hit object-dtype surprises.
+    primary["cat_level"] = pd.array(
+        [pd.NA if d < 0 else int(d) for d in primary["_depth"]], dtype="Int64"
+    )
     return primary.drop(columns=["_depth"])
 
 
@@ -1163,6 +1180,17 @@ def attach_mapping_columns(
     suffix = f"_{mapping_name}" if mapping_name else ""
     category_col = mapping_name if mapping_name else "mapped_category"
 
+    # The mapping columns are joined onto df by id *value* (ids.map below), so a
+    # dtype skew (e.g. str "123" vs int64 123) silently yields all-empty
+    # columns. Warn rather than fail so a genuine no-match run still passes.
+    if df[id_col].dtype != per_row_mapping_df[id_col].dtype:
+        logger.warning(
+            "attach_mapping_columns: %r dtype differs between df (%s) and "
+            "per_row_mapping_df (%s); the value join will silently produce "
+            "empty mapping columns on mismatch.",
+            id_col, df[id_col].dtype, per_row_mapping_df[id_col].dtype,
+        )
+
     grouped = per_row_mapping_df.groupby(id_col, sort=False)
     all_maps: dict[int, dict] = {}
     for i, col in enumerate(output_cols):
@@ -1178,7 +1206,7 @@ def attach_mapping_columns(
         d = r["cat_level"]
         if pd.isna(d):
             return None
-        return r[output_cols[int(d)]]
+        return _clean_str(r[output_cols[int(d)]])
 
     primary_category = primary_df.apply(_value_at_depth, axis=1)
 
@@ -1186,7 +1214,9 @@ def attach_mapping_columns(
     for i, col in enumerate(output_cols):
         # `.get(x, ())` + list() yields a fresh list per row — no aliasing.
         df[f"all_level{i}{suffix}"] = ids.map(lambda x, i=i: list(all_maps[i].get(x, ())))
-        df[f"level{i}{suffix}"] = ids.map(primary_df[col])
+        # _clean_str so level{i} matches the stripped all_level{i} / funding
+        # frame values (avoids "Solar " vs "Solar" join misses downstream).
+        df[f"level{i}{suffix}"] = ids.map(primary_df[col]).map(_clean_str)
     df[category_col] = ids.map(primary_category)
     df[f"cat_level{suffix}"] = ids.map(primary_df["cat_level"])
 
@@ -1230,6 +1260,16 @@ def distribute_funding_from_matches(
     levels = normalize_levels(levels)
     output_cols = [lvl["output_col"] for lvl in levels]
 
+    # redistribute_funding_fracs returns None (not a frame) when the taxonomy
+    # is shallower than max_level; clamp to the deepest level the taxonomy
+    # actually has so a 1-/2-level taxonomy still gets a funding frame instead
+    # of a silent None masquerading as "funding disabled".
+    max_level = min(max_level, len(output_cols) - 1)
+
+    # reset_index so the boolean masks / positional column assembly below align
+    # by position even when a precomputed per_row_mapping_df carries a
+    # non-unique index.
+    per_row_mapping_df = per_row_mapping_df.reset_index(drop=True)
     depths = per_row_mapping_df.apply(lambda r: _path_depth(r, output_cols), axis=1)
     matched = per_row_mapping_df[depths >= 0]
     paths_df = pd.DataFrame({
@@ -1238,19 +1278,21 @@ def distribute_funding_from_matches(
         "cat_level": depths[depths >= 0].astype(int),
     })
     for i, col in enumerate(output_cols):
-        paths_df[f"level{i}"] = matched[col].map(
-            lambda v: v.strip() if isinstance(v, str) and v.strip() else None
-        )
+        paths_df[f"level{i}"] = matched[col].map(_clean_str)
 
     if paths_df.empty:
         logger.warning("distribute_funding_from_matches: no matched paths")
         paths_df["FundingFrac"] = pd.Series(dtype=float)
         return paths_df
 
+    # When name_col *is* the id column, don't duplicate it into keepcols —
+    # redistribute_funding_fracs does df.set_index(id_attr)[keepcols], which
+    # would KeyError on the now-consumed id column.
+    keepcols = [] if name_col == id_col else [name_col]
     return redistribute_funding_fracs(
         paths_df,
         id_attr=id_col,
-        keepcols=[name_col],
+        keepcols=keepcols,
         max_level=max_level,
     )
 
@@ -1288,6 +1330,7 @@ def add_hierarchical_taxonomy_mapping(
     read_from_cache: bool = True,
     write_to_cache: bool = True,
     temperature: float | None = 0,
+    filter_by_model: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame | None, pd.DataFrame]:
     """Classify entities and attach the full legacy mapping outputs.
 
@@ -1310,6 +1353,11 @@ def add_hierarchical_taxonomy_mapping(
     column than the one shown to the model in prompts (defaults to
     ``name_col``). Note the prompt name feeds the cache's ``text_id``, so
     keep ``name_col`` stable across runs to preserve cache hits.
+
+    ``filter_by_model`` is forwarded to ``classify_entities`` — set it True
+    whenever you run more than one ``model`` against the same taxonomy +
+    prompt, otherwise a model switch silently reuses the prior model's
+    cached matches.
 
     Performs no file I/O — callers decide where the frames land, so data
     lineage stays with the project.
@@ -1346,6 +1394,7 @@ def add_hierarchical_taxonomy_mapping(
             write_to_cache=write_to_cache,
             match_schema=match_schema,
             temperature=temperature,
+            filter_by_model=filter_by_model,
         )
 
     df = attach_mapping_columns(
