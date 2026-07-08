@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.17.7"
+__generated_with = "0.23.8"
 app = marimo.App(width="medium")
 
 
@@ -22,6 +22,7 @@ def _():
     from vdl_tools.shared_tools.climate_landscape import (
         funding_mapping_combination_utils as fmcu,
     )
+
     return (
         fmcu,
         load_one_earth_taxonomy,
@@ -33,6 +34,7 @@ def _():
 @app.cell
 def _():
     import marimo as mo
+
     return (mo,)
 
 
@@ -83,7 +85,9 @@ def _(
         candid_funding_path,
         add_geo_engineering=False,  # Only works for the re-worked taxonomy for grantham
     ):
-        round_df = fmcu.load_cb_round_data(funding_round_path, investor_orgs_path)
+        round_df = fmcu.load_cb_round_data_from_json(
+            funding_round_path, investor_orgs_path
+        )
         candid_funding_raw = pd.read_excel(candid_funding_path)
         candid_funding_long = fmcu.reshape_candid_funding(
             candid_funding_raw, id_col="id"
@@ -115,6 +119,7 @@ def _(
             candid_funding_long,
             combined_funding_df,
         )
+
     return (load_files,)
 
 
@@ -123,6 +128,7 @@ def _():
     from vdl_tools.shared_tools.attention_index.attention_index import (
         AttentionIndexer,
     )
+
     return (AttentionIndexer,)
 
 
@@ -275,6 +281,18 @@ def _():
     #         subset=["tax_map_level0", "tax_map_level1", "tax_map_level2"]
     #     ).copy()
     #     solution_results[start_year] = _solution_attention_index
+    return
+
+
+@app.cell
+def _(attention_index):
+    attention_index
+    return
+
+
+@app.cell
+def _(aier):
+    aier.level_tax_aggregated
     return
 
 
