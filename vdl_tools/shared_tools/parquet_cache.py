@@ -118,6 +118,28 @@ def _scan_columns(df: pd.DataFrame) -> tuple[list[str], list[str]]:
     return json_cols, mixed_cols
 
 
+def _scan_columns_full(df: pd.DataFrame) -> tuple[list[str], list[str]]:
+    """Like :func:`_scan_columns` but scans ALL non-null values, not just a sample.
+
+    Used only on the ``from_pandas`` exception path, so the O(rows) cost is paid
+    rarely — it catches columns that are type-consistent in their first
+    ``_SAMPLE_SIZE`` values but mixed deeper (a stray ``int`` or a buried
+    dict/list past the sampling window).
+    """
+    json_cols, mixed_cols = [], []
+    for col in df.columns:
+        if df[col].dtype != object:
+            continue
+        types = {type(v) for v in df[col].to_numpy() if not _is_null(v)}
+        if not types:
+            continue
+        if types & {dict, list, tuple}:
+            json_cols.append(col)
+        elif len(types) > 1:
+            mixed_cols.append(col)
+    return json_cols, mixed_cols
+
+
 def _is_null(v) -> bool:
     return v is None or (isinstance(v, float) and math.isnan(v))
 
@@ -186,7 +208,26 @@ def write_dataframe(
         for col in mixed_cols:
             df[col] = df[col].map(_to_string)
 
-    table = pa.Table.from_pandas(df, preserve_index=False)
+    try:
+        table = pa.Table.from_pandas(df, preserve_index=False)
+    except (pa.ArrowTypeError, pa.ArrowInvalid):
+        # Sampled scan missed a type-inconsistent column (a stray int or a
+        # buried dict/list past _SAMPLE_SIZE). Re-classify with a full scan,
+        # coerce only the columns the sampled pass missed, and retry once.
+        json2, mixed2 = _scan_columns_full(df)
+        json2 = [c for c in json2 if c not in json_cols]
+        mixed2 = [c for c in mixed2 if c not in mixed_cols]
+        logger.warning(
+            "Sampled scan missed type-inconsistent columns; full-scan coercing "
+            "json=%s mixed=%s and retrying", json2, mixed2)
+        df = df.copy()  # first pass only copied if it found something to coerce
+        for col in json2:
+            df[col] = df[col].map(_encode_json)
+            json_cols.append(col)  # keep _JSON_COLS_KEY metadata accurate
+        for col in mixed2:
+            df[col] = df[col].map(_to_string)
+        table = pa.Table.from_pandas(df, preserve_index=False)
+
     meta = dict(table.schema.metadata or {})
     meta[_JSON_COLS_KEY] = json.dumps(json_cols).encode()
     meta[_LINEAGE_KEY] = json.dumps(
