@@ -2,7 +2,7 @@
 import datetime as dt
 import pandas as pd
 
-from vdl_tools.scrape_enrich.prepare_crunchbase import load_process_funding_rounds_from_parquet
+from vdl_tools.scrape_enrich.prepare_crunchbase import load_process_funding_rounds_from_parquet, load_process_funding_rounds_from_json
 from vdl_tools.shared_tools.cb_funding_calculations import ROUND_TO_STAGE
 
 
@@ -128,6 +128,48 @@ def load_cb_round_data(funding_rounds_uri, investor_orgs_uri):
 
     return round_df
 
+
+
+def load_cb_round_data_from_json(funding_rounds_path, investor_orgs_path):
+
+    full_round_df = load_process_funding_rounds_from_json(
+        fr_path=funding_rounds_path,
+        investor_orgs_path=investor_orgs_path
+    )
+
+    full_round_df["organization_uuid"] = full_round_df[
+        "funded_organization_identifier"
+    ].apply(lambda x: x.get("uuid"))
+    full_round_df["money_raised_usd"] = full_round_df["raised_usd"]
+    full_round_df["uuid"] = full_round_df["fr_uuid"]
+    round_df = full_round_df[
+        [
+            "uuid",
+            "fr_uuid",
+            "announced_on",
+            "investment_stage",
+            "investment_type",
+            "organization_uuid",
+            "money_raised_usd",
+            "year_announced",
+            "org_permalink",
+            "org_uuid",
+            "country",
+            "diversity",
+            "gov_funder"
+        ]
+    ]
+
+    round_df = round_df.assign(
+        vdl_investment_stage=lambda d: d["investment_type"].map(ROUND_TO_STAGE)
+    )
+    round_df = round_df.assign(
+        year_announced=round_df["announced_on"].apply(
+            lambda x: pd.to_datetime(x).year
+        )
+    )
+
+    return round_df
 
 def reshape_candid_funding(
     candid_orgs_df,

@@ -134,6 +134,14 @@ class AttentionIndexer:
 
     def map_taxonomy_to_funding_rounds(self, **kwargs):
 
+        # Restrict funding to orgs in the meta df (e.g. published network members)
+        if self.meta_df is not None:
+            self.combined_funding_df = self.combined_funding_df[
+                self.combined_funding_df[
+                    f'{self.funding_df_prefix}_uid']
+                    .isin(self.meta_df[f'{self.meta_df_prefix}_uid'])
+            ]
+
         # Filter out the rounds that are not in the distributed funding df
         self.combined_funding_df = self.combined_funding_df[
             self.combined_funding_df[
@@ -206,25 +214,84 @@ class AttentionIndexer:
         """
 
         taxonomy_level_columns = self._make_taxonomy_level_columns(level)
+        leaf_level_columns = self._make_taxonomy_level_columns(self.distributed_funding_level)
 
-        self.org_level_aggregation_df = (
-            self.filtered_funding_mapped_to_taxonomy_df.groupby(['tax_map_uid'] + taxonomy_level_columns)
-            .agg({
-                 # Sum up all the distributed_funding for all the lower levels
-                "distributed_funding": "sum",
-                # Because we are at the round level this will have been multiplied for each round, so take the mean of it
-                "tax_map_fundingfrac": "mean",
-            })
+        # Sum up all the distributed_funding for all the lower levels
+        funding_aggregation = (
+            self.filtered_funding_mapped_to_taxonomy_df
+            .groupby(['tax_map_uid'] + taxonomy_level_columns)
+            ['distributed_funding'].sum()
+        )
+
+        # FundingFrac is repeated once per round, so first collapse to one row
+        # per org / leaf node, then sum the leaf fracs up to the target level.
+        # Summing (not averaging) across an org's leaf nodes keeps fractional
+        # orgs additive across levels: a solution's value equals the sum of
+        # its technologies', and level0 totals equal the org count.
+        per_leaf_fracs = (
+            self.filtered_funding_mapped_to_taxonomy_df
+            .groupby(['tax_map_uid'] + leaf_level_columns)
+            ['tax_map_fundingfrac'].mean()
+            .reset_index()
+        )
+        fractional_orgs = (
+            per_leaf_fracs
+            .groupby(['tax_map_uid'] + taxonomy_level_columns)
+            ['tax_map_fundingfrac'].sum()
+        )
+
+        self.org_level_aggregation_df = pd.concat(
+            [funding_aggregation, fractional_orgs], axis=1
         ).reset_index()
 
         self.org_level_aggregation_df.rename(columns={
-            "distributed_funding": "distributed_funding",
             "tax_map_fundingfrac": "fractional_orgs",
         }, inplace=True)
 
         self.org_level_aggregation_df["whole_orgs"] = 1 ## Add a column for when we double count
 
         return self.org_level_aggregation_df
+
+    def _additional_taxonomy_modifications(self, df, **kwargs):
+        """
+        Override this method in subclasses so the full-taxonomy frame's
+        names align with the cleaned funding-side names (e.g. stripping
+        prefixes, dropping pillar-only branches).
+        """
+        return df
+
+    def build_full_taxonomy_df(self, level):
+        """
+        Enumerate every taxonomy node down to `level` as tax_map_level columns.
+
+        Branches that end above `level` (e.g. a Solution with no Sub-Terms, or
+        any node a company can be mapped to without a deeper child) get
+        synthetic child rows named No_Level_{i}_<parent>, the same format
+        redistribute_funding_fracs uses on the funding side.
+        """
+        rename_map = {
+            tax['name']: f'{self.tax_map_prefix}_level{i}'
+            for i, tax in enumerate(self.taxonomy[:level + 1])
+        }
+        level_cols = [f'{self.tax_map_prefix}_level{i}' for i in range(level + 1)]
+        frames = []
+        for i in range(level + 1):
+            name_cols = [t['name'] for t in self.taxonomy[:i + 1]]
+            frames.append(
+                self.taxonomy[i]['data'][name_cols]
+                .drop_duplicates()
+                .rename(columns=rename_map)
+            )
+        full_tax = pd.concat(frames, ignore_index=True)
+        # cascade parent names down into missing child levels (top-down)
+        for i in range(1, level + 1):
+            parent, child = level_cols[i - 1], level_cols[i]
+            full_tax[child] = full_tax[child].fillna(
+                f'No_Level_{i}_' + full_tax[parent]
+            )
+        full_tax = full_tax[level_cols].drop_duplicates()
+        full_tax = self._additional_taxonomy_modifications(full_tax)
+        return full_tax.drop_duplicates()
 
     def aggregate_to_level(self, level):
         """
@@ -253,10 +320,22 @@ class AttentionIndexer:
             .reset_index()
         )
 
+        # Add back taxonomy branches with no funded companies so they appear
+        # in the output and participate in the min/max scaling with zeros
+        full_tax = self.build_full_taxonomy_df(level)
+        self.level_tax_aggregated = self.level_tax_aggregated.merge(
+            full_tax,
+            on=taxonomy_level_columns,
+            how='outer',
+        )
+        self.level_tax_aggregated[self._metric_column_names] = (
+            self.level_tax_aggregated[self._metric_column_names].fillna(0)
+        )
+
         self.level_tax_aggregated['funding_per_company'] = (
             self.level_tax_aggregated['distributed_funding'] /
             self.level_tax_aggregated['fractional_orgs']
-        )
+        ).fillna(0)
         self._metric_column_names.append('funding_per_company')
 
         self.min_max_metrics = self.level_tax_aggregated.agg({
@@ -323,7 +402,9 @@ class AttentionIndexer:
         geo_mean_column_name = f'{scale_type}_geometric_mean'
         self.level_tax_aggregated[geo_mean_column_name] = (
             self.level_tax_aggregated.apply(
-                lambda x: geometric_mean_values(x[columns_for_calc]),
+                # keep zeros so unfunded categories score 0 instead of
+                # silently dropping the zeroed metric from the mean
+                lambda x: geometric_mean_values(x[columns_for_calc], remove_zero=False),
                 axis=1
             ) ** (1.0 / additional_rooting_factor)
         )
@@ -360,9 +441,9 @@ class AttentionIndexer:
         self.aggregate_funding_to_orgs(level)
         self.aggregate_to_level(level)
         self.scale_metrics(scale_type="min_max")
-        self.scale_metrics(scale_type="zero_max")
+        # self.scale_metrics(scale_type="zero_max")
         self.add_geometric_mean_to_scaled_metrics(scale_type="min_max")
-        self.add_geometric_mean_to_scaled_metrics(scale_type="zero_max")
+        # self.add_geometric_mean_to_scaled_metrics(scale_type="zero_max")
 
         taxonomy_level_columns = self._make_taxonomy_level_columns(level)
 
@@ -454,4 +535,3 @@ def load_non_taxonomy_files(
     candid_funding_long = fmcu.reshape_candid_funding(candid_funding_raw, id_col='id')
     combined_funding_df = fmcu.combine_funding_data(round_df, candid_funding_long)
     return meta_df, round_df, candid_funding_long, combined_funding_df
-    

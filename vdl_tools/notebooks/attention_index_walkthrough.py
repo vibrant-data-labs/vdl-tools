@@ -1,27 +1,25 @@
 import marimo
 
-__generated_with = "unknown"
+__generated_with = "0.23.8"
 app = marimo.App(width="medium")
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
+    mo.md(r"""
     # Attention Index
 
     The Attention Index is a method for creating a single value for a taxonomy category / level to demonstrate how much "Attention" was given to that category. "Neglectedness" is a little more natural to think about -- this is 1-Neglectedness.
 
-    It is calculated based on 3 key attributes  
-    1. Number of Fractional Orgs for that Category  
-    2. Total (distributed) funding for that Category  
+    It is calculated based on 3 key attributes
+    1. Number of Fractional Orgs for that Category
+    2. Total (distributed) funding for that Category
     3. Funding per Company (Total Fundig) / (Number of Fractional)
 
     We scale each of these metrics by the min/max for them and then take the geometric mean of the 3. That is then re-scaled between min/max (then we found taking cube root better spreads it).
 
     This notebook will walk through the process.
-    """
-    )
+    """)
     return
 
 
@@ -78,6 +76,7 @@ def _():
 
     import altair as alt
     import numpy as np
+
     return alt, mo, np, pd
 
 
@@ -114,19 +113,16 @@ def _(alt, base_tax_aggregated_w_scaled_geo_mean):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
+    mo.md(r"""
     ___
     ## Walk Through
-    """
-    )
+    """)
     return
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
+    mo.md(r"""
     ___
     ### Starting Data
     We will start with the data set that powers our Dashboards. It is essentially the Taxonomy Mapping results joined to the funding rounds data (for venture) and some data manipulation to include Non-Profits in there.
@@ -134,8 +130,7 @@ def _(mo):
     **Note:** You can only calculate an attention index for the lowest level that is present in the taxonomy mapping distributed funding results. So if you ran the pipeline with `max_level=2` (default in Climate Landscape) then that's the lowest level we can calculate our index for.
 
     _Using that for convenience of not re-running at the "Approach" (subterm / level3)_
-    """
-    )
+    """)
     return
 
 
@@ -158,13 +153,17 @@ def _(pd):
 
 @app.cell
 def _(mo):
-    mo.md("""____""")
+    mo.md("""
+    ____
+    """)
     return
 
 
 @app.cell
 def _(mo):
-    mo.md(r"""### Filter Based on Filters""")
+    mo.md(r"""
+    ### Filter Based on Filters
+    """)
     return
 
 
@@ -189,12 +188,10 @@ def _(funding_rounds_taxonomy_mapping, mo, rounds_filter, year_filter):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
+    mo.md(r"""
     ___
     ### Step 1. Aggregate at the taxonomy level / company level to get the starting numbers aggregated
-    """
-    )
+    """)
     return
 
 
@@ -239,14 +236,12 @@ def _(filtered_df, taxonomy_mapping_level_choice):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
+    mo.md(r"""
     ___
     ### Step 2. Aggregate at the lowest level
 
     This will get us the totals for our 3 metrics of interest for each of the categories we are interested in.
-    """
-    )
+    """)
     return
 
 
@@ -270,25 +265,21 @@ def _(orged_aggregation_df, taxonomy_level_columns):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
+    mo.md(r"""
     ___
     ### Step TODO: Add in the raw taxonomy to ensure we add in the levels that didn't get anything mapped to it!
-    """
-    )
+    """)
     return
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
+    mo.md(r"""
     ___
     ### Step 3. Get the Min / Max for each of the metrics
 
     We will want to scale all the metrics for the min/max of that metric so need to calculate that
-    """
-    )
+    """)
     return
 
 
@@ -319,8 +310,7 @@ def _(base_tax_aggregated, metric_column_names, min_max_metrics):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
+    mo.md(r"""
     ___
     ### Step 4. Scale each of the Metrics by their respective Min/Max
 
@@ -345,8 +335,7 @@ def _(mo):
         value_normalized = (value - min_value) / diff
         return value_normalized
     ```
-    """
-    )
+    """)
     return
 
 
@@ -398,8 +387,7 @@ def _(
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
+    mo.md(r"""
     ___
     ### Step 5. Combine the scaled metric with Geometric Mean
 
@@ -419,8 +407,7 @@ def _(mo):
             geo_mean = np.power(product, 1 / len(values))
             return geo_mean
     ```
-    """
-    )
+    """)
     return
 
 
@@ -440,6 +427,7 @@ def _(np):
             product = np.prod(np.abs(values))
             geo_mean = np.power(product, 1 / len(values))
             return geo_mean
+
     return (geometric_mean_values,)
 
 
@@ -474,13 +462,11 @@ def _(
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
+    mo.md(r"""
     ___
     ### Step 6. Rescale the Geometric Mean by the Min/Max
     And take the cubed root. We found that's the best way to spread it out better.
-    """
-    )
+    """)
     return
 
 
@@ -518,6 +504,7 @@ def _(
 def _():
     from plotly import express as px
     from plotly import graph_objects as go
+
     return (go,)
 
 

@@ -637,6 +637,19 @@ def load_process_funding_rounds_from_parquet(
     return process_funding_rounds(df_fr, orgs_investors_df, filter_yr)
 
 
+def load_process_funding_rounds_from_json(
+    fr_path,
+    investor_orgs_path,
+    filter_yr=2010,
+):
+    logger.info('loading funding rounds')
+    df_fr = pd.read_json(fr_path)
+    logger.info('loading investor orgs')
+    orgs_investors_df = pd.read_json(investor_orgs_path)
+    logger.info('processing funding rounds')
+    return process_funding_rounds(df_fr, orgs_investors_df, filter_yr)
+
+
 def process_funding_rounds(
     df_fr: pd.DataFrame,
     orgs_investors_df: pd.DataFrame,
