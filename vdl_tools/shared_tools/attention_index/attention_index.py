@@ -214,19 +214,37 @@ class AttentionIndexer:
         """
 
         taxonomy_level_columns = self._make_taxonomy_level_columns(level)
+        leaf_level_columns = self._make_taxonomy_level_columns(self.distributed_funding_level)
 
-        self.org_level_aggregation_df = (
-            self.filtered_funding_mapped_to_taxonomy_df.groupby(['tax_map_uid'] + taxonomy_level_columns)
-            .agg({
-                 # Sum up all the distributed_funding for all the lower levels
-                "distributed_funding": "sum",
-                # Because we are at the round level this will have been multiplied for each round, so take the mean of it
-                "tax_map_fundingfrac": "mean",
-            })
+        # Sum up all the distributed_funding for all the lower levels
+        funding_aggregation = (
+            self.filtered_funding_mapped_to_taxonomy_df
+            .groupby(['tax_map_uid'] + taxonomy_level_columns)
+            ['distributed_funding'].sum()
+        )
+
+        # FundingFrac is repeated once per round, so first collapse to one row
+        # per org / leaf node, then sum the leaf fracs up to the target level.
+        # Summing (not averaging) across an org's leaf nodes keeps fractional
+        # orgs additive across levels: a solution's value equals the sum of
+        # its technologies', and level0 totals equal the org count.
+        per_leaf_fracs = (
+            self.filtered_funding_mapped_to_taxonomy_df
+            .groupby(['tax_map_uid'] + leaf_level_columns)
+            ['tax_map_fundingfrac'].mean()
+            .reset_index()
+        )
+        fractional_orgs = (
+            per_leaf_fracs
+            .groupby(['tax_map_uid'] + taxonomy_level_columns)
+            ['tax_map_fundingfrac'].sum()
+        )
+
+        self.org_level_aggregation_df = pd.concat(
+            [funding_aggregation, fractional_orgs], axis=1
         ).reset_index()
 
         self.org_level_aggregation_df.rename(columns={
-            "distributed_funding": "distributed_funding",
             "tax_map_fundingfrac": "fractional_orgs",
         }, inplace=True)
 
