@@ -94,8 +94,11 @@ def write_json(
             {"created_at": datetime.now(timezone.utc).isoformat(), **lineage},
             default=str,
         ).encode("utf-8")
-        # sidecar is always small + raw JSON (no compression)
-        with fsspec.open(sidecar, "wb", **_b.write_target(sidecar)) as f:
+        # sidecar shares the data file's bucket / parent dir, so reuse ``opts``
+        # rather than re-running write_target (which would re-issue a bucket_exists
+        # HEAD, or re-create the parent, for a target already prepared above).
+        # Always small + raw JSON (no compression).
+        with fsspec.open(sidecar, "wb", **opts) as f:
             f.write(payload)
 
     logger.info("Wrote JSON -> %s%s", uri, " (+lineage)" if lineage is not None else "")

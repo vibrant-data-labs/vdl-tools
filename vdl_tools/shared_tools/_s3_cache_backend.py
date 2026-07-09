@@ -90,5 +90,10 @@ def write_target(uri: str) -> dict:
         if not bucket_exists(bucket):
             create_bucket(get_s3_client(), bucket)
         return {"s3": s3_creds()}
-    Path(uri).parent.mkdir(parents=True, exist_ok=True)
+    # Local target: ensure the parent dir exists. Strip a ``file://`` scheme
+    # first — ``Path("file:///a/b")`` is a *relative* path rooted at ``file:``,
+    # so ``.parent.mkdir`` would spray a junk ``file:`` tree into the cwd
+    # instead of creating the real parent.
+    local_path = uri[len("file://"):] if uri.startswith("file://") else uri
+    Path(local_path).parent.mkdir(parents=True, exist_ok=True)
     return {}
