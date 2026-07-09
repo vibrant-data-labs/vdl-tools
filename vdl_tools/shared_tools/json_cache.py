@@ -43,8 +43,8 @@ _SIDECAR_SUFFIX = ".vdl.json"
 
 
 def _compression(uri: str) -> str | None:
-    """gzip iff the path ends in ``.gz`` — otherwise raw JSON."""
-    return "gzip" if uri.endswith(".gz") else None
+    """gzip iff the path ends in ``.gz`` / ``.gzip`` — otherwise raw JSON."""
+    return "gzip" if uri.endswith((".gz", ".gzip")) else None
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +67,7 @@ def write_json(
         ``str`` (matching :mod:`parquet_cache`).
     uri
         Destination. Local path (``str`` or ``Path``), ``file://`` URI, or full
-        ``s3://`` URI including bucket. A ``.gz`` suffix triggers gzip.
+        ``s3://`` URI including bucket. A ``.gz`` / ``.gzip`` suffix triggers gzip.
     lineage
         Optional JSON-serializable dict written to a sidecar
         (``{uri}.vdl.json``) with an auto-added ``created_at``. Retrieve via
@@ -117,8 +117,8 @@ def read_json(
     Parameters
     ----------
     uri
-        Source. Local path, ``file://`` URI, or full ``s3://`` URI. ``.gz`` is
-        decompressed transparently.
+        Source. Local path, ``file://`` URI, or full ``s3://`` URI. ``.gz`` /
+        ``.gzip`` is decompressed transparently.
     use_cache
         If False, skip the local cache and read straight from S3 every time.
     cache_dir
