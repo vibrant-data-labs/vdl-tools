@@ -29,65 +29,16 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from vdl_tools.shared_tools.tools.logger import logger
-from vdl_tools.shared_tools.tools.config_utils import get_configuration
-from vdl_tools.shared_tools.s3_tools import get_s3_client, create_bucket, bucket_exists
+from vdl_tools.shared_tools import _s3_cache_backend as _b
 
 
 DEFAULT_CACHE_DIR = Path(
-    os.environ.get("VDL_PARQUET_CACHE_DIR", Path.home() / ".cache" / "vdl-tools" / "parquet")
+    os.environ.get("VDL_PARQUET_CACHE_DIR", _b.DEFAULT_CACHE_ROOT / "parquet")
 )
 
 _JSON_COLS_KEY = b"vdl_json_columns"
 _LINEAGE_KEY = b"vdl_lineage"
 _SAMPLE_SIZE = 100  # non-null values per column to check when scanning
-
-
-# ---------------------------------------------------------------------------
-# URIs & S3 credentials
-# ---------------------------------------------------------------------------
-
-def _is_s3(uri: str) -> bool:
-    return uri.startswith("s3://")
-
-
-def _s3_creds() -> dict:
-    """Read AWS creds from config.ini ``[aws]``. Empty dict → boto3 default chain."""
-    try:
-        aws = get_configuration()["aws"]
-    except Exception:
-        return {}
-    opts: dict = {}
-    if aws.get("access_key_id"):
-        opts["key"] = aws["access_key_id"]
-    if aws.get("secret_access_key"):
-        opts["secret"] = aws["secret_access_key"]
-    if aws.get("region"):
-        opts["client_kwargs"] = {"region_name": aws["region"]}
-    return opts
-
-
-def _read_target(
-    uri: str,
-    use_cache: bool,
-    cache_dir: Path | None,
-    check_remote: bool,
-) -> tuple[str, dict]:
-    """Return (effective_uri, fsspec_opts) for reading from ``uri``."""
-    if not _is_s3(uri):
-        return uri, {}
-    if not use_cache:
-        return uri, {"s3": _s3_creds()}
-    cache_dir = Path(cache_dir) if cache_dir else DEFAULT_CACHE_DIR
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    return f"filecache::{uri}", {
-        "filecache": {
-            "cache_storage": str(cache_dir),
-            "check_files": check_remote,  # ETag HEAD on every open
-            "expiry_time": None,          # no TTL — rely on ETag check
-            "same_names": False,
-        },
-        "s3": _s3_creds(),
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -154,10 +105,6 @@ def _decode_json(v):
 
 def _to_string(v):
     return None if _is_null(v) else str(v)
-
-
-def _is_s3_bucket_exists(uri: str) -> bool:
-    return _is_s3(uri) and bucket_exists(uri.split("/")[2])
 
 
 # ---------------------------------------------------------------------------
@@ -236,14 +183,7 @@ def write_dataframe(
     ).encode()
     table = table.replace_schema_metadata(meta)
 
-    if _is_s3(uri):
-        opts = {"s3": _s3_creds()}
-        # Check if the bucket exists and create it if it doesn't
-        if not _is_s3_bucket_exists(uri):
-            create_bucket(get_s3_client(), uri.split("/")[2])
-    else:
-        Path(uri).parent.mkdir(parents=True, exist_ok=True)
-        opts = {}
+    opts = _b.write_target(uri)
 
     with fsspec.open(uri, "wb", **opts) as f:
         pq.write_table(table, f, compression="zstd", compression_level=3)
@@ -287,7 +227,9 @@ def read_dataframe(
         validating against the remote.
     """
     uri = str(uri)
-    effective_uri, opts = _read_target(uri, use_cache, cache_dir, check_remote)
+    effective_uri, opts = _b.read_target(
+        uri, use_cache, cache_dir or DEFAULT_CACHE_DIR, check_remote
+    )
 
     with fsspec.open(effective_uri, "rb", **opts) as f:
         table = pq.read_table(f, columns=columns)
@@ -322,7 +264,9 @@ def get_lineage(
         See :func:`read_dataframe` — same cache semantics apply.
     """
     uri = str(uri)
-    effective_uri, opts = _read_target(uri, use_cache, cache_dir, check_remote)
+    effective_uri, opts = _b.read_target(
+        uri, use_cache, cache_dir or DEFAULT_CACHE_DIR, check_remote
+    )
     with fsspec.open(effective_uri, "rb", **opts) as f:
         meta = pq.ParquetFile(f).schema_arrow.metadata or {}
     return json.loads(meta.get(_LINEAGE_KEY) or b"{}")
