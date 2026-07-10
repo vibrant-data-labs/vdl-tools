@@ -74,9 +74,10 @@ class SearchCheckpoint:
 
     def load_meta(self, max_age: timedelta) -> Optional[Dict]:
         """Return the checkpoint metadata, or None if absent or older than max_age."""
-        if not target_exists(self._meta_uri):
+        try:
+            meta = read_json(self._meta_uri)
+        except FileNotFoundError:
             return None
-        meta = read_json(self._meta_uri)
         created_at = datetime.fromisoformat(meta["created_at"])
         if datetime.now(timezone.utc) - created_at > max_age:
             logger.info(
@@ -207,7 +208,8 @@ class NetZeroAPI:
         url = os.path.join(self.base_url, endpoint)
         reauthed = False
         response = None
-        for attempt in range(max_retries):
+        attempt = 0
+        while attempt < max_retries:
             auth_generation = self._auth_generation
             try:
                 response = self.session.request(
@@ -220,24 +222,29 @@ class NetZeroAPI:
                 wait = 2 ** attempt + random.random()
                 logger.warning(f"Request to {endpoint} failed ({e}), retrying in {wait:.1f}s")
                 time.sleep(wait)
+                attempt += 1
                 continue
 
             if response.status_code in AUTH_STATUS_CODES and not reauthed:
                 logger.warning(f"HTTP {response.status_code} from {endpoint} — re-authenticating")
                 self._reauthenticate(auth_generation)
                 reauthed = True
+                # A re-auth doesn't consume a retry slot — otherwise a 401 on the
+                # final attempt would refresh the session and then raise without
+                # ever retrying with the fresh cookie.
                 continue
 
             if response.status_code in RETRYABLE_STATUS_CODES and attempt < max_retries - 1:
                 wait = 2 ** attempt + random.random()
                 logger.warning(f"HTTP {response.status_code} from {endpoint}, retrying in {wait:.1f}s")
                 time.sleep(wait)
+                attempt += 1
                 continue
 
             response.raise_for_status()
             return response.json()
 
-        # Only reachable if the final attempt was spent on a re-auth retry
+        # Reached only if the retry budget is exhausted; surface the last response.
         response.raise_for_status()
         return response.json()
 
@@ -351,8 +358,14 @@ class NetZeroAPI:
                 logger.info(f"Resuming search from checkpoint {checkpoint.base_uri}")
 
         def fetch_page(page_offset: int, allow_cached: bool) -> Dict:
-            if allow_cached and checkpoint and checkpoint.has_page(page_offset):
-                return checkpoint.read_page(page_offset)
+            if allow_cached and checkpoint:
+                # Read straight through instead of has_page()+read_page(): the
+                # existence probe is a redundant stat/HEAD (2 extra S3 round trips
+                # per page on resume) that the read itself already performs.
+                try:
+                    return checkpoint.read_page(page_offset)
+                except FileNotFoundError:
+                    pass
             data = self._post(
                 endpoint=endpoint,
                 payload={**payload, "limit": page_size, "offset": page_offset},
@@ -404,10 +417,10 @@ class NetZeroAPI:
 
         results = []
         for page_offset in sorted(pages):
-            page_results = pages[page_offset].get("results", [])
-            if not page_results:
-                break
-            results.extend(page_results)
+            # Don't break on an empty page: with concurrent fetches an interior
+            # page can come back empty (transient/shifted data) while later
+            # offsets returned valid rows — breaking here would silently drop them.
+            results.extend(pages[page_offset].get("results", []))
 
         if unique_key:
             seen = set()
@@ -579,6 +592,11 @@ class NetZeroAPI:
             async with semaphore:
                 reauthed = False
                 for attempt in range(max_retries):
+                    # Snapshot the auth generation *before* the request so the
+                    # generation guard works: if a peer coroutine re-logins
+                    # while this request is in flight, our seen generation is
+                    # now stale and _reauthenticate skips a redundant re-login.
+                    seen_generation = auth_state["generation"]
                     try:
                         async with session.get(
                             f"{self.base_url}/{endpoint.rstrip('/')}/{id}",
@@ -593,7 +611,7 @@ class NetZeroAPI:
                                 # trigger a single re-login) and retry
                                 logger.warning(f"HTTP {response.status} for {endpoint} {id} — re-authenticating")
                                 auth_state["generation"] = await asyncio.to_thread(
-                                    self._reauthenticate, auth_state["generation"]
+                                    self._reauthenticate, seen_generation
                                 )
                                 auth_state["cookies"] = self.session.cookies.get_dict()
                                 reauthed = True
