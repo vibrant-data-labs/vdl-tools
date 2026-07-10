@@ -224,3 +224,8 @@ def read_jsons(
         )
         for name in names
     }
+
+
+def target_exists(uri: str) -> bool:
+    """Check if the target exists."""
+    return _b.target_exists(str(uri))

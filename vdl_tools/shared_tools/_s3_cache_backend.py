@@ -97,3 +97,10 @@ def write_target(uri: str) -> dict:
     local_path = uri[len("file://"):] if uri.startswith("file://") else uri
     Path(local_path).parent.mkdir(parents=True, exist_ok=True)
     return {}
+
+
+def target_exists(uri: str) -> bool:
+    """Check if the target exists."""
+    if is_s3(uri):
+        return bucket_exists(bucket_of(uri))
+    return Path(uri).exists()

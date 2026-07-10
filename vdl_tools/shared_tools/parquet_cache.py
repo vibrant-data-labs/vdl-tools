@@ -389,3 +389,8 @@ def prune_cache(cache_dir: Path | None = None, keep_recent_days: int = 30) -> in
                 pass
     logger.info("Pruned %d cached files from %s", removed, cache_dir)
     return removed
+
+
+def target_exists(uri: str) -> bool:
+    """Check if the target exists."""
+    return _b.target_exists(str(uri))
