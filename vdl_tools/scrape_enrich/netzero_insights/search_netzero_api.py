@@ -4,8 +4,11 @@ import asyncio
 import pandas as pd
 
 from vdl_tools.shared_tools.tools.config_utils import get_configuration
-from vdl_tools.scrape_enrich.netzero_insights.netzero_api import NetZeroAPI
-from vdl_tools.scrape_enrich.netzero_insights.filters import MainFilter, StartupFilter, InvestorFilter
+from vdl_tools.scrape_enrich.netzero_insights.netzero_api import (
+    DEFAULT_SEARCH_CHECKPOINT_DIR,
+    NetZeroAPI,
+)
+from vdl_tools.scrape_enrich.netzero_insights.filters import MainFilter, StartupFilter, InvestorFilter, Sorting
 from vdl_tools.shared_tools.tools.logger import logger
 from vdl_tools.shared_tools.json_cache import write_json
 
@@ -142,14 +145,29 @@ def search_companies(
     limit: int = 100,
     use_sandbox: bool = False,
     netzero_api: NetZeroAPI = None,
+    sorting: Sorting = None,
+    checkpoint_dir: str = DEFAULT_SEARCH_CHECKPOINT_DIR,
+    checkpoint_max_age_days: float = 7.0,
+    max_concurrent_pages: int = 8,
     **filter_kwargs,
 ):
+    """Search NetZero Insights companies matching the given filters.
+
+    Pages are fetched concurrently and, by default, checkpointed under
+    ``checkpoint_dir`` keyed by a hash of the query — if the process dies
+    mid-search, re-running the same call resumes from the completed pages.
+    Pass ``checkpoint_dir=None`` to disable checkpointing.
+    """
     netzero_api = netzero_api or get_netzero_api(use_sandbox=use_sandbox)
     main_filter = create_search_filter(**filter_kwargs)
 
     companies = netzero_api.search_startups(
         main_filter=main_filter,
         limit=limit,
+        sorting=sorting,
+        checkpoint_dir=checkpoint_dir,
+        checkpoint_max_age_days=checkpoint_max_age_days,
+        max_concurrent_pages=max_concurrent_pages,
     )
 
     return companies
@@ -235,55 +253,46 @@ def get_full_details_from_company_ids(
         read_from_cache=read_from_cache,
         write_to_cache=write_to_cache,
     )
-    companies = get_companies_details(
-        company_ids=company_ids,
-        use_sandbox=use_sandbox,
-        read_from_cache=read_from_cache,
-        write_to_cache=write_to_cache,
-        netzero_api=netzero_api,
-    )
 
-    return_data = {
-        "companies": pd.DataFrame(companies),
-    }
     if return_investor_details and not return_funding_rounds:
         logger.warning("return_investor_details is True but return_funding_rounds is False")
-        return return_data
 
-    if return_funding_rounds:
-        funding_rounds = get_company_funding_rounds(
-            company_ids=company_ids,
-            use_sandbox=use_sandbox,
-            read_from_cache=read_from_cache,
-            write_to_cache=write_to_cache,
-            netzero_api=netzero_api,
-        )
-        funding_df = pd.DataFrame(funding_rounds)
-        return_data["funding_rounds"] = funding_df
+    async def _fetch_all():
+        # Companies, funding rounds and commercial deals only depend on
+        # company_ids, so they run concurrently; investors need the funding
+        # rounds first
+        cache_kwargs = {
+            "read_from_cache": read_from_cache,
+            "write_to_cache": write_to_cache,
+        }
+        stages = {
+            "companies": netzero_api.get_startup_details(company_ids, **cache_kwargs),
+        }
+        if return_funding_rounds:
+            stages["funding_rounds"] = netzero_api.get_company_funding_rounds(
+                company_ids, flatten=True, **cache_kwargs,
+            )
+        if get_commercial_deals:
+            stages["commercial_deals"] = netzero_api.get_company_commercial_deals(
+                company_ids, flatten=True, **cache_kwargs,
+            )
+        stage_results = await asyncio.gather(*stages.values())
+        fetched = dict(zip(stages.keys(), stage_results))
 
-    if return_investor_details:
-        investor_ids = set(
-            investor_id for investor_list in funding_df['roundInvestorIDs']
-            for investor_id in investor_list
-        )
-        investor_details = get_investor_details(
-            investor_ids=list(investor_ids),
-            use_sandbox=use_sandbox,
-            read_from_cache=read_from_cache,
-            write_to_cache=write_to_cache,
-            netzero_api=netzero_api,
-        )
-        return_data["investor_details"] = pd.DataFrame(investor_details)
+        if return_investor_details and return_funding_rounds:
+            investor_ids = sorted({
+                investor_id
+                for funding_round in fetched["funding_rounds"]
+                for investor_id in (funding_round.get("roundInvestorIDs") or [])
+            })
+            fetched["investor_details"] = await netzero_api.get_investor_details(
+                investor_ids, flatten=True, **cache_kwargs,
+            )
+        return fetched
 
-    if get_commercial_deals:
-        commercial_deals = get_company_commercial_deals(
-            company_ids=company_ids,
-            use_sandbox=use_sandbox,
-            read_from_cache=read_from_cache,
-            write_to_cache=write_to_cache,
-            netzero_api=netzero_api,
-        )
-        return_data["commercial_deals"] = pd.DataFrame(commercial_deals)
+    fetched = asyncio.run(_fetch_all())
+
+    return_data = {key: pd.DataFrame(value) for key, value in fetched.items()}
 
     if save_path:
         logger.info(f"Saving data to {save_path}")
@@ -356,7 +365,9 @@ def get_investor_details(
 if __name__ == "__main__":
     USE_SANDBOX = True
     READ_FROM_CACHE = True
-    WRITE_TO_CACHE = False
+    # Keep write_to_cache on for long runs — the DB cache is what lets a
+    # killed details fetch resume without refetching
+    WRITE_TO_CACHE = True
 
     # ocean_search = search_get_companies_details(
     #     include_keywords=["ocean"],
