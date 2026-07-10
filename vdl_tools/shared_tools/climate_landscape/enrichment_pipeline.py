@@ -16,6 +16,7 @@ from vdl_tools.shared_tools.climate_landscape.diversity_keywords import DIVERSIT
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 from vdl_tools.shared_tools.geotagging_prompting import geotag_texts_bulk
 from vdl_tools.shared_tools.org_type_classifier import org_type_classifier
+from vdl_tools.shared_tools.parquet_cache import read_dataframe, write_dataframe
 from vdl_tools.shared_tools.tools.config_utils import get_configuration
 from vdl_tools.shared_tools.tools.falsey_checks import coerced_bool
 from vdl_tools.shared_tools.tools.logger import logger
@@ -425,6 +426,8 @@ def log_major_step(text):
 
 def run_pipeline(
     paths,
+    enrich_input_uri=None,
+    meta_output_uri=None,
     relevance_model_name=CB_CD_MODEL_4OMINI,
     relevance_model_system_prompt=DEFAULT_CLIMATE_SYSTEM_PROMPT,
     relevance_model_prompt_format=DEFAULT_CLIMATE_PROMPT_FORMAT,
@@ -439,7 +442,11 @@ def run_pipeline(
 ):
 
     log_major_step("loading pre-processed combined crunchbase + candid data")
-    df_cb_cd_full = pd.read_json(paths['enrich_input_file'])
+    if enrich_input_uri:
+        df_cb_cd_full = read_dataframe(enrich_input_uri)
+    else:
+        # TODO: remove local-json fallback once callers pass enrich_input_uri
+        df_cb_cd_full = pd.read_json(paths['enrich_input_file'])
     logger.info("Loaded %s organizations", len(df_cb_cd_full))
 
     if num_records:
@@ -705,7 +712,17 @@ def run_pipeline(
         len(df_relevant),
     )
     logger.info('\n df_relevant final\n%s', df_relevant['Data Source'].value_counts())
+    # TODO: remove local xlsx/json writes once all consumers read meta_output_uri parquet
     cf.write_excel_no_hyper(df_relevant, paths['results_path']/'cb_cd_li_meta.xlsx')
     df_relevant.to_json(paths['results_path'] / "cb_cd_li_meta.json", orient='records')
+    if meta_output_uri:
+        write_dataframe(
+            df_relevant,
+            meta_output_uri,
+            lineage={
+                "source": "enrichment_pipeline.run_pipeline",
+                "row_count": len(df_relevant),
+            },
+        )
 
     return df_relevant
