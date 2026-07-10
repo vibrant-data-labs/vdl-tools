@@ -537,7 +537,10 @@ def divided_funding_rows_and_flatten(
                 round_group_dict["investors"] = _bucket_investors(
                     round_group_rounds, investor_lookup
                 )
-            round_group_dict["all_funding_activity"] = round_group_rounds
+            if isinstance(round_group_rounds, pd.DataFrame):
+                round_group_dict["all_funding_activity"] = round_group_rounds.to_dict(orient="records")
+            else:
+                round_group_dict["all_funding_activity"] = round_group_rounds
             company_round_groups_parsed.append(round_group_dict)
 
         company_round_groups_parsed_dict = {

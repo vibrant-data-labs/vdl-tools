@@ -1,10 +1,12 @@
+from pathlib import Path
+
 import pandas as pd
 
 import vdl_tools.shared_tools.project_config as pc
 import vdl_tools.shared_tools.taxonomy_mapping.taxonomy_mapping as tm
 import vdl_tools.shared_tools.taxonomy_mapping.fewshot_examples as fse
 from vdl_tools.shared_tools.tools.logger import logger
-
+from vdl_tools.shared_tools.json_cache import write_json
 
 
 def add_taxonomy_mapping(
@@ -607,8 +609,10 @@ def add_one_earth_taxonomy(
     all_df[keep_columns].to_json(results_path, orient='records')
     if distr_df is not None:
         # make directory if it doesn't exist
-        distributed_funding_results_path.parent.mkdir(parents=True, exist_ok=True)
-        distr_df.to_json(distributed_funding_results_path, orient='records')
+        if not isinstance(distributed_funding_results_path, Path) and not distributed_funding_results_path.startswith('s3://'):
+            distributed_funding_results_path = Path(distributed_funding_results_path)
+            distributed_funding_results_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json(distr_df.to_dict(orient='records'), distributed_funding_results_path)
 
     if mapping_name:
         pct = 'pct_' + mapping_name

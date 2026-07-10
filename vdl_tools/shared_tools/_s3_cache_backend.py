@@ -99,10 +99,17 @@ def write_target(uri: str) -> dict:
     return {}
 
 
+def get_key_from_uri(uri: str) -> str:
+    """Get the key from the URI."""
+    if is_s3(uri):
+        return "/".join(uri.split("/")[3:])
+    return Path(uri).name
+
+
 def target_exists(uri: str) -> bool:
     """Check if the target exists."""
     if is_s3(uri):
         if not bucket_exists(bucket_of(uri)):
             return False
-        return key_exists(bucket_of(uri), uri.split("/")[-1])
+        return key_exists(bucket_of(uri), get_key_from_uri(uri))
     return Path(uri).exists()
