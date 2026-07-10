@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 
 from vdl_tools.shared_tools.tools.config_utils import get_configuration
-from vdl_tools.shared_tools.s3_tools import get_s3_client, create_bucket, bucket_exists
+from vdl_tools.shared_tools.s3_tools import get_s3_client, create_bucket, bucket_exists, key_exists
 
 
 # Root for all vdl-tools caches; each module gets its own subdir underneath.
@@ -102,5 +102,7 @@ def write_target(uri: str) -> dict:
 def target_exists(uri: str) -> bool:
     """Check if the target exists."""
     if is_s3(uri):
-        return bucket_exists(bucket_of(uri))
+        if not bucket_exists(bucket_of(uri)):
+            return False
+        return key_exists(bucket_of(uri), uri.split("/")[-1])
     return Path(uri).exists()
