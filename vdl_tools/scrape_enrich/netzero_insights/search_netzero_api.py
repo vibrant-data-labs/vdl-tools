@@ -7,6 +7,7 @@ from vdl_tools.shared_tools.tools.config_utils import get_configuration
 from vdl_tools.scrape_enrich.netzero_insights.netzero_api import NetZeroAPI
 from vdl_tools.scrape_enrich.netzero_insights.filters import MainFilter, StartupFilter, InvestorFilter
 from vdl_tools.shared_tools.tools.logger import logger
+from vdl_tools.shared_tools.json_cache import write_json
 
 config = get_configuration()
 
@@ -287,7 +288,7 @@ def get_full_details_from_company_ids(
     if save_path:
         logger.info(f"Saving data to {save_path}")
         safe_return_data = {key: value.to_dict(orient="records") for key, value in return_data.items()}
-        json.dump(safe_return_data, open(save_path, "w"))
+        write_json(safe_return_data, save_path)
     return return_data
 
 
