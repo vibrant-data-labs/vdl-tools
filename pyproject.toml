@@ -21,7 +21,6 @@ dependencies = [
     "geotext",
     "GitPython",
     "givingtuesday-datamart @ git+https://github.com/vibrant-data-labs/givingtuesday-datamart.git",
-    "research-funding-datamart @ git+https://github.com/vibrant-data-labs/research-funding-datamart.git",
     "google-api-python-client>=2.100.0",
     "google-cloud-translate>=3.11.0",
     "google-auth-oauthlib>=1.0.0",
@@ -79,6 +78,15 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+# research-funding-datamart is a PRIVATE repo, so it cannot be a core
+# dependency of public vdl-tools (base installs would fail for anyone
+# without repo access). Opt in with:  pip install "vdl-tools[research-funding]"
+# The ssh:// form authenticates via your GitHub SSH key (required anyway
+# for the private clone); vdl_tools.scrape_enrich.research_funding imports
+# the package lazily so everything else works without it.
+research-funding = [
+    "research-funding-datamart @ git+ssh://git@github.com/vibrant-data-labs/research-funding-datamart.git",
+]
 test = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",

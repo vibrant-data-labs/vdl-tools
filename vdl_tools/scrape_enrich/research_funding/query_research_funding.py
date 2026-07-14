@@ -17,7 +17,6 @@ from dataclasses import asdict
 
 import pandas as pd
 
-from research_funding_datamart.client import ResearchFundingClient
 from vdl_tools.shared_tools.parquet_cache import write_dataframe
 from vdl_tools.shared_tools.tools.config_utils import get_configuration
 from vdl_tools.shared_tools.tools.logger import logger
@@ -26,7 +25,26 @@ from vdl_tools.shared_tools.tools.logger import logger
 _SEARCH_PAGE = 500
 
 
-def _make_default_client() -> ResearchFundingClient:
+def _import_client_cls():
+    """Lazy import of the datamart client.
+
+    research-funding-datamart is a PRIVATE repo shipped as the optional
+    ``vdl-tools[research-funding]`` extra, so the import must not run at
+    module load — base vdl-tools installs don't have the package.
+    """
+    try:
+        from research_funding_datamart.client import ResearchFundingClient
+    except ImportError as err:
+        raise ImportError(
+            "research-funding-datamart is not installed. It is an optional "
+            'extra (the repo is private): pip install "vdl-tools[research-funding]" '
+            "— requires GitHub SSH access to "
+            "vibrant-data-labs/research-funding-datamart."
+        ) from err
+    return ResearchFundingClient
+
+
+def _make_default_client():
     """Build a ResearchFundingClient from vdl-tools' postgres config.
 
     The client itself does not depend on vdl-tools (it reads
@@ -35,8 +53,9 @@ def _make_default_client() -> ResearchFundingClient:
     to the client's component args. Database is pinned to
     ``research_funding`` regardless of what the local config has set.
     """
+    client_cls = _import_client_cls()
     pg = get_configuration()["postgres"]
-    return ResearchFundingClient(
+    return client_cls(
         host=pg["host"],
         port=int(pg["port"]),
         user=pg["user"],
