@@ -21,6 +21,7 @@ dependencies = [
     "geotext",
     "GitPython",
     "givingtuesday-datamart @ git+https://github.com/vibrant-data-labs/givingtuesday-datamart.git",
+    "research-funding-datamart @ git+https://github.com/vibrant-data-labs/research-funding-datamart.git",
     "google-api-python-client>=2.100.0",
     "google-cloud-translate>=3.11.0",
     "google-auth-oauthlib>=1.0.0",
