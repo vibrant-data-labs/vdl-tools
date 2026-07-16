@@ -55,7 +55,10 @@ class PromptResponse(BaseMixin):
     __tablename__ = 'prompt_response'
 
     __table_args__ = (
-        PrimaryKeyConstraint('prompt_id', 'given_id', 'model_name', 'request_hash', name='unique_prompt_given_id_model_name'),
+        # Named to match the constraint the alembic lineage manages
+        # (223e827c20cd created it as prompt_response_pkey), so a
+        # create_all-bootstrapped DB stays migratable.
+        PrimaryKeyConstraint('prompt_id', 'given_id', 'model_name', 'request_hash', name='prompt_response_pkey'),
     )
 
     prompt_id = Column(String, ForeignKey('prompt.id', onupdate="CASCADE", ondelete="CASCADE"), primary_key=True, index=True)
@@ -65,7 +68,9 @@ class PromptResponse(BaseMixin):
     # tools, temperature, ...). '' means "no output-affecting kwargs" and is
     # also the backfill value for pre-hash rows. See
     # prompt_response_cache_sql.KWARG_KEYS_THAT_AFFECT_OUTPUT.
-    request_hash = Column(String, primary_key=True, index=True, default='', server_default='')
+    # No standalone index: reads always pair request_hash with indexed
+    # columns, and it is '' for virtually all rows (near-zero cardinality).
+    request_hash = Column(String, primary_key=True, default='', server_default='')
     # The normalized allowlisted kwargs the hash was computed from — kept for
     # auditability (a hash alone can't tell you which effort/temperature
     # produced a row) and to make future re-keying possible.

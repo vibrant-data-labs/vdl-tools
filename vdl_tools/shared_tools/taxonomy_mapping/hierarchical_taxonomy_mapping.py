@@ -600,6 +600,45 @@ def _seed_branch(
 # Batch entry point — bulk-per-level walk against the SQL cache
 # ---------------------------------------------------------------------------
 
+def _build_llm_api_kwargs(
+    model: str,
+    temperature: float | None,
+    llm_api_kwargs: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Merge the ``temperature`` parameter into a copy of ``llm_api_kwargs``.
+
+    One policy for every cached call site:
+
+    - A ``temperature`` inside ``llm_api_kwargs`` wins over the parameter,
+      whose default of 0 would otherwise silently clobber an explicitly
+      requested value.
+    - Reasoning models reject ``temperature``; it is stripped whichever
+      channel it came from (with a warning when it was passed explicitly
+      via ``llm_api_kwargs``).
+    - A reasoning model with no explicit ``reasoning`` kwarg gets a
+      warning: the model's own default effort applies and the cache key
+      records only the kwarg's absence.
+    """
+    api_kwargs: dict[str, Any] = dict(llm_api_kwargs or {})
+    if is_reasoning_model(model):
+        if "temperature" in api_kwargs:
+            logger.warning(
+                f"{model} is a reasoning model and rejects `temperature`; "
+                f"dropping temperature={api_kwargs['temperature']!r} from "
+                f"llm_api_kwargs."
+            )
+            api_kwargs.pop("temperature")
+        if "reasoning" not in api_kwargs:
+            logger.warning(
+                f"No reasoning effort set for {model} — its own default applies "
+                f"and the cache key records only the absence of the kwarg; pass "
+                f"reasoning={{'effort': ...}} to pin it."
+            )
+    elif "temperature" not in api_kwargs and temperature is not None:
+        api_kwargs["temperature"] = temperature
+    return api_kwargs
+
+
 def classify_entities(
     *,
     session,
@@ -724,11 +763,14 @@ def classify_entities(
         taxonomy**, otherwise a model switch silently reuses the prior
         model's cached results.
     llm_api_kwargs
-        OpenAI API kwargs for the model call, forwarded verbatim to the
-        cache and the API — e.g. ``{"reasoning": {"effort": "low"}}`` for
-        reasoning models. An explicit dict (not ``**kwargs``) so that a
-        typo'd function kwarg fails loudly at this call instead of riding
-        into the API workers and surfacing as cache error rows.
+        OpenAI API kwargs for the model call, forwarded to the cache and
+        the API — e.g. ``{"reasoning": {"effort": "low"}}`` for reasoning
+        models. An explicit dict (not ``**kwargs``) so that a typo'd
+        function kwarg fails loudly at this call instead of riding into
+        the API workers and surfacing as cache error rows. A
+        ``temperature`` inside this dict takes precedence over the
+        ``temperature`` parameter, and is dropped (with a warning) for
+        reasoning models, which reject it; see ``_build_llm_api_kwargs``.
         Output-affecting kwargs (``reasoning``, ``top_p``, ``seed``, … — see
         ``KWARG_KEYS_THAT_AFFECT_OUTPUT`` in ``prompt_response_cache_sql``)
         are stamped on every cache row via ``request_hash`` and — **when
@@ -749,18 +791,7 @@ def classify_entities(
     empty_leaf = {k: None for k in leaf_keys}
     response_model: type[BaseModel] = match_schema or MatchesResponse
 
-    # Copy — the caller's dict must not grow a temperature key.
-    api_kwargs: dict[str, Any] = dict(llm_api_kwargs or {})
-    # Reasoning models reject `temperature`; suppress it for them.
-    # Otherwise default to 0 (legacy behavior, deterministic outputs).
-    if temperature is not None and not is_reasoning_model(model):
-        api_kwargs["temperature"] = temperature
-    if is_reasoning_model(model) and "reasoning" not in api_kwargs:
-        logger.warning(
-            f"No reasoning effort set for {model} — its own default applies "
-            f"and the cache key records only the absence of the kwarg; pass "
-            f"reasoning={{'effort': ...}} to pin it."
-        )
+    api_kwargs = _build_llm_api_kwargs(model, temperature, llm_api_kwargs)
 
     logger.info(f"Classifying {len(entities)} entities (cached, level-batched)")
     t0 = time.time()
@@ -1386,11 +1417,13 @@ def add_hierarchical_taxonomy_mapping(
     silently reuses the prior identity's cached matches.
 
     ``llm_api_kwargs`` (e.g. ``{"reasoning": {"effort": "low"}}``) is
-    forwarded verbatim to ``classify_fn`` and from there to the OpenAI API
-    and the cache key — see ``classify_entities``. An explicit dict (not
+    forwarded to ``classify_fn`` and from there to the OpenAI API and the
+    cache key — see ``classify_entities``. An explicit dict (not
     ``**kwargs``) so a typo'd function kwarg fails loudly at this call
-    instead of riding into the API workers. An injected ``classify_fn``
-    must accept the ``llm_api_kwargs`` keyword.
+    instead of riding into the API workers. Only forwarded when supplied,
+    so an injected ``classify_fn`` written before this parameter existed
+    keeps working — it must accept the ``llm_api_kwargs`` keyword only if
+    you pass one.
 
     Performs no file I/O — callers decide where the frames land, so data
     lineage stays with the project.
@@ -1411,6 +1444,12 @@ def add_hierarchical_taxonomy_mapping(
                 f"{missing} to classify — supply them, or pass a precomputed "
                 "per_row_mapping_df."
             )
+        # Forward llm_api_kwargs only when supplied: an injected classify_fn
+        # written before the parameter existed keeps working until a caller
+        # actually uses the feature.
+        classify_fn_kwargs: dict[str, Any] = {}
+        if llm_api_kwargs is not None:
+            classify_fn_kwargs["llm_api_kwargs"] = llm_api_kwargs
         per_row_mapping_df = classify_fn(
             session=session,
             tables=tables,
@@ -1428,7 +1467,7 @@ def add_hierarchical_taxonomy_mapping(
             match_schema=match_schema,
             temperature=temperature,
             filter_by_model=filter_by_model,
-            llm_api_kwargs=llm_api_kwargs,
+            **classify_fn_kwargs,
         )
 
     df = attach_mapping_columns(
@@ -1547,8 +1586,9 @@ def recover_unmatched(
     ``map_to_oneearth`` forwards its own ``filter_by_model`` here.
 
     ``llm_api_kwargs`` (e.g. ``{"reasoning": {"effort": "low"}}``) is
-    forwarded verbatim to the OpenAI API and the cache key — see
-    ``classify_entities`` for the semantics.
+    forwarded to the OpenAI API and the cache key — see
+    ``classify_entities`` for the semantics (temperature precedence and
+    reasoning-model stripping included).
     """
     if top_level_col is None or category_choices is None or scope_prompt is None:
         if levels is None or tables is None:
@@ -1598,9 +1638,7 @@ def recover_unmatched(
             requests.append((str(uid), user_text))
             uid_by_str[str(uid)] = uid
 
-        api_kwargs: dict[str, Any] = dict(llm_api_kwargs or {})
-        if temperature is not None and not is_reasoning_model(model):
-            api_kwargs["temperature"] = temperature
+        api_kwargs = _build_llm_api_kwargs(model, temperature, llm_api_kwargs)
 
         responses = cache.bulk_get_cache_or_run(
             given_ids_texts=requests,

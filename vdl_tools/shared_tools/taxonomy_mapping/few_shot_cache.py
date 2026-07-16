@@ -466,6 +466,10 @@ class FewShotCache(InstructorPRC):
             "model": self.model,
             "input": messages,
             "text_format": self.response_model,
+            # Forward API kwargs (reasoning, temperature, ...) — the base
+            # class hashes these into request_hash/request_kwargs, so the
+            # stored lineage must describe the call actually made.
+            **kwargs,
         }
         if is_reasoning_model(self.model):
             # Make the prompt_str the instructions
@@ -593,6 +597,10 @@ class FewShotCache(InstructorPRC):
             .filter(
                 PromptResponse.prompt_id == self.prompt.id,
                 PromptResponse.given_id == given_id,
+                # model_name + request_hash form the model identity; without
+                # the model filter, one model's failure would increment
+                # num_errors on a coexisting row from a different model.
+                PromptResponse.model_name == self.model,
                 PromptResponse.request_hash == request_hash,
             )
             .first()

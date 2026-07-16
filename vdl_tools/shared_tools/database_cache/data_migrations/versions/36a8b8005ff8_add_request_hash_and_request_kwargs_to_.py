@@ -30,11 +30,18 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # server_default='' backfills all existing rows in one pass, and keeps
-    # inserts from deployments that predate the ORM change valid.
+    # server_default='' backfills all existing rows in one pass and keeps
+    # plain INSERTs from pre-PR code valid. It does NOT make old code safe
+    # against the new schema: pre-PR bulk upserts use ON CONFLICT
+    # (prompt_id, given_id, model_name), which stops matching any unique
+    # index once the PK widens below (Postgres 42P10). Deploy code and this
+    # migration together, with no old writers still running.
+    #
+    # No standalone index on request_hash: no query filters by it alone
+    # (reads always pair it with indexed prompt_id/text_id/given_id), and
+    # the column is '' for virtually all rows.
     op.add_column('prompt_response', sa.Column('request_hash', sa.String(), server_default='', nullable=False))
     op.add_column('prompt_response', sa.Column('request_kwargs', postgresql.JSONB(astext_type=sa.Text()), nullable=True))
-    op.create_index(op.f('ix_prompt_response_request_hash'), 'prompt_response', ['request_hash'], unique=False)
 
     # Widen the PK to include request_hash (same pattern as 223e827c20cd,
     # which widened it to include model_name).
@@ -69,7 +76,6 @@ def downgrade() -> None:
           AND ranked.rn > 1
     """)
 
-    op.drop_index(op.f('ix_prompt_response_request_hash'), table_name='prompt_response')
     op.drop_column('prompt_response', 'request_kwargs')
     op.drop_column('prompt_response', 'request_hash')
     op.create_primary_key(

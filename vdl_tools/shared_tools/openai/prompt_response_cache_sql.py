@@ -81,12 +81,18 @@ def _normalize_request_kwargs(kwargs: dict) -> dict:
     Values are round-tripped through JSON with sorted keys so structural
     equality maps to the same normalized form (e.g. dict key order or tool
     list contents don't produce spurious cache misses).
+
+    Allowlisted values must be JSON-serializable: a non-serializable value
+    (e.g. a callable inside ``tools``) raises TypeError here rather than
+    being coerced through ``str()`` — repr-based coercion would embed memory
+    addresses, making the hash differ every process run (permanent cache
+    misses) and storing junk in ``request_kwargs``.
     """
     norm = {}
     for key in sorted(kwargs):
         if key not in KWARG_KEYS_THAT_AFFECT_OUTPUT:
             continue
-        norm[key] = json.loads(json.dumps(kwargs[key], sort_keys=True, default=str))
+        norm[key] = json.loads(json.dumps(kwargs[key], sort_keys=True))
     return norm
 
 
@@ -764,6 +770,10 @@ class PromptResponseCacheSQL():
             .filter(
                 PromptResponse.prompt_id == self.prompt.id,
                 PromptResponse.text_id == text_id,
+                # model_name + request_hash form the model identity; without
+                # the model filter, one model's failure would increment
+                # num_errors on a coexisting row from a different model.
+                PromptResponse.model_name == self.model,
                 PromptResponse.request_hash == request_hash,
             )
             .first()

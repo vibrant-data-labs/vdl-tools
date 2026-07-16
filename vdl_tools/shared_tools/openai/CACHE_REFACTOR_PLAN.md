@@ -261,9 +261,15 @@ surfacing as cache error rows).
   means default-configured callers take **no** cache bust from this change.
   Writes always stamp both (they're in the PK).
 - Migration `36a8b8005ff8`: columns + PK widening
-  `(prompt_id, given_id, model_name, request_hash)`. Old code + new schema
-  is safe (`server_default=''`); new code + old schema is not — deploy code
-  and `alembic upgrade head` together.
+  `(prompt_id, given_id, model_name, request_hash)`. **Neither direction
+  of schema/code skew is safe.** New code + old schema fails (missing
+  columns, 4-column `ON CONFLICT`). Old code + new schema breaks bulk
+  upserts: their `ON CONFLICT (prompt_id, given_id, model_name)` stops
+  matching any unique index once the PK widens (Postgres 42P10) —
+  `server_default=''` only covers plain inserts and `session.merge`
+  paths. Deploy code and `alembic upgrade head` together, with no old
+  writers (long-running pipelines, stale checkouts against the shared
+  RDS cache) still mid-run.
 
 Original goal: prevent calls that produce semantically different model output
 (different `reasoning` effort, with vs without `tools`/web search,
