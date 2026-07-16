@@ -621,6 +621,8 @@ def classify_entities(
     match_schema: type[BaseModel] | None = None,
     temperature: float | None = 0,
     filter_by_model: bool = False,
+    reasoning: dict | None = None,
+    cache_model_name: str | None = None,
 ) -> pd.DataFrame:
     """Classify many entities against the taxonomy via a SQL-cached walk.
 
@@ -722,6 +724,18 @@ def classify_entities(
         this True whenever you run more than one model against the same
         taxonomy**, otherwise a model switch silently reuses the prior
         model's cached results.
+    reasoning
+        Optional reasoning config forwarded to the Responses API for
+        reasoning models (``gpt-5*``), e.g. ``{"effort": "low"}``. Ignored
+        for non-reasoning models (they reject it). When omitted, the model's
+        own default effort applies — note that differs by model (``gpt-5-mini``
+        defaults to medium, ``gpt-5.4-mini`` to none).
+    cache_model_name
+        Optional override for the cache row's ``model_name`` (see
+        ``PromptResponseCacheSQL``). The API is still called with ``model``;
+        this only tags the cache namespace. Use it with ``filter_by_model=True``
+        to keep otherwise-identical runs that differ only in ``reasoning``
+        effort in separate cache rows (e.g. ``"gpt-5.4-mini#reasoning=low"``).
     """
     levels = normalize_levels(levels)
     last_idx = levels[-1]["idx"]
@@ -736,6 +750,23 @@ def classify_entities(
     api_kwargs: dict[str, Any] = {}
     if temperature is not None and not is_reasoning_model(model):
         api_kwargs["temperature"] = temperature
+    # Reasoning effort (e.g. {"effort": "low"}) only applies to reasoning
+    # models; pass it through to responses.parse for those. Non-reasoning
+    # models reject it, so it's guarded like temperature above.
+    if reasoning is not None and is_reasoning_model(model):
+        api_kwargs["reasoning"] = reasoning
+    elif reasoning is None and is_reasoning_model(model):
+        # The effort actually used is then the model's own default, which
+        # varies by model (gpt-5-mini: medium, gpt-5.4-mini: none) and is not
+        # recorded in the cache key — so runs at different efforts would
+        # collide. Warn rather than assume a default: the defaults are
+        # OpenAI's to change, and a key asserting the wrong effort is worse
+        # than none. Pass `reasoning` + `cache_model_name` to pin it.
+        logger.warning(
+            f"No reasoning effort set for {model} — the model's own default "
+            f"applies and is NOT part of the cache key. Review whether that "
+            f"is intended; set reasoning={{'effort': ...}} to pin it."
+        )
 
     logger.info(f"Classifying {len(entities)} entities (cached, level-batched)")
     t0 = time.time()
@@ -746,6 +777,7 @@ def classify_entities(
         model=model,
         response_model=response_model,
         filter_by_model=filter_by_model,
+        cache_model_name=cache_model_name,
     )
 
     # Initialize one branch per entity. Carry each input row's columns

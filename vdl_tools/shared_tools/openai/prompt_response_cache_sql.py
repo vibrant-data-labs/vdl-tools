@@ -210,6 +210,7 @@ class PromptResponseCacheSQL():
         filter_by_model: bool = False,
         model=DEFAULT_MODEL,
         store_results = True,
+        cache_model_name: str | None = None,
     ):
         """Initialize the cache for a given prompt and model.
 
@@ -241,6 +242,13 @@ class PromptResponseCacheSQL():
             so they can be returned from cache on future requests. If False,
             results are returned but not stored (no cache fill). Default is
             True.
+        cache_model_name : str, optional
+            When set, this string (not ``model``) is used as the cache row's
+            ``model_name`` for reads/writes, while ``model`` is still what the
+            API is actually called with. This lets otherwise-identical calls
+            that differ only in API kwargs (e.g. ``reasoning`` effort) live in
+            separate cache namespaces without changing the model-facing prompt.
+            Defaults to ``model``.
 
         Raises
         ------
@@ -260,6 +268,10 @@ class PromptResponseCacheSQL():
         )
         self.filter_by_model = filter_by_model
         self.model = model
+        # Cache-key model name: defaults to the API model, but can be tagged
+        # (e.g. "gpt-5.4-mini#reasoning=low") to separate cache rows for calls
+        # that share prompt + model but differ in API kwargs.
+        self.cache_model_name = cache_model_name or model
         self.store_results = store_results
 
         context_window, max_output_tokens = get_context_window(self.model)
@@ -365,7 +377,7 @@ class PromptResponseCacheSQL():
                 PromptResponse.given_id == given_id,
         ]
         if self.filter_by_model:
-            filters.append(PromptResponse.model_name == self.model)
+            filters.append(PromptResponse.model_name == self.cache_model_name)
 
         prompt_response_obj = (
             self.session
@@ -408,7 +420,7 @@ class PromptResponseCacheSQL():
         ]
 
         if self.filter_by_model:
-            filters.append(PromptResponse.model_name == self.model)
+            filters.append(PromptResponse.model_name == self.cache_model_name)
 
         found_rows = (
             self.session
@@ -452,7 +464,7 @@ class PromptResponseCacheSQL():
         return {
             "prompt_id": self.prompt.id,
             "given_id": str(given_id),
-            "model_name": self.model,
+            "model_name": self.cache_model_name,
             "text_id": text_id,
             "input_text": text,
             "response_full": response.model_dump_json(),
@@ -476,7 +488,7 @@ class PromptResponseCacheSQL():
         return {
             "prompt_id": self.prompt.id,
             "given_id": str(given_id),
-            "model_name": self.model,
+            "model_name": self.cache_model_name,
             "text_id": text_id,
             "input_text": text,
             "response_full": response_full,

@@ -143,6 +143,7 @@ class TaxonomyMatchCache(InstructorPRC):
         store_results: bool = True,
         filter_by_model: bool = False,
         response_model: type[BaseModel] = MatchesResponse,
+        cache_model_name: str | None = None,
     ):
         super().__init__(
             session=session,
@@ -152,6 +153,7 @@ class TaxonomyMatchCache(InstructorPRC):
             model=model,
             filter_by_model=filter_by_model,
             store_results=store_results,
+            cache_model_name=cache_model_name,
         )
 
 
