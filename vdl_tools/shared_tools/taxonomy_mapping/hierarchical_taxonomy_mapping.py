@@ -1351,6 +1351,7 @@ def add_hierarchical_taxonomy_mapping(
     write_to_cache: bool = True,
     temperature: float | None = 0,
     filter_by_model: bool = False,
+    **api_kwargs: Any,
 ) -> tuple[pd.DataFrame, pd.DataFrame | None, pd.DataFrame]:
     """Classify entities and attach the full legacy mapping outputs.
 
@@ -1375,9 +1376,15 @@ def add_hierarchical_taxonomy_mapping(
     keep ``name_col`` stable across runs to preserve cache hits.
 
     ``filter_by_model`` is forwarded to ``classify_entities`` — set it True
-    whenever you run more than one ``model`` against the same taxonomy +
-    prompt, otherwise a model switch silently reuses the prior model's
-    cached matches.
+    whenever you run more than one model identity (name OR hyperparameters)
+    against the same taxonomy + prompt, otherwise an identity switch
+    silently reuses the prior identity's cached matches.
+
+    ``**api_kwargs`` (e.g. ``reasoning={"effort": "low"}``) are forwarded
+    verbatim to ``classify_fn`` and from there to the OpenAI API and the
+    cache key — see ``classify_entities``. An injected ``classify_fn`` must
+    accept them (``classify_entities`` and any ``**kwargs``-taking wrapper
+    do); a wrapper with a closed signature will fail loudly.
 
     Performs no file I/O — callers decide where the frames land, so data
     lineage stays with the project.
@@ -1415,6 +1422,7 @@ def add_hierarchical_taxonomy_mapping(
             match_schema=match_schema,
             temperature=temperature,
             filter_by_model=filter_by_model,
+            **api_kwargs,
         )
 
     df = attach_mapping_columns(
