@@ -101,6 +101,20 @@ def _request_hash(norm_kwargs: dict) -> str:
     return create_deterministic_md5(json.dumps(norm_kwargs, sort_keys=True))
 
 
+def _row_preference(row) -> tuple:
+    """Sort key for picking one row when several share (given_id, text_id).
+
+    Reads at filter_by_model=False can match one row per model identity
+    (name + request_hash) under the widened PK. A success row always beats
+    an error row — a failed run under one identity must not shadow another
+    identity's cached success — and newer beats older.
+    """
+    return (
+        not row.num_errors,
+        row.date_updated or row.date_added or dt.datetime.min,
+    )
+
+
 def _resolve_cache_flags(
     read_from_cache: bool,
     write_to_cache: bool,
@@ -459,6 +473,17 @@ class PromptResponseCacheSQL():
             self.session
             .query(PromptResponse)
             .filter(*filters)
+            # At filter_by_model=False several rows can match (one per model
+            # identity under the widened PK); without an ORDER BY, .first()
+            # is arbitrary. Deterministic winner: success rows before error
+            # rows, then most recently touched (date_updated is NULL until a
+            # row is refreshed, so fall back to date_added).
+            .order_by(
+                func.coalesce(PromptResponse.num_errors, 0).asc(),
+                func.coalesce(
+                    PromptResponse.date_updated, PromptResponse.date_added
+                ).desc().nullslast(),
+            )
         )
         return prompt_response_obj.first()
 
@@ -512,8 +537,19 @@ class PromptResponseCacheSQL():
 
         logger.info("Found %s total rows", len(found_rows))
 
-        found_rows_to_errors = {(x.given_id, x.text_id): x.num_errors for x in found_rows}
-        found_rows = [x for x in found_rows if not found_rows_to_errors.get((x.given_id, x.text_id))]
+        # At filter_by_model=False several rows can match one (given_id,
+        # text_id) — one per model identity under the widened PK. Collapse
+        # via _row_preference (success beats error, newer beats older) so an
+        # error row never shadows a cached success out of the results.
+        best_rows: dict[tuple[str, str], PromptResponse] = {}
+        for row in found_rows:
+            key = (row.given_id, row.text_id)
+            prev = best_rows.get(key)
+            if prev is None or _row_preference(row) > _row_preference(prev):
+                best_rows[key] = row
+
+        found_rows_to_errors = {key: row.num_errors for key, row in best_rows.items()}
+        found_rows = [row for row in best_rows.values() if not row.num_errors]
 
         found_rows_keys = found_rows_to_errors.keys()
         unfound_ids_or_errors = {
