@@ -220,9 +220,8 @@ class PromptResponseCacheSQL():
       allowed by the API for that model.
 
     Always pass kwargs that match the **model** you configured (e.g. do not
-    pass ``reasoning`` when using a non-reasoning model). The cache stores
-    responses per (prompt, text, model) when ``filter_by_model`` is True, so
-    switching model or kwargs can yield different cached or fresh results.
+    pass ``reasoning`` when using a non-reasoning model). How model and
+    kwargs key the cache is described under "Kwargs-aware cache keys" below.
 
     **Kwargs-aware cache keys (request_hash)**
 
@@ -410,15 +409,11 @@ class PromptResponseCacheSQL():
         text : str
             Input text that was sent to the model (used to compute text_id).
         request_kwargs : dict, optional
-            The API kwargs of the call being looked up (raw is fine — the
-            allowlist filter and hashing happen here, see
-            ``PromptResponse.create_request_hash``). The derived hash is
-            filtered together with ``model_name`` when ``filter_by_model``
-            is True — the two are one "model identity" (name +
-            hyperparameters). At the default ``filter_by_model=False``,
-            reads share rows across model identities entirely (name AND
-            kwargs), preserving legacy behavior. None/{} means no
-            output-affecting kwargs (including pre-hash legacy rows).
+            API kwargs of the call being looked up (raw is fine); the
+            cache-key hash is derived here via
+            ``PromptResponse.create_request_hash`` and applied only when
+            ``filter_by_model`` is True. Keying semantics: see
+            "Kwargs-aware cache keys" in the class docstring.
 
         Returns
         -------
@@ -471,9 +466,9 @@ class PromptResponseCacheSQL():
         given_ids_texts : list of tuple[str, str]
             Pairs of (given_id, text) to look up.
         request_kwargs : dict, optional
-            API kwargs of the call being looked up; the derived hash is
-            filtered together with ``model_name`` when ``filter_by_model``
-            is True. See ``get_prompt_response_obj``.
+            API kwargs of the call being looked up; handled as in
+            ``get_prompt_response_obj`` (keying semantics: see
+            "Kwargs-aware cache keys" in the class docstring).
 
         Returns
         -------

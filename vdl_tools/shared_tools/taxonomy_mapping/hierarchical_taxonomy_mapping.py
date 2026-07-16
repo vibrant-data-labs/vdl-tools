@@ -754,14 +754,12 @@ def classify_entities(
         which reject the parameter — those models use their own
         sampling internally. Pass ``None`` to omit entirely.
     filter_by_model
-        When True, cache rows are scoped by model name, so the same
-        prompt + text under different models (e.g. ``gpt-4.1`` vs
-        ``gpt-5.4-nano``) get separate cache entries. Default False
-        shares rows across models — which means a lookup can return
-        another model's answer for an identical prompt + text. **Set
-        this True whenever you run more than one model against the same
-        taxonomy**, otherwise a model switch silently reuses the prior
-        model's cached results.
+        When True, cache reads are scoped to the model identity (name +
+        output-affecting kwargs; see "Kwargs-aware cache keys" in the
+        ``PromptResponseCacheSQL`` docstring). **Set this True whenever
+        you run more than one model identity against the same taxonomy**,
+        otherwise an identity switch silently reuses the prior identity's
+        cached results.
     llm_api_kwargs
         OpenAI API kwargs for the model call, forwarded to the cache and
         the API — e.g. ``{"reasoning": {"effort": "low"}}`` for reasoning
@@ -771,17 +769,12 @@ def classify_entities(
         ``temperature`` inside this dict takes precedence over the
         ``temperature`` parameter, and is dropped (with a warning) for
         reasoning models, which reject it; see ``_build_llm_api_kwargs``.
-        Output-affecting kwargs (``reasoning``, ``top_p``, ``seed``, … — see
-        ``KWARG_KEYS_THAT_AFFECT_OUTPUT`` in ``prompt_response_cache_sql``)
-        are stamped on every cache row via ``request_hash`` and — **when
-        ``filter_by_model=True``** — keyed on reads, so runs differing only
-        in these get separate cache rows. As with model names, set
-        ``filter_by_model=True`` whenever you A/B hyperparameters against
-        the same taxonomy. Invalid kwargs fail at the OpenAI client. Note:
-        when a reasoning model runs with no explicit ``reasoning``, the
-        model's own default effort applies (it differs by model and is
-        OpenAI's to change) and the key records only "no reasoning kwarg" —
-        pass ``reasoning`` explicitly to pin it.
+        How these kwargs key the cache is described in "Kwargs-aware cache
+        keys" in the ``PromptResponseCacheSQL`` docstring. Note: when a
+        reasoning model runs with no explicit ``reasoning``, the model's
+        own default effort applies (it differs by model and is OpenAI's to
+        change) and the key records only "no reasoning kwarg" — pass
+        ``reasoning`` explicitly to pin it.
     """
     levels = normalize_levels(levels)
     last_idx = levels[-1]["idx"]
@@ -1580,9 +1573,10 @@ def recover_unmatched(
     top-level node (or null); ``ScopeDecision`` is the source of truth.
 
     ``filter_by_model`` (default False, matching the engine default)
-    scopes the ``ScopeRecoveryCache`` rows by model name. Pass True when
-    A/B-comparing recovery models against the same scope prompt so the
-    second model does not silently reuse the first's cached decisions;
+    scopes ``ScopeRecoveryCache`` reads to the model identity (name +
+    output-affecting kwargs; see "Kwargs-aware cache keys" in the
+    ``PromptResponseCacheSQL`` docstring). Pass True when A/B-comparing
+    recovery models or hyperparameters against the same scope prompt;
     ``map_to_oneearth`` forwards its own ``filter_by_model`` here.
 
     ``llm_api_kwargs`` (e.g. ``{"reasoning": {"effort": "low"}}``) is

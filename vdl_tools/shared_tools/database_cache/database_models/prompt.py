@@ -82,11 +82,10 @@ class PromptResponse(BaseMixin):
     prompt_id = Column(String, ForeignKey('prompt.id', onupdate="CASCADE", ondelete="CASCADE"), primary_key=True, index=True)
     given_id = Column(String, primary_key=True, index=True)
     model_name = Column(String, primary_key=True, index=True)
-    # Hash of the allowlisted API kwargs that change model output (reasoning,
-    # tools, temperature, ...). '' means "no output-affecting kwargs" and is
-    # also the backfill value for pre-hash rows. Derived from request_kwargs
-    # (see KWARG_KEYS_THAT_AFFECT_OUTPUT above), never passed independently —
-    # __init__ enforces the pairing the way it does for text_id/input_text.
+    # Derived from request_kwargs by __init__ / create_request_hash (like
+    # text_id from input_text); '' = no output-affecting kwargs, incl.
+    # pre-hash legacy rows. Keying semantics: see "Kwargs-aware cache keys"
+    # in the PromptResponseCacheSQL class docstring.
     # No standalone index: reads always pair request_hash with indexed
     # columns, and it is '' for virtually all rows (near-zero cardinality).
     request_hash = Column(String, primary_key=True, default='', server_default='')
