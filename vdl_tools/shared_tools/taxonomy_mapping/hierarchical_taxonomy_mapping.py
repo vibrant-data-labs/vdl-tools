@@ -621,6 +621,7 @@ def classify_entities(
     match_schema: type[BaseModel] | None = None,
     temperature: float | None = 0,
     filter_by_model: bool = False,
+    **api_kwargs: Any,
 ) -> pd.DataFrame:
     """Classify many entities against the taxonomy via a SQL-cached walk.
 
@@ -722,6 +723,17 @@ def classify_entities(
         this True whenever you run more than one model against the same
         taxonomy**, otherwise a model switch silently reuses the prior
         model's cached results.
+    **api_kwargs
+        Any further OpenAI API kwargs, forwarded verbatim to the cache and
+        the API — e.g. ``reasoning={"effort": "low"}`` for reasoning models.
+        Output-affecting kwargs (``reasoning``, ``top_p``, ``seed``, … — see
+        ``KWARG_KEYS_THAT_AFFECT_OUTPUT`` in ``prompt_response_cache_sql``)
+        are part of the cache key via ``request_hash``, so runs differing
+        only in these get separate cache rows. Invalid kwargs fail at the
+        OpenAI client. Note: when a reasoning model runs with no explicit
+        ``reasoning``, the model's own default effort applies (it differs
+        by model and is OpenAI's to change) and the key records only "no
+        reasoning kwarg" — pass ``reasoning`` explicitly to pin it.
     """
     levels = normalize_levels(levels)
     last_idx = levels[-1]["idx"]
@@ -733,9 +745,14 @@ def classify_entities(
 
     # Reasoning models reject `temperature`; suppress it for them.
     # Otherwise default to 0 (legacy behavior, deterministic outputs).
-    api_kwargs: dict[str, Any] = {}
     if temperature is not None and not is_reasoning_model(model):
         api_kwargs["temperature"] = temperature
+    if is_reasoning_model(model) and "reasoning" not in api_kwargs:
+        logger.warning(
+            f"No reasoning effort set for {model} — its own default applies "
+            f"and the cache key records only the absence of the kwarg; pass "
+            f"reasoning={{'effort': ...}} to pin it."
+        )
 
     logger.info(f"Classifying {len(entities)} entities (cached, level-batched)")
     t0 = time.time()
@@ -1473,6 +1490,7 @@ def recover_unmatched(
     write_to_cache: bool = True,
     temperature: float | None = 0,
     filter_by_model: bool = False,
+    **api_kwargs: Any,
 ) -> pd.DataFrame:
     """Second-stage scope check on entities the walk left unmatched.
 
@@ -1559,7 +1577,6 @@ def recover_unmatched(
             requests.append((str(uid), user_text))
             uid_by_str[str(uid)] = uid
 
-        api_kwargs: dict[str, Any] = {}
         if temperature is not None and not is_reasoning_model(model):
             api_kwargs["temperature"] = temperature
 

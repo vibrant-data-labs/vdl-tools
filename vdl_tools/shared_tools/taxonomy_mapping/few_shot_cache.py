@@ -476,7 +476,7 @@ class FewShotCache(InstructorPRC):
 
         return response
 
-    def _build_success_row(self, given_id, text, response):
+    def _build_success_row(self, given_id, text, response, request_hash="", request_kwargs=None):
         """Override: JSON-encode dict text and use IsRelevant serialization.
 
         Differs from the base class by:
@@ -493,6 +493,8 @@ class FewShotCache(InstructorPRC):
             "prompt_id": self.prompt.id,
             "given_id": str(given_id),
             "model_name": self.model,
+            "request_hash": request_hash,
+            "request_kwargs": request_kwargs or None,
             "text_id": text_id,
             "input_text": text_json,
             "response_full": response.model_dump(),
@@ -500,7 +502,7 @@ class FewShotCache(InstructorPRC):
             "num_errors": 0,
         }
 
-    def _build_error_row(self, given_id, text, response_full):
+    def _build_error_row(self, given_id, text, response_full, request_hash="", request_kwargs=None):
         """Override: JSON-encode dict text for the error row, preserving
         the historical ``model_name`` (the base error-row also includes it,
         which was missing from the legacy single-row ``store_error`` path).
@@ -511,6 +513,8 @@ class FewShotCache(InstructorPRC):
             "prompt_id": self.prompt.id,
             "given_id": str(given_id),
             "model_name": self.model,
+            "request_hash": request_hash,
+            "request_kwargs": request_kwargs or None,
             "text_id": text_id,
             "input_text": text_json,
             "response_full": response_full,
@@ -522,6 +526,8 @@ class FewShotCache(InstructorPRC):
         given_id: str,
         text,
         response,
+        request_hash: str = "",
+        request_kwargs: dict | None = None,
     ):
         """Store a successful relevance response in the cache (single-row path).
 
@@ -543,7 +549,10 @@ class FewShotCache(InstructorPRC):
         PromptResponse
             The merged cache row.
         """
-        row = self._build_success_row(given_id, text, response)
+        row = self._build_success_row(
+            given_id, text, response,
+            request_hash=request_hash, request_kwargs=request_kwargs,
+        )
         prompt_response_obj = PromptResponse(**row)
         if self.store_results:
             self.session.merge(prompt_response_obj)
@@ -555,6 +564,8 @@ class FewShotCache(InstructorPRC):
         given_id: str,
         text,
         response_full,
+        request_hash: str = "",
+        request_kwargs: dict | None = None,
     ):
         """Store or update a cache row for a failed API call (increment num_errors).
 
@@ -582,6 +593,7 @@ class FewShotCache(InstructorPRC):
             .filter(
                 PromptResponse.prompt_id == self.prompt.id,
                 PromptResponse.given_id == given_id,
+                PromptResponse.request_hash == request_hash,
             )
             .first()
         )
@@ -595,7 +607,10 @@ class FewShotCache(InstructorPRC):
                 self.session.merge(previous_response)
             prompt_response_obj = previous_response
         else:
-            row = self._build_error_row(given_id, text, response_full)
+            row = self._build_error_row(
+                given_id, text, response_full,
+                request_hash=request_hash, request_kwargs=request_kwargs,
+            )
             prompt_response_obj = PromptResponse(**row)
             if self.store_results:
                 self.session.merge(prompt_response_obj)

@@ -8,9 +8,9 @@
 | Step | Status | PR |
 |---|---|---|
 | 1. API-only workers + bulk upsert | ✅ Shipped | #126 |
-| 3. `read_from_cache` / `write_to_cache` per-call flags | ✅ Shipped | _this PR_ |
+| 3. `read_from_cache` / `write_to_cache` per-call flags | ✅ Shipped | #128 |
 | 2. Tenacity retry on validation/JSON parse errors | ⏳ Not started | — |
-| 4. `request_hash` column for kwargs-aware cache keys | ⏳ Not started | — |
+| 4. `request_hash` column for kwargs-aware cache keys | ✅ Shipped | _this PR_ (supersedes #156) |
 
 > Step 3 shipped ahead of Step 2: the two are independent (Step 2 lives in
 > `openai_api_utils.py`, Step 3 in the cache flag plumbing) and Step 3 was
@@ -229,9 +229,34 @@ All four quadrants asserted end-to-end against the real database:
 - Migrate at leisure — no urgency. The alias has no planned removal date
   in this PR.
 
-## Step 4 — Add `request_hash` to the cache key
+## Step 4 — Add `request_hash` to the cache key ✅
 
-Goal: prevent calls that produce semantically different model output
+**Status: shipped.** Supersedes PR #156 (`cache_model_name`, a manual
+namespacing mechanism — credit @larareichmann for surfacing the collision
+and the salvaged pieces: the `gpt-5-mini` `MODEL_DATA` entry and reasoning
+passthrough on `classify_entities`, generalized to `**api_kwargs`).
+
+**Decisions made at ship time (2026-07-16):**
+- **Strict hash matching, no legacy fallback.** Existing rows backfilled to
+  `request_hash=''`; callers already passing allowlisted kwargs take a
+  one-time cache bust (known: `classify_entities` `temperature=0`,
+  `tools/search_term_expansion.py` `temperature=0.5`). Accepted — no cached
+  taxonomy results were worth salvaging. Callers passing no allowlisted
+  kwargs hash to `''` and keep matching legacy rows.
+- **`request_kwargs` JSONB column added alongside the hash** — stores the
+  normalized allowlisted kwargs for auditability/lineage and future
+  re-keying. Not part of the key.
+- Hashing uses `create_deterministic_md5` (`tools/unique_ids.py`) — the id
+  convention in the newer cache models (`embedding.py`, `geocode.py`) —
+  rather than `make_uuid`.
+- `request_hash` is filtered **unconditionally** on reads (unlike
+  `filter_by_model`): kwargs differences are exactly what the hash keys.
+- Migration `36a8b8005ff8`: columns + PK widening
+  `(prompt_id, given_id, model_name, request_hash)`. Old code + new schema
+  is safe (`server_default=''`); new code + old schema is not — deploy code
+  and `alembic upgrade head` together.
+
+Original goal: prevent calls that produce semantically different model output
 (different `reasoning` effort, with vs without `tools`/web search,
 different `temperature`, etc.) from sharing a row, while still letting
 the same underlying response be re-parsed against different
@@ -352,6 +377,6 @@ predictable.
 
 Each step is independently shippable and reversible:
 1. PR1: Step 1 (perf). ✅ #126. Big win, no API surface change, no schema change.
-2. PR2: Step 3 (flags). ✅ _this PR_. Additive, deprecation alias keeps callers working.
-3. PR3: Step 2 (retry). Small, isolated, benefits all callers.
-4. PR4: Step 4 (`request_hash`). Schema migration; coordinate deployment.
+2. PR2: Step 3 (flags). ✅ #128. Additive, deprecation alias keeps callers working.
+3. PR3: Step 2 (retry). Small, isolated, benefits all callers. **Only remaining step.**
+4. PR4: Step 4 (`request_hash`). ✅ _this PR_. Schema migration; coordinate deployment.

@@ -16,6 +16,7 @@ docstring and method Notes for model-specific parameters.
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor as ThreadPool
 import datetime as dt
+import json
 import warnings
 
 from sqlalchemy import select, func, tuple_
@@ -26,6 +27,7 @@ from vdl_tools.shared_tools.database_cache.database_models.prompt import Prompt,
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 from vdl_tools.shared_tools.openai.openai_api_utils import get_completion, get_context_window, get_num_tokens
 from vdl_tools.shared_tools.tools.logger import logger
+from vdl_tools.shared_tools.tools.unique_ids import create_deterministic_md5
 
 import logging
 logger.setLevel(logging.DEBUG)
@@ -53,6 +55,50 @@ from typing import Any, Optional
 # bulletproof "did the caller touch this kwarg?" check. Standard Python
 # pattern; same idea as `dataclasses.MISSING` and `dict.pop(key, _missing)`.
 _UNSET = object()
+
+
+# API kwargs that change what the model produces, and therefore belong in the
+# cache key. Anything NOT on this list is treated as cosmetic and ignored when
+# hashing — notably `text_format`: we store `response_full` raw and parse it at
+# retrieval time, so the same row can be re-parsed against a different Pydantic
+# model without a cache miss. New output-affecting kwargs must be added here
+# explicitly (via PR) — opt-in keeps cache invalidation predictable.
+KWARG_KEYS_THAT_AFFECT_OUTPUT = frozenset({
+    "reasoning",
+    "tools",
+    "tool_choice",
+    "temperature",
+    "top_p",
+    "max_output_tokens",
+    "seed",
+    "service_tier",
+})
+
+
+def _normalize_request_kwargs(kwargs: dict) -> dict:
+    """Filter kwargs to the output-affecting allowlist and normalize values.
+
+    Values are round-tripped through JSON with sorted keys so structural
+    equality maps to the same normalized form (e.g. dict key order or tool
+    list contents don't produce spurious cache misses).
+    """
+    norm = {}
+    for key in sorted(kwargs):
+        if key not in KWARG_KEYS_THAT_AFFECT_OUTPUT:
+            continue
+        norm[key] = json.loads(json.dumps(kwargs[key], sort_keys=True, default=str))
+    return norm
+
+
+def _request_hash(norm_kwargs: dict) -> str:
+    """Hash normalized kwargs into the cache-key component.
+
+    Empty kwargs hash to '' so calls with no output-affecting kwargs keep
+    matching pre-hash rows (which were backfilled with '').
+    """
+    if not norm_kwargs:
+        return ""
+    return create_deterministic_md5(json.dumps(norm_kwargs, sort_keys=True))
 
 
 def _resolve_cache_flags(
@@ -197,6 +243,24 @@ class PromptResponseCacheSQL():
     pass ``reasoning`` when using a non-reasoning model). The cache stores
     responses per (prompt, text, model) when ``filter_by_model`` is True, so
     switching model or kwargs can yield different cached or fresh results.
+
+    **Kwargs-aware cache keys (request_hash)**
+
+    Kwargs that change what the model produces are part of the cache key: a
+    ``request_hash`` is computed per call from the allowlist
+    ``KWARG_KEYS_THAT_AFFECT_OUTPUT`` (``reasoning``, ``tools``,
+    ``tool_choice``, ``temperature``, ``top_p``, ``max_output_tokens``,
+    ``seed``, ``service_tier``) and stored on the row, so e.g.
+    ``reasoning={"effort": "low"}`` vs ``{"effort": "high"}`` occupy separate
+    rows instead of colliding. Kwargs NOT on the allowlist are treated as
+    cosmetic and reuse the cache — notably ``text_format``: ``response_full``
+    is stored raw and parsed at retrieval, so changing the Pydantic response
+    model does not bust the cache. If you pass a new kwarg that changes model
+    output, it must be added to the allowlist explicitly (via PR); until then
+    it will silently share rows. Calls with no allowlisted kwargs hash to
+    ``''``, which also matches rows written before the hash existed. The
+    normalized kwargs are stored alongside the hash in ``request_kwargs``
+    for auditability.
     """
 
     def __init__(
@@ -342,7 +406,7 @@ class PromptResponseCacheSQL():
             temp_prompt = all_prompts[temp_prompt.id]
         return temp_prompt
 
-    def get_prompt_response_obj(self, given_id: str, text: str):
+    def get_prompt_response_obj(self, given_id: str, text: str, request_hash: str = ""):
         """Fetch a single cached response for (given_id, text).
 
         Parameters
@@ -351,6 +415,12 @@ class PromptResponseCacheSQL():
             User-defined identifier for the request (e.g. URL, row id).
         text : str
             Input text that was sent to the model (used to compute text_id).
+        request_hash : str, optional
+            Hash of the output-affecting API kwargs (see
+            ``KWARG_KEYS_THAT_AFFECT_OUTPUT``). Filtered unconditionally —
+            unlike ``filter_by_model``, kwargs differences are exactly what
+            the hash keys against. Default '' matches rows written with no
+            output-affecting kwargs (including pre-hash legacy rows).
 
         Returns
         -------
@@ -363,6 +433,7 @@ class PromptResponseCacheSQL():
                 PromptResponse.prompt_id == self.prompt.id,
                 PromptResponse.text_id == text_id,
                 PromptResponse.given_id == given_id,
+                PromptResponse.request_hash == request_hash,
         ]
         if self.filter_by_model:
             filters.append(PromptResponse.model_name == self.model)
@@ -377,6 +448,7 @@ class PromptResponseCacheSQL():
     def get_prompt_response_obj_bulk(
         self,
         given_ids_texts: list[tuple[str, str]],
+        request_hash: str = "",
     ):
         """Fetch cached responses for many (given_id, text) pairs.
 
@@ -386,6 +458,9 @@ class PromptResponseCacheSQL():
         ----------
         given_ids_texts : list of tuple[str, str]
             Pairs of (given_id, text) to look up.
+        request_hash : str, optional
+            Hash of the output-affecting API kwargs; filtered
+            unconditionally. See ``get_prompt_response_obj``.
 
         Returns
         -------
@@ -405,6 +480,7 @@ class PromptResponseCacheSQL():
         filters = [
             PromptResponse.prompt_id == self.prompt.id,
             PromptResponse.text_id.in_(text_ids),
+            PromptResponse.request_hash == request_hash,
         ]
 
         if self.filter_by_model:
@@ -434,6 +510,8 @@ class PromptResponseCacheSQL():
         given_id: str,
         text,
         response,
+        request_hash: str = "",
+        request_kwargs: dict | None = None,
     ) -> dict[str, Any]:
         """Build a row dict for a successful API response.
 
@@ -453,6 +531,8 @@ class PromptResponseCacheSQL():
             "prompt_id": self.prompt.id,
             "given_id": str(given_id),
             "model_name": self.model,
+            "request_hash": request_hash,
+            "request_kwargs": request_kwargs or None,
             "text_id": text_id,
             "input_text": text,
             "response_full": response.model_dump_json(),
@@ -465,6 +545,8 @@ class PromptResponseCacheSQL():
         given_id: str,
         text,
         response_full,
+        request_hash: str = "",
+        request_kwargs: dict | None = None,
     ) -> dict[str, Any]:
         """Build a row dict for a failed API call (single-error row).
 
@@ -477,6 +559,8 @@ class PromptResponseCacheSQL():
             "prompt_id": self.prompt.id,
             "given_id": str(given_id),
             "model_name": self.model,
+            "request_hash": request_hash,
+            "request_kwargs": request_kwargs or None,
             "text_id": text_id,
             "input_text": text,
             "response_full": response_full,
@@ -507,7 +591,7 @@ class PromptResponseCacheSQL():
         # Dedupe by PK so a single batch never violates ON CONFLICT semantics.
         deduped: dict[tuple, dict[str, Any]] = {}
         for row in rows:
-            key = (row["prompt_id"], row["given_id"], row["model_name"])
+            key = (row["prompt_id"], row["given_id"], row["model_name"], row["request_hash"])
             deduped[key] = row
         rows = list(deduped.values())
 
@@ -524,12 +608,13 @@ class PromptResponseCacheSQL():
 
         stmt = pg_insert(PromptResponse).values(rows)
         stmt = stmt.on_conflict_do_update(
-            index_elements=["prompt_id", "given_id", "model_name"],
+            index_elements=["prompt_id", "given_id", "model_name", "request_hash"],
             set_={
                 "text_id": stmt.excluded.text_id,
                 "input_text": stmt.excluded.input_text,
                 "response_full": stmt.excluded.response_full,
                 "response_text": stmt.excluded.response_text,
+                "request_kwargs": stmt.excluded.request_kwargs,
                 "num_errors": None,
                 # date_added intentionally NOT in the SET clause — preserve
                 # the original "first cached at" timestamp on refresh.
@@ -559,7 +644,7 @@ class PromptResponseCacheSQL():
             return
         deduped: dict[tuple, dict[str, Any]] = {}
         for row in rows:
-            key = (row["prompt_id"], row["given_id"], row["model_name"])
+            key = (row["prompt_id"], row["given_id"], row["model_name"], row["request_hash"])
             deduped[key] = row
         rows = list(deduped.values())
 
@@ -572,7 +657,7 @@ class PromptResponseCacheSQL():
 
         stmt = pg_insert(PromptResponse).values(rows)
         stmt = stmt.on_conflict_do_update(
-            index_elements=["prompt_id", "given_id", "model_name"],
+            index_elements=["prompt_id", "given_id", "model_name", "request_hash"],
             set_={
                 "response_full": stmt.excluded.response_full,
                 "num_errors": func.coalesce(PromptResponse.num_errors, 0) + 1,
@@ -586,6 +671,8 @@ class PromptResponseCacheSQL():
         given_id: str,
         text,
         response_full,
+        request_hash: str = "",
+        request_kwargs: dict | None = None,
     ):
         """Store or update a cache row for a failed API call (increment num_errors).
 
@@ -600,6 +687,10 @@ class PromptResponseCacheSQL():
             Input text (used to compute text_id).
         response_full
             Raw error/response payload to store (e.g. dict or JSON string).
+        request_hash : str, optional
+            Cache-key component hashed from the output-affecting API kwargs.
+        request_kwargs : dict, optional
+            The normalized kwargs the hash was computed from (lineage).
 
         Returns
         -------
@@ -619,6 +710,7 @@ class PromptResponseCacheSQL():
             .filter(
                 PromptResponse.prompt_id == self.prompt.id,
                 PromptResponse.text_id == text_id,
+                PromptResponse.request_hash == request_hash,
             )
             .first()
         )
@@ -632,7 +724,10 @@ class PromptResponseCacheSQL():
                 self.session.merge(previous_response)
             prompt_response_obj = previous_response
         else:
-            row = self._build_error_row(given_id, text, response_full)
+            row = self._build_error_row(
+                given_id, text, response_full,
+                request_hash=request_hash, request_kwargs=request_kwargs,
+            )
             prompt_response_obj = PromptResponse(**row)
             if self.store_results:
                 self.session.merge(prompt_response_obj)
@@ -643,6 +738,8 @@ class PromptResponseCacheSQL():
         given_id: str,
         text,
         response,
+        request_hash: str = "",
+        request_kwargs: dict | None = None,
     ):
         """Store a successful API response in the cache.
 
@@ -667,7 +764,10 @@ class PromptResponseCacheSQL():
         PromptResponse
             The cache row (persisted only if store_results is True).
         """
-        row = self._build_success_row(given_id, text, response)
+        row = self._build_success_row(
+            given_id, text, response,
+            request_hash=request_hash, request_kwargs=request_kwargs,
+        )
         prompt_response_obj = PromptResponse(**row)
 
         logger.debug("Storing response for %s, %s", self.prompt.name, given_id)
@@ -776,10 +876,15 @@ class PromptResponseCacheSQL():
             read_from_cache, write_to_cache, use_cached_result,
         )
 
+        # One hash per call — kwargs are shared by the lookup and the write.
+        request_kwargs = _normalize_request_kwargs(kwargs)
+        request_hash = _request_hash(request_kwargs)
+
         if read_from_cache:
             data = self.get_prompt_response_obj(
                 given_id=given_id,
                 text=text,
+                request_hash=request_hash,
             )
             if data:
                 logger.info("Found cached response for %s", given_id)
@@ -797,10 +902,15 @@ class PromptResponseCacheSQL():
                     given_id=given_id,
                     text=text,
                     response=response,
+                    request_hash=request_hash,
+                    request_kwargs=request_kwargs,
                 )
                 return data.to_dict()
             # Read-only / passthrough: build the response shape without persisting.
-            row = self._build_success_row(given_id, text, response)
+            row = self._build_success_row(
+                given_id, text, response,
+                request_hash=request_hash, request_kwargs=request_kwargs,
+            )
             return self._row_to_response_dict(row)
         else:
             logger.warning("No response text for %s", given_id)
@@ -809,6 +919,8 @@ class PromptResponseCacheSQL():
                     given_id=given_id,
                     text=text,
                     response_full=response,
+                    request_hash=request_hash,
+                    request_kwargs=request_kwargs,
                 )
             return None
 
@@ -931,6 +1043,10 @@ class PromptResponseCacheSQL():
             logger.warning("No given_ids_texts passed")
             return {}
 
+        # One hash per bulk call — every item shares the same kwargs.
+        request_kwargs = _normalize_request_kwargs(kwargs)
+        request_hash = _request_hash(request_kwargs)
+
         # Convert the given_ids to strings in case they are integers
         given_ids_texts = [(str(x[0]), x[1]) for x in given_ids_texts]
 
@@ -945,6 +1061,7 @@ class PromptResponseCacheSQL():
         if read_from_cache:
             found_rows, unfound_ids_errors = self.get_prompt_response_obj_bulk(
                 given_ids_texts,
+                request_hash=request_hash,
             )
             unfound_rows = []
             for given_id, text in given_ids_texts:
@@ -998,10 +1115,18 @@ class PromptResponseCacheSQL():
                         if error:
                             logger.warning("No response text for %s", given_id)
                             error_rows.append(
-                                self._build_error_row(given_id, text, response)
+                                self._build_error_row(
+                                    given_id, text, response,
+                                    request_hash=request_hash,
+                                    request_kwargs=request_kwargs,
+                                )
                             )
                         else:
-                            row = self._build_success_row(given_id, text, response)
+                            row = self._build_success_row(
+                                given_id, text, response,
+                                request_hash=request_hash,
+                                request_kwargs=request_kwargs,
+                            )
                             success_rows.append(row)
                             # Build the to_dict() shape the legacy path returns,
                             # without needing to round-trip through the DB.
@@ -1051,6 +1176,8 @@ class PromptResponseCacheSQL():
             "prompt_id": row.get("prompt_id"),
             "given_id": row.get("given_id"),
             "model_name": row.get("model_name"),
+            "request_hash": row.get("request_hash", ""),
+            "request_kwargs": row.get("request_kwargs"),
             "text_id": row.get("text_id"),
             "input_text": row.get("input_text"),
             "response_full": row.get("response_full"),
