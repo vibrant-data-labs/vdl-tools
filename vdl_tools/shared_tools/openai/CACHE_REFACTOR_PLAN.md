@@ -238,19 +238,25 @@ passthrough on `classify_entities`, generalized to `**api_kwargs`).
 
 **Decisions made at ship time (2026-07-16):**
 - **Strict hash matching, no legacy fallback.** Existing rows backfilled to
-  `request_hash=''`; callers already passing allowlisted kwargs take a
-  one-time cache bust (known: `classify_entities` `temperature=0`,
-  `tools/search_term_expansion.py` `temperature=0.5`). Accepted — no cached
-  taxonomy results were worth salvaging. Callers passing no allowlisted
-  kwargs hash to `''` and keep matching legacy rows.
+  `request_hash=''`. Because the hash is only read-filtered under
+  `filter_by_model=True` (see pairing note below), the one-time cache bust
+  is limited to `filter_by_model=True` callers that pass allowlisted kwargs
+  (e.g. taxonomy drivers defaulting `filter_by_model=True` with
+  `temperature=0`). Accepted — no cached taxonomy results were worth
+  salvaging. Default-flag callers and callers passing no allowlisted kwargs
+  keep matching legacy rows.
 - **`request_kwargs` JSONB column added alongside the hash** — stores the
   normalized allowlisted kwargs for auditability/lineage and future
   re-keying. Not part of the key.
 - Hashing uses `create_deterministic_md5` (`tools/unique_ids.py`) — the id
   convention in the newer cache models (`embedding.py`, `geocode.py`) —
   rather than `make_uuid`.
-- `request_hash` is filtered **unconditionally** on reads (unlike
-  `filter_by_model`): kwargs differences are exactly what the hash keys.
+- `request_hash` is **paired with `model_name` under `filter_by_model`** on
+  reads: the two form one "model identity" (name + hyperparameters).
+  `filter_by_model=True` matches both; `False` (default) shares rows across
+  model identities entirely, preserving legacy read behavior — which also
+  means default-configured callers take **no** cache bust from this change.
+  Writes always stamp both (they're in the PK).
 - Migration `36a8b8005ff8`: columns + PK widening
   `(prompt_id, given_id, model_name, request_hash)`. Old code + new schema
   is safe (`server_default=''`); new code + old schema is not — deploy code

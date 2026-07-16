@@ -246,21 +246,35 @@ class PromptResponseCacheSQL():
 
     **Kwargs-aware cache keys (request_hash)**
 
-    Kwargs that change what the model produces are part of the cache key: a
-    ``request_hash`` is computed per call from the allowlist
-    ``KWARG_KEYS_THAT_AFFECT_OUTPUT`` (``reasoning``, ``tools``,
-    ``tool_choice``, ``temperature``, ``top_p``, ``max_output_tokens``,
-    ``seed``, ``service_tier``) and stored on the row, so e.g.
-    ``reasoning={"effort": "low"}`` vs ``{"effort": "high"}`` occupy separate
-    rows instead of colliding. Kwargs NOT on the allowlist are treated as
-    cosmetic and reuse the cache — notably ``text_format``: ``response_full``
-    is stored raw and parsed at retrieval, so changing the Pydantic response
-    model does not bust the cache. If you pass a new kwarg that changes model
-    output, it must be added to the allowlist explicitly (via PR); until then
-    it will silently share rows. Calls with no allowlisted kwargs hash to
-    ``''``, which also matches rows written before the hash existed. The
-    normalized kwargs are stored alongside the hash in ``request_kwargs``
-    for auditability.
+    A model identity is its name PLUS the hyperparameters sent with the
+    call. Kwargs that change what the model produces are hashed per call
+    from the allowlist ``KWARG_KEYS_THAT_AFFECT_OUTPUT`` (``reasoning``,
+    ``tools``, ``tool_choice``, ``temperature``, ``top_p``,
+    ``max_output_tokens``, ``seed``, ``service_tier``) into a
+    ``request_hash`` stored on every row (part of the PK, alongside
+    ``model_name``).
+
+    ``filter_by_model`` gates the whole model identity on reads:
+
+    - ``filter_by_model=True``: lookups match ``model_name`` AND
+      ``request_hash``, so e.g. ``reasoning={"effort": "low"}`` vs
+      ``{"effort": "high"}`` occupy separate rows instead of colliding.
+      **Set this whenever you compare models or hyperparameters against
+      the same prompt.**
+    - ``filter_by_model=False`` (default): reads share rows across model
+      identities entirely — a lookup can return a row produced by a
+      different model name or different kwargs, matching legacy behavior.
+
+    Writes always stamp the real ``model_name`` and ``request_hash``.
+
+    Kwargs NOT on the allowlist are treated as cosmetic and reuse the cache
+    — notably ``text_format``: ``response_full`` is stored raw and parsed at
+    retrieval, so changing the Pydantic response model does not bust the
+    cache. If you pass a new kwarg that changes model output, it must be
+    added to the allowlist explicitly (via PR); until then it will silently
+    share rows. Calls with no allowlisted kwargs hash to ``''``, which also
+    matches rows written before the hash existed. The normalized kwargs are
+    stored alongside the hash in ``request_kwargs`` for auditability.
     """
 
     def __init__(
@@ -417,10 +431,13 @@ class PromptResponseCacheSQL():
             Input text that was sent to the model (used to compute text_id).
         request_hash : str, optional
             Hash of the output-affecting API kwargs (see
-            ``KWARG_KEYS_THAT_AFFECT_OUTPUT``). Filtered unconditionally —
-            unlike ``filter_by_model``, kwargs differences are exactly what
-            the hash keys against. Default '' matches rows written with no
-            output-affecting kwargs (including pre-hash legacy rows).
+            ``KWARG_KEYS_THAT_AFFECT_OUTPUT``). Filtered together with
+            ``model_name`` when ``filter_by_model`` is True — the two are
+            one "model identity" (name + hyperparameters). At the default
+            ``filter_by_model=False``, reads share rows across model
+            identities entirely (name AND kwargs), preserving legacy
+            behavior. '' means no output-affecting kwargs (including
+            pre-hash legacy rows).
 
         Returns
         -------
@@ -433,10 +450,10 @@ class PromptResponseCacheSQL():
                 PromptResponse.prompt_id == self.prompt.id,
                 PromptResponse.text_id == text_id,
                 PromptResponse.given_id == given_id,
-                PromptResponse.request_hash == request_hash,
         ]
         if self.filter_by_model:
             filters.append(PromptResponse.model_name == self.model)
+            filters.append(PromptResponse.request_hash == request_hash)
 
         prompt_response_obj = (
             self.session
@@ -459,8 +476,9 @@ class PromptResponseCacheSQL():
         given_ids_texts : list of tuple[str, str]
             Pairs of (given_id, text) to look up.
         request_hash : str, optional
-            Hash of the output-affecting API kwargs; filtered
-            unconditionally. See ``get_prompt_response_obj``.
+            Hash of the output-affecting API kwargs; filtered together
+            with ``model_name`` when ``filter_by_model`` is True. See
+            ``get_prompt_response_obj``.
 
         Returns
         -------
@@ -480,11 +498,11 @@ class PromptResponseCacheSQL():
         filters = [
             PromptResponse.prompt_id == self.prompt.id,
             PromptResponse.text_id.in_(text_ids),
-            PromptResponse.request_hash == request_hash,
         ]
 
         if self.filter_by_model:
             filters.append(PromptResponse.model_name == self.model)
+            filters.append(PromptResponse.request_hash == request_hash)
 
         found_rows = (
             self.session

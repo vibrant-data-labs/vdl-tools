@@ -728,12 +728,15 @@ def classify_entities(
         the API — e.g. ``reasoning={"effort": "low"}`` for reasoning models.
         Output-affecting kwargs (``reasoning``, ``top_p``, ``seed``, … — see
         ``KWARG_KEYS_THAT_AFFECT_OUTPUT`` in ``prompt_response_cache_sql``)
-        are part of the cache key via ``request_hash``, so runs differing
-        only in these get separate cache rows. Invalid kwargs fail at the
-        OpenAI client. Note: when a reasoning model runs with no explicit
-        ``reasoning``, the model's own default effort applies (it differs
-        by model and is OpenAI's to change) and the key records only "no
-        reasoning kwarg" — pass ``reasoning`` explicitly to pin it.
+        are stamped on every cache row via ``request_hash`` and — **when
+        ``filter_by_model=True``** — keyed on reads, so runs differing only
+        in these get separate cache rows. As with model names, set
+        ``filter_by_model=True`` whenever you A/B hyperparameters against
+        the same taxonomy. Invalid kwargs fail at the OpenAI client. Note:
+        when a reasoning model runs with no explicit ``reasoning``, the
+        model's own default effort applies (it differs by model and is
+        OpenAI's to change) and the key records only "no reasoning kwarg" —
+        pass ``reasoning`` explicitly to pin it.
     """
     levels = normalize_levels(levels)
     last_idx = levels[-1]["idx"]
