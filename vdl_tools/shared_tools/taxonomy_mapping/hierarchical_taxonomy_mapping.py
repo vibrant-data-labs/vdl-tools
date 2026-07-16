@@ -621,7 +621,7 @@ def classify_entities(
     match_schema: type[BaseModel] | None = None,
     temperature: float | None = 0,
     filter_by_model: bool = False,
-    **api_kwargs: Any,
+    llm_api_kwargs: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
     """Classify many entities against the taxonomy via a SQL-cached walk.
 
@@ -723,9 +723,12 @@ def classify_entities(
         this True whenever you run more than one model against the same
         taxonomy**, otherwise a model switch silently reuses the prior
         model's cached results.
-    **api_kwargs
-        Any further OpenAI API kwargs, forwarded verbatim to the cache and
-        the API — e.g. ``reasoning={"effort": "low"}`` for reasoning models.
+    llm_api_kwargs
+        OpenAI API kwargs for the model call, forwarded verbatim to the
+        cache and the API — e.g. ``{"reasoning": {"effort": "low"}}`` for
+        reasoning models. An explicit dict (not ``**kwargs``) so that a
+        typo'd function kwarg fails loudly at this call instead of riding
+        into the API workers and surfacing as cache error rows.
         Output-affecting kwargs (``reasoning``, ``top_p``, ``seed``, … — see
         ``KWARG_KEYS_THAT_AFFECT_OUTPUT`` in ``prompt_response_cache_sql``)
         are stamped on every cache row via ``request_hash`` and — **when
@@ -746,6 +749,8 @@ def classify_entities(
     empty_leaf = {k: None for k in leaf_keys}
     response_model: type[BaseModel] = match_schema or MatchesResponse
 
+    # Copy — the caller's dict must not grow a temperature key.
+    api_kwargs: dict[str, Any] = dict(llm_api_kwargs or {})
     # Reasoning models reject `temperature`; suppress it for them.
     # Otherwise default to 0 (legacy behavior, deterministic outputs).
     if temperature is not None and not is_reasoning_model(model):
@@ -1351,7 +1356,7 @@ def add_hierarchical_taxonomy_mapping(
     write_to_cache: bool = True,
     temperature: float | None = 0,
     filter_by_model: bool = False,
-    **api_kwargs: Any,
+    llm_api_kwargs: dict[str, Any] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame | None, pd.DataFrame]:
     """Classify entities and attach the full legacy mapping outputs.
 
@@ -1380,11 +1385,12 @@ def add_hierarchical_taxonomy_mapping(
     against the same taxonomy + prompt, otherwise an identity switch
     silently reuses the prior identity's cached matches.
 
-    ``**api_kwargs`` (e.g. ``reasoning={"effort": "low"}``) are forwarded
-    verbatim to ``classify_fn`` and from there to the OpenAI API and the
-    cache key — see ``classify_entities``. An injected ``classify_fn`` must
-    accept them (``classify_entities`` and any ``**kwargs``-taking wrapper
-    do); a wrapper with a closed signature will fail loudly.
+    ``llm_api_kwargs`` (e.g. ``{"reasoning": {"effort": "low"}}``) is
+    forwarded verbatim to ``classify_fn`` and from there to the OpenAI API
+    and the cache key — see ``classify_entities``. An explicit dict (not
+    ``**kwargs``) so a typo'd function kwarg fails loudly at this call
+    instead of riding into the API workers. An injected ``classify_fn``
+    must accept the ``llm_api_kwargs`` keyword.
 
     Performs no file I/O — callers decide where the frames land, so data
     lineage stays with the project.
@@ -1422,7 +1428,7 @@ def add_hierarchical_taxonomy_mapping(
             match_schema=match_schema,
             temperature=temperature,
             filter_by_model=filter_by_model,
-            **api_kwargs,
+            llm_api_kwargs=llm_api_kwargs,
         )
 
     df = attach_mapping_columns(
@@ -1501,7 +1507,7 @@ def recover_unmatched(
     write_to_cache: bool = True,
     temperature: float | None = 0,
     filter_by_model: bool = False,
-    **api_kwargs: Any,
+    llm_api_kwargs: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
     """Second-stage scope check on entities the walk left unmatched.
 
@@ -1539,6 +1545,10 @@ def recover_unmatched(
     A/B-comparing recovery models against the same scope prompt so the
     second model does not silently reuse the first's cached decisions;
     ``map_to_oneearth`` forwards its own ``filter_by_model`` here.
+
+    ``llm_api_kwargs`` (e.g. ``{"reasoning": {"effort": "low"}}``) is
+    forwarded verbatim to the OpenAI API and the cache key — see
+    ``classify_entities`` for the semantics.
     """
     if top_level_col is None or category_choices is None or scope_prompt is None:
         if levels is None or tables is None:
@@ -1588,6 +1598,7 @@ def recover_unmatched(
             requests.append((str(uid), user_text))
             uid_by_str[str(uid)] = uid
 
+        api_kwargs: dict[str, Any] = dict(llm_api_kwargs or {})
         if temperature is not None and not is_reasoning_model(model):
             api_kwargs["temperature"] = temperature
 

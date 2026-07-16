@@ -234,7 +234,10 @@ All four quadrants asserted end-to-end against the real database:
 **Status: shipped.** Supersedes PR #156 (`cache_model_name`, a manual
 namespacing mechanism — credit @larareichmann for surfacing the collision
 and the salvaged pieces: the `gpt-5-mini` `MODEL_DATA` entry and reasoning
-passthrough on `classify_entities`, generalized to `**api_kwargs`).
+passthrough on `classify_entities`, generalized to an explicit
+`llm_api_kwargs` dict — chosen over `**kwargs` so a typo'd function kwarg
+fails loudly at the call instead of riding into the API workers and
+surfacing as cache error rows).
 
 **Decisions made at ship time (2026-07-16):**
 - **Strict hash matching, no legacy fallback.** Existing rows backfilled to
