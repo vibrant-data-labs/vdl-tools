@@ -1,4 +1,11 @@
 MODEL_DATA = {
+    "gpt-5-mini": {
+        "model_name": "gpt-5-mini",
+        "max_context_window": 400_000,
+        "max_output_tokens": 128_000,
+        "input_cost_per_token": 0.25 / 1_000_000,
+        "output_cost_per_token": 2.0 / 1_000_000,
+    },
     "gpt-5.5": {
         "model_name": "gpt-5.5",
         "max_context_window": 1_000_000,
