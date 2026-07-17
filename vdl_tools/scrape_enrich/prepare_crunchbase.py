@@ -226,6 +226,8 @@ def query_crunchbase_raw_data(
     search_terms_list=None,
     search_terms_path=None,
     use_cache=True,
+    force_query=False,
+    force_refresh_records=False,
     save_to_uri=None,
     filter_yr=2016,
     usa_only=True,
@@ -260,9 +262,18 @@ def query_crunchbase_raw_data(
     active_only : bool, optional
         Restrict results to companies whose ``operating_status`` is ``active``.
     use_cache : bool, default True
-        Passed through to ``query_companies_extended``. When ``False``, refresh
-        organization results from the API instead of reusing the query-level
-        cache.
+        Passed through to ``query_companies_extended``. When ``False``, skip
+        all DB reads and fetch everything from the API.
+    force_query : bool, default False
+        Passed through to ``query_companies_extended``. When ``True``, bypass
+        the query-level cache so the org search and funding rounds are re-run
+        against the API — required for refresh runs to pick up new companies,
+        since the query cache has no expiry.
+    force_refresh_records : bool, default False
+        Passed through to ``query_companies_extended``. When ``True``,
+        re-fetch investor and founder records from the API even when they are
+        already cached in the DB, so previously cached records pick up
+        updated data.
     save_to_uri : str | None, optional
         Optional destination URI passed through to
         ``query_companies_extended``. When provided, the raw Crunchbase result
@@ -314,6 +325,8 @@ def query_crunchbase_raw_data(
         **search_kwargs,
         extra_filters=extra_filters,
         use_cache=use_cache,
+        force_query=force_query,
+        force_refresh_records=force_refresh_records,
         save_to_uri=save_to_uri,
     )
 
@@ -710,6 +723,8 @@ def prepare_raw_crunchbase(
     cleaned_organizations_filename,
     cleaned_funding_rounds_filename,
     use_cache=True,
+    force_query=False,
+    force_refresh_records=False,
     company_ids=None,
     search_terms_list=None,
     search_terms_path=None,  # paths.get('expanded_search_terms_crunchbase'),
@@ -731,6 +746,8 @@ def prepare_raw_crunchbase(
             search_terms_path=search_terms_path,
             company_ids=company_ids,
             use_cache=use_cache,
+            force_query=force_query,
+            force_refresh_records=force_refresh_records,
             save_to_uri=save_to_uri_path,
             filter_yr=filter_yr,
             usa_only=usa_only,
