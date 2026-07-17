@@ -151,8 +151,23 @@ assert tuple(_OE_MODE_DEFINITIONS) == tuple(_OE_RESEARCH_MODE_DEFINITIONS), (
 _OE_MODE = Literal[*_OE_MODE_DEFINITIONS]
 
 
-def _mode_field(definitions: dict[str, str]):
-    """Build the Field for ``mode_of_operation`` with definitions inline."""
+def _mode_field(definitions: dict[str, str], inline_definitions: bool = True):
+    """Build the Field for ``mode_of_operation``.
+
+    When ``inline_definitions`` (default), the full mode definitions go in
+    the schema field description. When False, the field carries only a
+    short pointer and the definitions are expected to live in a prose
+    "Mode of operation" section of the system prompt instead — used by the
+    organization prompt so the mode guidance is an instruction, not schema
+    metadata (the model weights prose directives more heavily)."""
+    if not inline_definitions:
+        return Field(
+            description=(
+                "How the entity relates to the matched candidate. See the "
+                "'Mode of operation' section in the instructions for the "
+                "mode definitions and pick the best fit."
+            ),
+        )
     return Field(
         description=(
             "How the entity relates to the matched candidate. Pick the "
@@ -191,16 +206,19 @@ class OneEarthMatch(BaseModel):
     """Per-match shape for the organization OE prompt (no confidence)."""
 
     index: int = _INDEX_FIELD
-    mode_of_operation: _OE_MODE = _mode_field(_OE_MODE_DEFINITIONS)
+    mode_of_operation: _OE_MODE = _mode_field(
+        _OE_MODE_DEFINITIONS, inline_definitions=False
+    )
     evidence: str = _EVIDENCE_FIELD
     reason: str = _REASON_FIELD
 
 
 class OneEarthMatchesResponse(BaseModel):
-    """Default OE selection behavior: emit only the matches the
-    description clearly supports — self-filter weak candidates. A match
-    requires a specific phrase from the description that names the
-    candidate's activity."""
+    """Response shape for the organization OE prompt: one entry per
+    selected candidate. Selection, match depth, and mode of operation are
+    governed by the matching rules and the 'Mode of operation' section in
+    the system prompt — this class adds no selection disposition of its
+    own."""
 
     matches: list[OneEarthMatch] = []
 
@@ -498,17 +516,31 @@ ONEEARTH_CROSS_PILLAR_ROUTING = (
 )
 
 
+# Mode-of-operation section — kept in the PROSE prompt (not just the schema
+# field) because it is an imperative classification instruction, and the model
+# weights a prose directive more heavily than a schema field description. The
+# schema's ``mode_of_operation`` field carries only a pointer here (see
+# ``_mode_field(..., inline_definitions=False)``), so the definitions are not
+# double-stated. This restores the pre-#147 layout.
+ONEEARTH_MODE_SECTION = (
+    "Mode of operation — for each selected candidate, classify HOW the entity "
+    "relates to the matched candidate:\n"
+    + "\n".join(f"- '{k}': {v}" for k, v in _OE_MODE_DEFINITIONS.items())
+    + "\nPick the mode that best fits the entity's primary relationship to the "
+    "matched candidate."
+)
+
+
 def build_oneearth_system_prompt(include_confidence: bool = False) -> str:
     """Assemble the canonical One Earth organization system prompt (prose only).
 
-    Generic prose skeleton + OE rule overrides + the standalone
-    cross-pillar routing section. The mode definitions, the confidence
-    semantics, and the selection-vs-self-filter behavior all live on the
-    Pydantic response class (selected by
-    ``oneearth_match_schema(include_confidence=...)``) — pass that same
-    class to ``classify_entities(match_schema=...)`` so the model sees
-    the schema's Field descriptions + response-class docstring via
-    InstructorPRC's schema append.
+    Generic prose skeleton + OE rule overrides + the prose Mode-of-operation
+    section + the standalone cross-pillar routing section. Mode definitions
+    live in the prose section (``ONEEARTH_MODE_SECTION``); the schema's
+    ``mode_of_operation`` field carries only a pointer. Confidence semantics
+    live on the confidence-enabled response class. Pass the schema from
+    ``oneearth_match_schema(include_confidence=...)`` to
+    ``classify_entities(match_schema=...)``.
 
     ``include_confidence`` no longer affects the prose (confidence is a
     schema-only concern now); the org prompt is identical either way. The
@@ -520,7 +552,10 @@ def build_oneearth_system_prompt(include_confidence: bool = False) -> str:
         domain_intro=ONEEARTH_DOMAIN_INTRO,
         rules=ONEEARTH_RULE_OVERRIDES,
     )
-    return prompt + "\n\n" + ONEEARTH_CROSS_PILLAR_ROUTING
+    return (
+        prompt + "\n\n" + ONEEARTH_MODE_SECTION
+        + "\n\n" + ONEEARTH_CROSS_PILLAR_ROUTING
+    )
 
 
 ONEEARTH_SYSTEM_PROMPT = build_oneearth_system_prompt()
@@ -950,6 +985,7 @@ def map_to_oneearth(
     recovery_model: str = "gpt-4.1-mini",
     recovery_scope_prompt: str | None = None,
     walk_recovered: bool = False,
+    reasoning: dict | None = None,
     read_from_cache: bool = True,
     write_to_cache: bool = True,
     filter_by_model: bool = True,
@@ -1054,6 +1090,13 @@ def map_to_oneearth(
         placeholder rows are replaced by the seeded leaf rows; the
         ``recovery_*`` columns carry through, so the rows remain flagged
         as recovery-sourced.
+    reasoning
+        Optional Responses-API reasoning control, e.g.
+        ``{"effort": "medium"}``, threaded into the main walk and the
+        seeded re-walk. Applied only to reasoning models (``gpt-5*``); the
+        ``gpt-4.1-mini`` recovery pass ignores it. ``None`` (default)
+        leaves the effort at each model's API default. Pass an explicit
+        value to compare reasoning models on equal footing.
 
     Returns
     -------
@@ -1133,6 +1176,7 @@ def map_to_oneearth(
             read_from_cache=read_from_cache,
             write_to_cache=write_to_cache,
             match_schema=match_schema,
+            reasoning=reasoning,
             filter_by_model=filter_by_model,
         )
         if recover_unmatched:
@@ -1162,7 +1206,8 @@ def map_to_oneearth(
                 descent_fanout_cap=descent_fanout_cap, max_workers=max_workers,
                 confidence_threshold=confidence_threshold, emit_per_level=emit_per_level,
                 read_from_cache=read_from_cache, write_to_cache=write_to_cache,
-                match_schema=match_schema, filter_by_model=filter_by_model,
+                match_schema=match_schema, reasoning=reasoning,
+                filter_by_model=filter_by_model,
             )
 
     collapsed_df = collapse_to_one_row_per_uid(per_row_df, id_col=id_col)
@@ -1173,7 +1218,8 @@ def _walk_recovered_entities(
     per_row_df: pd.DataFrame, *, session, tables, system_prompt, id_col, name_col,
     text_col, model, descent_fanout_cap, max_workers, confidence_threshold,
     emit_per_level, read_from_cache=True, write_to_cache=True,
-    match_schema: type[BaseModel] | None = None, filter_by_model: bool = True,
+    match_schema: type[BaseModel] | None = None, reasoning: dict | None = None,
+    filter_by_model: bool = True,
 ) -> pd.DataFrame:
     """Seed the walk at each recovery-recovered entity's pillar and descend.
 
@@ -1220,7 +1266,8 @@ def _walk_recovered_entities(
         confidence_threshold=confidence_threshold, emit_per_level=emit_per_level,
         seed_col=recovered_col,
         read_from_cache=read_from_cache, write_to_cache=write_to_cache,
-        match_schema=match_schema, filter_by_model=filter_by_model,
+        match_schema=match_schema, reasoning=reasoning,
+        filter_by_model=filter_by_model,
     )
 
     kept = per_row_df[~per_row_df[id_col].isin(rec_ids)]
