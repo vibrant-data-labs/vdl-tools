@@ -114,7 +114,9 @@ def __upsert_dataframe(
         if c.name not in set(pk_cols) and c.name != "updated_at"
     ]
 
-    safe_records = json.loads(df.to_json(orient="records"))
+    # date_format="iso" so datetime64 columns (e.g. CbPerson.created_at)
+    # serialize as ISO strings Postgres can cast to timestamp, not epoch ints.
+    safe_records = json.loads(df.to_json(orient="records", date_format="iso"))
     safe_records = [
         {k: v for k, v in rec.items() if k in table_col_names and k != "updated_at"}
         for rec in safe_records
@@ -136,13 +138,17 @@ def __upsert_dataframe(
         session.commit()
 
 
-def __fetch_cached(session, model, ids, api_query_fn, *, use_cache, save_to_cache):
-    """Load records from DB cache, fetch missing via API, upsert new results."""
+def __fetch_cached(session, model, ids, api_query_fn, *, use_cache, save_to_cache, force=False):
+    """Load records from DB cache, fetch missing via API, upsert new results.
+
+    When ``force`` is True, skip the DB read and re-fetch every id from the
+    API (results are still upserted when ``save_to_cache`` is True).
+    """
     if not ids:
         return None
 
     cached_df = None
-    if use_cache:
+    if use_cache and not force:
         rows = (
             session.query(model)
             .filter(model.uuid.in_(ids))
@@ -348,18 +354,18 @@ def __get_aggregated_data(organizations: pd.DataFrame, list_column: str):
     return temp_data
 
 
-def __investors_query(session, investor_temp_data: pd.DataFrame, entity_type, *, use_cache, save_to_cache):
+def __investors_query(session, investor_temp_data: pd.DataFrame, entity_type, *, use_cache, save_to_cache, force=False):
     df = investor_temp_data[investor_temp_data["type"] == entity_type]
     if entity_type == "person":
         ids = df['uuid'].dropna().to_list()
         if len(ids) == 0:
             return None
-        return __fetch_cached(session, CbPerson, ids, people_query, use_cache=use_cache, save_to_cache=save_to_cache)
+        return __fetch_cached(session, CbPerson, ids, people_query, use_cache=use_cache, save_to_cache=save_to_cache, force=force)
 
     companies_ids = list(set(df['uuid'].dropna().to_list()))
     if len(companies_ids) == 0:
         return None
-    return __fetch_cached(session, CbOrganization, companies_ids, companies_id_query, use_cache=use_cache, save_to_cache=save_to_cache)
+    return __fetch_cached(session, CbOrganization, companies_ids, companies_id_query, use_cache=use_cache, save_to_cache=save_to_cache, force=force)
 
 
 def __combine_lists(x):
@@ -399,6 +405,7 @@ def query_companies_extended(
     search_condition='search_terms',
     extra_filters=[],
     force_query=False,
+    force_refresh_records=False,
     use_cache=True,
     save_to_cache=True,
     save_to_uri=None,
@@ -425,6 +432,14 @@ def query_companies_extended(
     force_query : bool, default False
         When True, bypass the query-level cache and always hit the API for
         organizations (per-record caching via ``use_cache`` still applies).
+    force_refresh_records : bool, default False
+        When True, bypass the per-record DB cache for investors, founders,
+        and (for ``search_condition='id'``) organizations — every record is
+        re-fetched from the API so previously cached rows pick up updated
+        data. Results are still upserted when ``save_to_cache`` is True.
+        Combine with ``force_query=True`` for a full re-pull. Note this
+        re-fetches every investor/founder uuid in the result set (batched
+        200 per API request), so use for periodic refreshes, not every run.
     use_cache : bool, default True
         When True, attempt to load organizations, funding rounds, investors,
         and founders from the Postgres cache before falling back to the API.
@@ -446,6 +461,9 @@ def query_companies_extended(
     ``force_query`` is narrower: it only skips the org query-cache /
     id-preload and the funding-rounds DB preload, but still allows DB reads
     for investors and founders when ``use_cache=True``.
+    ``force_refresh_records`` covers that remaining piece: it re-fetches
+    investor/founder (and id-queried org) records from the API even when
+    they already exist in the DB.
 
     Typical combinations:
 
@@ -489,6 +507,7 @@ def query_companies_extended(
                 organizations = __fetch_cached(
                     session, CbOrganization, items_list, companies_id_query,
                     use_cache=True, save_to_cache=save_to_cache,
+                    force=force_refresh_records,
                 )
             else:
                 cache_entry = session.query(CbQueryCache).filter_by(query_hash=query_hash).first()
@@ -569,7 +588,7 @@ def query_companies_extended(
             investor_temp_data = __aggregate_investors(companies_funding_rounds)
 
             logger.info("Found %s organizations with known investors", investor_temp_data.shape[0])
-            people_investors = __investors_query(session, investor_temp_data, "person", use_cache=use_cache, save_to_cache=save_to_cache)
+            people_investors = __investors_query(session, investor_temp_data, "person", use_cache=use_cache, save_to_cache=save_to_cache, force=force_refresh_records)
             if people_investors is None:
                 logger.info('Investors of type `person` are not found, skipping...')
             else:
@@ -577,7 +596,7 @@ def query_companies_extended(
                 people_investors = pd.merge(temp_investors, people_investors, how="left", on="uuid")
                 people_investors = __dedup_df(people_investors)
 
-            org_investors = __investors_query(session, investor_temp_data, "organization", use_cache=use_cache, save_to_cache=save_to_cache)
+            org_investors = __investors_query(session, investor_temp_data, "organization", use_cache=use_cache, save_to_cache=save_to_cache, force=force_refresh_records)
             if org_investors is None:
                 logger.info('Investors of type `organizations` are not found, skipping...')
             else:
@@ -594,7 +613,7 @@ def query_companies_extended(
         if len(founder_ids) == 0:
             logger.info('No founders found, skipping...')
         else:
-            founders = __fetch_cached(session, CbPerson, founder_ids, people_query, use_cache=use_cache, save_to_cache=save_to_cache)
+            founders = __fetch_cached(session, CbPerson, founder_ids, people_query, use_cache=use_cache, save_to_cache=save_to_cache, force=force_refresh_records)
             if founders is not None and not founders.empty:
                 founders = pd.merge(founders_temp_data[['uuid', 'org_permalink']], founders, how="left", on="uuid")
                 founders = __dedup_df(founders)
