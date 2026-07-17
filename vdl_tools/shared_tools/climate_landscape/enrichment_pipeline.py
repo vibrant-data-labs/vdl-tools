@@ -542,17 +542,11 @@ def run_pipeline(
     # Adaptation/Mitigation/Dual
     df_relevant['text'] = cf.join_strings_no_missing(df_relevant, text_fields)
 
-    adaptation_model_path = paths['adaptation_mitigation_results_path']
-    adapt_model_name_safe = adaptation_model_id.replace("-", "_").replace(":", "_")
-    adaptation_model_path = adaptation_model_path.with_name(
-        adaptation_model_path.name.replace("MODEL_NAME_HOLDER", adapt_model_name_safe)
-    )
-    preds_adapt = adp.generate_predictions_adapt_mit_remote(
+    preds_adapt = adp.generate_predictions_adapt_mit_remote_sql(
         df_relevant,
         50,
         'id',
         'text',
-        adaptation_model_path,
         api_key=GLOBAL_CONFIG['baseten']['api_key'],
         model_id=adaptation_model_id,
     )
