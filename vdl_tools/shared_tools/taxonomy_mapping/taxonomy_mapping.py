@@ -662,6 +662,7 @@ def run_fewshot_classification(
     reranked_relevancy_col='reranked_relevancy',
     use_cached_results=True,
     max_workers=3,
+    n_per_commit=20,
     max_errors=1,
     mapped_category_col='mapped_category',
     examples_dict=None,
@@ -710,6 +711,7 @@ def run_fewshot_classification(
             use_cached_result=use_cached_results,
             max_workers=max_workers,
             max_errors=max_errors,
+            n_per_commit=n_per_commit,
         )
         ids_to_label = {k: v['is_relevant'] for k, v in ids_to_responses.items()}
     all_df[reranked_relevancy_col] = all_df['taxonomy_mapping_id'].map(ids_to_label)

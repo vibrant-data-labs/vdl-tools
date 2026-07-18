@@ -228,7 +228,11 @@ def _missing_description_mask(df, min_description_length=MIN_DESCRIPTION_LENGTH,
     )
 
 
-def prepare_for_relevance_model(df, max_workers=MAX_WORKERS, description_col='Description'):
+def prepare_for_relevance_model(
+    df,
+    max_workers=MAX_WORKERS,
+    description_col='Description'
+):
     """The relevance models require descriptive text.
     CB and Candid descriptions have shown to be enough text for the models to work.
     However, sometimes we are missing the descriptions from the original source.
@@ -290,6 +294,8 @@ def run_relevance_model(
     system_prompt=None,
     prompt_format=None,
     prompt_name="climate_relevance_classification",
+    n_per_commit=20,
+    max_workers=MAX_WORKERS,
 ):
     model_name_safe = model_name.replace("-", "_").replace(":", "_")
 
@@ -306,6 +312,8 @@ def run_relevance_model(
         prompt_format=prompt_format,
         label_override_filepath=label_override_filepath,
         prompt_name=prompt_name,
+        n_per_commit=n_per_commit,
+        max_workers=max_workers,
     )
 
     df_with_predictions.rename(columns={"prediction": "prediction_relevant", "probability": "probability_relevant"}, inplace=True)
@@ -385,6 +393,7 @@ def add_summary_of_summaries(
     max_workers=MAX_WORKERS,
     summary_prompt=BASE_SUMMARY_OF_SUMMARIES_PROMPT,
     summary_column='Summary',
+    n_per_commit=None,
 ):
 
     # Remove all the rows that are missing all the text fields
@@ -413,6 +422,7 @@ def add_summary_of_summaries(
         use_cached_results=use_cached_results,
         max_workers=max_workers,
         prompt_string=summary_prompt,
+        n_per_commit=n_per_commit,
     )
 
     df[summary_column] = df[id_col].map(ids_to_summaries, None)
@@ -439,6 +449,7 @@ def run_pipeline(
     text_fields=TEXT_FIELDS,
     label_override_filepath=None,
     max_workers=MAX_WORKERS,
+    n_per_commit=MAX_WORKERS * 2,
 ):
 
     log_major_step("loading pre-processed combined crunchbase + candid data")
@@ -471,6 +482,8 @@ def run_pipeline(
         column_text='text_for_relevance_model',
         idn=id_col,
         label_override_filepath=label_override_filepath,
+        n_per_commit=n_per_commit,
+        max_workers=max_workers,
     )
     df_cb_cd.to_json(paths['relevance_model_results'], orient='records')
 
@@ -575,6 +588,7 @@ def run_pipeline(
         id_col='id',
         use_cached_results=True,
         max_workers=max_workers,
+        n_per_commit=max_workers,
     )
 
 
@@ -596,6 +610,7 @@ def run_pipeline(
             add_falsesolns=False,
             add_levers_of_change=False,
             run_primary_category_selection=False,
+            n_per_commit=n_per_commit,
         )
 
     # PROCESS DIVERSITY TAGS

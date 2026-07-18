@@ -24,6 +24,7 @@ def add_taxonomy_mapping(
     fewshot_examples=None,
     use_cached_results=True,
     max_workers=3,
+    n_per_commit=20,
     force_parents=True,
     distribute_funding=True,
     mapping_name=None,
@@ -139,7 +140,8 @@ def add_taxonomy_mapping(
             use_cached_results=use_cached_results,
             max_workers=max_workers,
             examples_dict=fewshot_examples,
-            prompt_str=prompt_str
+            prompt_str=prompt_str,
+            n_per_commit=n_per_commit,
         )
 
         if force_parents:
@@ -161,7 +163,8 @@ def add_taxonomy_mapping(
                 use_cached_results=use_cached_results,
                 max_workers=max_workers,
                 examples_dict=fewshot_examples,
-                prompt_str=prompt_str
+                prompt_str=prompt_str,
+                n_per_commit=n_per_commit,
             )
             all_df = pd.concat([all_df, forced_in_df])
 
