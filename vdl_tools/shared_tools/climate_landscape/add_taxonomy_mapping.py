@@ -545,7 +545,8 @@ def add_one_earth_taxonomy(
     filter_fewshot_classification=True,
     use_cached_results=True,
     paths=None,
-    max_workers=3,
+    max_workers=20,
+    n_per_commit=200,
     force_parents=True,
     add_intersectional=False,
     add_falsesolns=False,
@@ -602,6 +603,8 @@ def add_one_earth_taxonomy(
         mapping_name=mapping_name,
         max_distr_funding_level=max_depth,
         run_primary_category_selection=run_primary_category_selection,
+        n_per_commit=n_per_commit,
+        max_workers=max_workers,
     )
 
     # reduce the number of columns in the output
