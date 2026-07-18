@@ -424,6 +424,10 @@ class FewShotCache(InstructorPRC):
         _, # prompt_str
         entity_activity_dict_examples_dicts: EntityActivityDictExamplesDict | dict,
         max_tokens=4096,
+        # Base-class control flag, not an API kwarg: the cache layer passes
+        # return_all=True and this override always returns the full response,
+        # so absorb it here to keep it out of the responses.parse kwargs.
+        return_all=True,
         **kwargs
     ):
         """Call the Responses API for one relevance classification (with retries on connection errors).
