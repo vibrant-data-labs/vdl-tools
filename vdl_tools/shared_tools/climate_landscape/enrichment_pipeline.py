@@ -55,6 +55,7 @@ def get_website_summaries(
     summary_prompt=GENERIC_ORG_WEBSITE_PROMPT_TEXT,
     use_combined=True,
     max_workers=MAX_WORKERS,
+    n_per_commit=20,
     max_errors=1,
     max_scrape_websites_workers=MAX_SCRAPE_WEBSITES_WORKERS,
 ):
@@ -78,6 +79,7 @@ def get_website_summaries(
         skip_existing=skip_existing,
         max_workers=max_workers,
         max_errors=max_errors,
+        n_per_commit=n_per_commit,
     )
 
     summaries = {k.rstrip("/"): v for k, v in summaries.items() if v}
@@ -504,6 +506,7 @@ def run_pipeline(
         df_relevant,
         skip_existing=True,
         max_workers=max_workers,
+        n_per_commit=n_per_commit,
     )
 
     df_relevant['extracted_website_key'] = df_relevant['Website'].apply(
