@@ -25,6 +25,28 @@ def parse_results_to_dict(response):
     return response_locations
 
 
+def _normalize_entity(entity):
+    """The prompt schema says each field is str | None, but the responses are
+    json.loads'd without validation, so the model occasionally sneaks in a list
+    (e.g. {"state_region": ["Kansas", "Oklahoma"]}). Expand such an entity into
+    one location per position — pairing aligned lists and broadcasting scalars —
+    and coerce anything that still isn't a string to None, so every returned
+    dict holds only str | None.
+    """
+    if not any(isinstance(v, list) for v in entity.values()):
+        return [{k: v if isinstance(v, str) else None for k, v in entity.items()}]
+    n_locations = max(len(v) for v in entity.values() if isinstance(v, list))
+    expanded = []
+    for i in range(n_locations):
+        location = {}
+        for key, value in entity.items():
+            if isinstance(value, list):
+                value = value[i] if i < len(value) else None
+            location[key] = value if isinstance(value, str) else None
+        expanded.append(location)
+    return expanded
+
+
 def get_organization_locations_from_response(response):
     response_locations = parse_results_to_dict(response)
     organization_locations = []
@@ -33,7 +55,7 @@ def get_organization_locations_from_response(response):
     for location_metadata in location_metadatas:
         location = location_metadata.get("entity")
         if location:
-            organization_locations.append(location)
+            organization_locations.extend(_normalize_entity(location))
     return organization_locations
 
 

@@ -16,6 +16,7 @@ BASE_SUMMARY_OF_SUMMARIES_PROMPT = (
 def generate_summary_of_summaries(
     ids_text_lists: list[tuple],
     use_cached_results: bool=True,
+    n_per_commit: int=None,
     prompt_string: str=BASE_SUMMARY_OF_SUMMARIES_PROMPT,
     max_workers: int=10,
     model: str="gpt-4.1-mini",
@@ -57,5 +58,6 @@ def generate_summary_of_summaries(
             given_ids_texts=ids_texts,
             use_cached_result=use_cached_results,
             max_workers=max_workers,
+            n_per_commit=n_per_commit,
         )
     return {k: v['response_text'] for k, v in ids_to_response.items()}

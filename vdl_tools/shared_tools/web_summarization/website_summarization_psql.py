@@ -78,7 +78,7 @@ def summarize_scraped_df(
             n_per_commit=n_per_commit,
             max_workers=max_workers,
             max_errors=max_errors,
-            
+
         )
 
     summaries = {k.rstrip("/"): v['response_text'] for k, v in summaries.items()}

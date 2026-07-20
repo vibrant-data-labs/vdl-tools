@@ -24,6 +24,7 @@ def add_taxonomy_mapping(
     fewshot_examples=None,
     use_cached_results=True,
     max_workers=3,
+    n_per_commit=20,
     force_parents=True,
     distribute_funding=True,
     mapping_name=None,
@@ -139,7 +140,8 @@ def add_taxonomy_mapping(
             use_cached_results=use_cached_results,
             max_workers=max_workers,
             examples_dict=fewshot_examples,
-            prompt_str=prompt_str
+            prompt_str=prompt_str,
+            n_per_commit=n_per_commit,
         )
 
         if force_parents:
@@ -161,7 +163,8 @@ def add_taxonomy_mapping(
                 use_cached_results=use_cached_results,
                 max_workers=max_workers,
                 examples_dict=fewshot_examples,
-                prompt_str=prompt_str
+                prompt_str=prompt_str,
+                n_per_commit=n_per_commit,
             )
             all_df = pd.concat([all_df, forced_in_df])
 
@@ -542,7 +545,8 @@ def add_one_earth_taxonomy(
     filter_fewshot_classification=True,
     use_cached_results=True,
     paths=None,
-    max_workers=3,
+    max_workers=20,
+    n_per_commit=200,
     force_parents=True,
     add_intersectional=False,
     add_falsesolns=False,
@@ -599,6 +603,8 @@ def add_one_earth_taxonomy(
         mapping_name=mapping_name,
         max_distr_funding_level=max_depth,
         run_primary_category_selection=run_primary_category_selection,
+        n_per_commit=n_per_commit,
+        max_workers=max_workers,
     )
 
     # reduce the number of columns in the output
