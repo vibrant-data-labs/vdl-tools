@@ -154,15 +154,11 @@ for pairing the right ``match_schema`` with the prose it built — see
 ``oneearth_match_schema()`` next to ``build_oneearth_system_prompt()``
 for the pattern.
 
-Two consequences worth knowing:
-
-    * A field present in the schema is REQUIRED under strict mode (only
-      ``null`` allowed if typed ``T | None``). Don't include
-      ``mode_of_operation`` / ``confidence`` in a schema for a taxonomy
-      that doesn't use them, or the model is forced to emit them anyway.
-    * ``mode_of_operation == "indirect"`` with multiple sibling matches
-      triggers the "indirect-fanout stop". A schema without that field
-      yields ``mode == ""`` in the engine, so the stop never fires.
+One consequence worth knowing: a field present in the schema is
+REQUIRED under strict mode (only ``null`` allowed if typed
+``T | None``). Don't include ``mode_of_operation`` / ``confidence`` in a
+schema for a taxonomy that doesn't use them, or the model is forced to
+emit them anyway.
 
 Output schema
 -------------
@@ -503,10 +499,7 @@ def _clean_matches(
 
     Uses ``getattr`` for ``mode_of_operation`` / ``confidence`` so this
     works whether the driver's ``match_schema`` includes those fields
-    or not. A schema without ``mode_of_operation`` yields ``mode=""``,
-    which means the indirect-fanout-stop can never fire for that
-    driver — matching the legacy behavior of prompts built without
-    ``modes=``.
+    or not. A schema without ``mode_of_operation`` yields ``mode=""``.
     """
     n = len(candidates)
     cleaned: list[dict[str, Any]] = []
@@ -634,8 +627,20 @@ def _build_llm_api_kwargs(
                 f"and the cache key records only the absence of the kwarg; pass "
                 f"reasoning={{'effort': ...}} to pin it."
             )
-    elif "temperature" not in api_kwargs and temperature is not None:
-        api_kwargs["temperature"] = temperature
+    else:
+        # Non-reasoning models reject `reasoning`; strip it whichever channel
+        # it came from (mirrors the temperature handling above) so a shared
+        # default like {"reasoning": {"effort": "medium"}} does not fail on
+        # gpt-4.1-class models.
+        if "reasoning" in api_kwargs:
+            logger.warning(
+                f"{model} is not a reasoning model and rejects `reasoning`; "
+                f"dropping reasoning={api_kwargs['reasoning']!r} from "
+                f"llm_api_kwargs."
+            )
+            api_kwargs.pop("reasoning")
+        if "temperature" not in api_kwargs and temperature is not None:
+            api_kwargs["temperature"] = temperature
     return api_kwargs
 
 
@@ -943,17 +948,7 @@ def classify_entities(
                             "path_meta": new_path_meta,
                             "start_idx": branch["start_idx"],
                         }
-                        # Indirect-fanout stop: an `indirect` (advocacy /
-                        # policy / education) match descends only when it
-                        # is the SOLE match at this step. Multiple indirect
-                        # siblings = broad advocacy; naming any specific
-                        # child would be guesswork, so record at the
-                        # current level instead.
-                        indirect_fanout = (
-                            m["mode_of_operation"] == "indirect"
-                            and len(matches) > 1
-                        )
-                        if is_last_level or i >= descent_fanout_cap or indirect_fanout:
+                        if is_last_level or i >= descent_fanout_cap:
                             branch_leaves.append(new_branch)
                         else:
                             branch_active.append(new_branch)

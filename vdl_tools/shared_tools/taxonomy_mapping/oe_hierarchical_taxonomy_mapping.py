@@ -291,7 +291,14 @@ def oneearth_match_schema(
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-MODEL = "gpt-5.4-nano"
+# Default OE organization classifier. gpt-5.4-mini won the judge-arbitrated
+# model sweep on balance — higher Pillar match rate and correct-verdict rate
+# than nano, near-zero wrong verdicts, and equal-or-better per-match quality at
+# every level. (gpt-5-mini maximizes coverage at a higher wrong rate.) Reasoning
+# effort is supplied via llm_api_kwargs (default low: on the OE 200-org eval,
+# low matched medium on descent/recall/quality at lower cost; minimal collapsed
+# the walk to Pillar-only).
+MODEL = "gpt-5.4-mini"
 DESCENT_FANOUT_CAP = 3
 DEFAULT_WORKERS = 32  # I/O-bound on the OpenAI API; large pools are fine.
 
@@ -616,8 +623,7 @@ ONEEARTH_RESEARCH_DOMAIN_INTRO = (
 
 # Research-shaped mode definitions, but using the engine's three
 # canonical mode names (direct / enabling tech / indirect) so the
-# engine's hardcoded validation accepts the values without warning and
-# downstream mode-aware logic (e.g. indirect-fanout stop) keeps working.
+# engine's hardcoded validation accepts the values without warning.
 # Research-flavored mode definitions live in
 # ``_OE_RESEARCH_MODE_DEFINITIONS`` at the top of this file (consumed by
 # the ``OneEarthResearchMatch.mode_of_operation`` Field description).
@@ -985,10 +991,10 @@ def map_to_oneearth(
     recovery_model: str = "gpt-4.1-mini",
     recovery_scope_prompt: str | None = None,
     walk_recovered: bool = False,
-    reasoning: dict | None = None,
     read_from_cache: bool = True,
     write_to_cache: bool = True,
     filter_by_model: bool = True,
+    llm_api_kwargs: dict | None = {"reasoning": {"effort": "low"}}
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Classify a DataFrame of entities against the One Earth taxonomy.
 
@@ -1090,13 +1096,6 @@ def map_to_oneearth(
         placeholder rows are replaced by the seeded leaf rows; the
         ``recovery_*`` columns carry through, so the rows remain flagged
         as recovery-sourced.
-    reasoning
-        Optional Responses-API reasoning control, e.g.
-        ``{"effort": "medium"}``, threaded into the main walk and the
-        seeded re-walk. Applied only to reasoning models (``gpt-5*``); the
-        ``gpt-4.1-mini`` recovery pass ignores it. ``None`` (default)
-        leaves the effort at each model's API default. Pass an explicit
-        value to compare reasoning models on equal footing.
 
     Returns
     -------
@@ -1176,8 +1175,8 @@ def map_to_oneearth(
             read_from_cache=read_from_cache,
             write_to_cache=write_to_cache,
             match_schema=match_schema,
-            reasoning=reasoning,
             filter_by_model=filter_by_model,
+            llm_api_kwargs=llm_api_kwargs
         )
         if recover_unmatched:
             # Default top-level column + category choices from the level spec +
@@ -1203,11 +1202,13 @@ def map_to_oneearth(
             per_row_df = _walk_recovered_entities(
                 per_row_df, session=session, tables=tables, system_prompt=system_prompt,
                 id_col=id_col, name_col=name_col, text_col=text_col, model=model,
-                descent_fanout_cap=descent_fanout_cap, max_workers=max_workers,
+                descent_fanout_cap=descent_fanout_cap,
+                max_workers=max_workers,
                 confidence_threshold=confidence_threshold, emit_per_level=emit_per_level,
                 read_from_cache=read_from_cache, write_to_cache=write_to_cache,
-                match_schema=match_schema, reasoning=reasoning,
+                match_schema=match_schema,
                 filter_by_model=filter_by_model,
+                llm_api_kwargs=llm_api_kwargs
             )
 
     collapsed_df = collapse_to_one_row_per_uid(per_row_df, id_col=id_col)
@@ -1218,8 +1219,10 @@ def _walk_recovered_entities(
     per_row_df: pd.DataFrame, *, session, tables, system_prompt, id_col, name_col,
     text_col, model, descent_fanout_cap, max_workers, confidence_threshold,
     emit_per_level, read_from_cache=True, write_to_cache=True,
-    match_schema: type[BaseModel] | None = None, reasoning: dict | None = None,
+    match_schema: type[BaseModel] | None = None,
     filter_by_model: bool = True,
+    llm_api_kwargs: dict | None = {"reasoning": {"effort": "low"}}
+
 ) -> pd.DataFrame:
     """Seed the walk at each recovery-recovered entity's pillar and descend.
 
@@ -1266,8 +1269,8 @@ def _walk_recovered_entities(
         confidence_threshold=confidence_threshold, emit_per_level=emit_per_level,
         seed_col=recovered_col,
         read_from_cache=read_from_cache, write_to_cache=write_to_cache,
-        match_schema=match_schema, reasoning=reasoning,
-        filter_by_model=filter_by_model,
+        match_schema=match_schema,
+        filter_by_model=filter_by_model, llm_api_kwargs=llm_api_kwargs
     )
 
     kept = per_row_df[~per_row_df[id_col].isin(rec_ids)]
