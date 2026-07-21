@@ -26,7 +26,7 @@ PRIMARY_CATEGORY_PROMPT = dedent("""\
 
     Rules:
     - Choose the category aligned with the org's central mission, not a secondary activity
-    - Prefer more specific categories (solutions) over broader ones when the org clearly fits
+    - When two categories describe the mission equally well, prefer the more specific (deeper) one
     - If a website URL is provided, you may use web search to gather additional evidence
     - Return ONLY the exact category name as it appears in the input
 """).strip()
