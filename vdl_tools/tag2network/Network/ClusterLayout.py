@@ -147,7 +147,9 @@ def compress_groups(nodes_df, layout_dict, cluster_attr, overlap_frac,
                 new_center = new_centers[clus]
                 # change plot aspect ratio - aspect > 1 -> stretch x-axis]
                 if aspect_ratio != 1.0:
-                    new_center = new_center.copy()
+                    # new_center may be a tuple (from `centers`, when overlap_frac==1.0)
+                    # or an ndarray (from _remove_overlap); coerce to a mutable float array
+                    new_center = np.array(new_center, dtype=float)
                     if aspect_ratio > 1.0:
                         new_center[0] = new_center[0] * aspect_ratio
                     else:
