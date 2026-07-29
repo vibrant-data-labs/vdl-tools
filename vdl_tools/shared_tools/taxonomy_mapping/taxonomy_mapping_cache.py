@@ -17,10 +17,10 @@ The default ``MatchesResponse`` is permissive on optional fields
 (``mode_of_operation``, ``confidence``) so it accepts responses from any
 prompt. **But** under OpenAI strict-mode structured output, those fields
 become "nullable required" — the model is forced to emit *something* for
-each, even when the prompt didn't ask. For prompts without modes (e.g.
-ED-tracker), that can spuriously trigger the engine's indirect-fanout-stop
-when the model guesses ``"indirect"``. Drivers that want tight control
-should define their own Pydantic class (embedding per-field guidance via
+each, even when the prompt didn't ask, so a modeless prompt (e.g.
+ED-tracker) still gets a guessed ``mode_of_operation`` on every match.
+Drivers that want tight control should define their own Pydantic class
+(embedding per-field guidance via
 ``Field(description=...)`` and selection-level guidance on the response
 class's docstring) and pass it as ``response_model`` to
 ``TaxonomyMatchCache`` / as ``match_schema`` to ``classify_entities``.
