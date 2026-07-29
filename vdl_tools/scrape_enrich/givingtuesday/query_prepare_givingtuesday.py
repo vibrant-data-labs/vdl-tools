@@ -234,6 +234,7 @@ def query_process_givingtuesday_data(
     client=None,
     return_full_text=True,
     force_include_eins=None,
+    remove_granter_eins=True,
 ):
     """Return the Crunchbase-shaped DataFrame of grantee orgs matching ``search_terms``.
 
@@ -289,6 +290,8 @@ def query_process_givingtuesday_data(
       optional — passing only ``force_include_eins`` runs in forced-only
       mode. Forced EINs that have no ``basic_fields`` row in the DB are
       logged at WARNING and dropped (there's no identity data to assemble).
+    * ``remove_granter_eins`` — when ``True``, remove the EINs that are
+      granters from the result.
 
     Output columns (one row per eligible EIN):
 
@@ -356,9 +359,17 @@ def query_process_givingtuesday_data(
         return pd.DataFrame()
 
     basic_long = _records_to_df(client.get_basic_fields(eins, min_taxyear=filter_yr))
-    grants_long = _records_to_df(
-        client.get_grant_summaries(eins, role="grantee", min_taxyear=filter_yr)
-    )
+    grant_summaries = client.get_grant_summaries(eins, role="grantee", min_taxyear=filter_yr)
+    all_granter_eins = set(granter_ein for grant_summary in grant_summaries for granter_ein in (grant_summary.granter_eins or []))
+
+    if remove_granter_eins:
+        # Remove from hits the EINs thare in all_granter_eins
+        clean_hit_eins = seen.difference(all_granter_eins)
+    else:
+        clean_hit_eins = seen
+    basic_long = basic_long[basic_long["ein"].isin(clean_hit_eins)]
+    clean_grants = [g for g in grant_summaries if g.ein in clean_hit_eins]
+    grants_long = _records_to_df(clean_grants)
 
     if force_include_eins:
         found = set(basic_long["ein"]) if not basic_long.empty else set()
