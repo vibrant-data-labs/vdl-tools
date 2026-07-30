@@ -395,7 +395,7 @@ def add_summary_of_summaries(
     max_workers=MAX_WORKERS,
     summary_prompt=BASE_SUMMARY_OF_SUMMARIES_PROMPT,
     summary_column='Summary',
-    n_per_commit=None,
+    n_per_commit=MAX_WORKERS * 50,
 ):
 
     # Remove all the rows that are missing all the text fields
@@ -591,7 +591,7 @@ def run_pipeline(
         id_col='id',
         use_cached_results=True,
         max_workers=max_workers,
-        n_per_commit=max_workers,
+        n_per_commit=n_per_commit,
     )
 
 
