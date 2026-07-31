@@ -1290,7 +1290,10 @@ def distribute_funding_from_matches(
     Rows with no level-0 match are dropped (consumers emit their own
     "No Match" rows). Level columns are renamed to the generic
     ``level{i}`` names ``redistribute_funding_fracs`` expects, so this
-    works for any taxonomy's ``output_col`` naming.
+    works for any taxonomy's ``output_col`` naming. Exact duplicate
+    (id, path) rows are dropped before distribution — each copy would
+    otherwise be zeroed by the shallow-duplicate check downstream,
+    erasing the org's funding entirely.
 
     Returns columns ``[id_col, cat_level, level0..level{max}, name_col,
     FundingFrac]`` with ``FundingFrac`` summing to 1.0 per id.
@@ -1323,6 +1326,13 @@ def distribute_funding_from_matches(
     })
     for i, col in enumerate(output_cols):
         paths_df[f"level{i}"] = matched[col].map(_clean_str)
+
+    # Duplicate ids in the input frame are walked once per row (emitting
+    # identical match rows), and concatenated precomputed frames can repeat
+    # rows outright. redistribute_funding_fracs' shallow-duplicate check
+    # zeroes every copy of a duplicated shallow path (each copy "matches
+    # more than itself"), which would erase the org's funding.
+    paths_df = paths_df.drop_duplicates()
 
     if paths_df.empty:
         logger.warning("distribute_funding_from_matches: no matched paths")

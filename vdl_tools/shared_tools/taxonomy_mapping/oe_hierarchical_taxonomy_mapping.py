@@ -28,7 +28,7 @@ High-level usage
     from oe_hierarchical_taxonomy_mapping import map_to_oneearth
 
     with get_session() as session:
-        per_row_df, collapsed_df = map_to_oneearth(
+        per_row_df, collapsed_df, funding_df = map_to_oneearth(
             entities=my_dataframe,
             id_col="uid",
             name_col="Name",
@@ -57,7 +57,6 @@ import vdl_tools.shared_tools.taxonomy_mapping.hierarchical_taxonomy_mapping as 
 from vdl_tools.shared_tools.taxonomy_mapping.hierarchical_taxonomy_mapping import (
     build_system_prompt,
     classify_entities,
-    add_hierarchical_taxonomy_mapping,
 )
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 
@@ -996,12 +995,13 @@ def map_to_oneearth(
     write_to_cache: bool = True,
     filter_by_model: bool = True,
     llm_api_kwargs: dict | None = {"reasoning": {"effort": "low"}}
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Classify a DataFrame of entities against the One Earth taxonomy.
 
     Top-level convenience for the common case: one DataFrame in,
-    per-row + collapsed DataFrames out. Loads the latest taxonomy,
-    runs the hierarchical walk, and returns both views.
+    per-row + collapsed + distributed-funding DataFrames out. Loads the
+    latest taxonomy, runs the hierarchical walk, and returns all three
+    views.
 
     Parameters
     ----------
@@ -1100,7 +1100,7 @@ def map_to_oneearth(
 
     Returns
     -------
-    (per_row_df, collapsed_df)
+    (per_row_df, collapsed_df, distributed_funding_results_df)
         ``per_row_df`` has one row per (entity, leaf) pair, with columns
         ``id_col``, ``name_col``, ``text_col``, all the entity's other
         columns, then ``Pillar`` / ``Sub-Pillar`` / ``Solution`` /
@@ -1112,6 +1112,16 @@ def map_to_oneearth(
         deepest non-empty level name in ``deepest_match`` (or
         ``"NoMatch"``). Non-classification columns from the input are
         carried through using each id's first non-null value.
+
+        ``distributed_funding_results_df`` has one row per (entity,
+        matched path) with a ``FundingFrac`` column: each entity's
+        weight split equally across its matched paths, normalized to
+        sum to 1.0 per id (see ``distribute_funding_from_matches``).
+        Funding depth is capped at Solution level; matches shallower
+        than that are backfilled with synthetic ``No_Level_n`` labels.
+        Entities with no level-0 match have no rows in this frame —
+        emit your own "No Match" rows if totals must reconcile with
+        the input entity set.
     """
     if walk_recovered and not recover_unmatched:
         raise ValueError("walk_recovered=True requires recover_unmatched=True")
@@ -1212,18 +1222,11 @@ def map_to_oneearth(
                 llm_api_kwargs=llm_api_kwargs
             )
 
-    _, distributed_funding_results_df, per_row_mapping_df = add_hierarchical_taxonomy_mapping(
-        df=entities,
-        levels=ONEEARTH_LEVELS,
-        id_col=id_col,
-        name_col=name_col,
-        text_col=text_col,
-        model=model,
-        descent_fanout_cap=descent_fanout_cap,
-        per_row_mapping_df=per_row_df
+    distributed_funding_results_df = _htm.distribute_funding_from_matches(
+        per_row_df, ONEEARTH_LEVELS, id_col, name_col=name_col,
     )
-    collapsed_df = collapse_to_one_row_per_uid(per_row_mapping_df, id_col=id_col)
-    return per_row_mapping_df, collapsed_df, distributed_funding_results_df
+    collapsed_df = collapse_to_one_row_per_uid(per_row_df, id_col=id_col)
+    return per_row_df, collapsed_df, distributed_funding_results_df
 
 
 def _walk_recovered_entities(
