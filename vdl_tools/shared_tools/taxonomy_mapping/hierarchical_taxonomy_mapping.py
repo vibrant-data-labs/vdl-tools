@@ -194,6 +194,9 @@ from vdl_tools.shared_tools.taxonomy_mapping.taxonomy_mapping_cache import (
     TaxonomyMatchCache,
 )
 from vdl_tools.shared_tools.tools.logger import logger
+from vdl_tools.shared_tools.taxonomy_mapping.taxonomy_mapping import (
+    redistribute_funding_fracs,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1295,12 +1298,6 @@ def distribute_funding_from_matches(
     Returns columns ``[id_col, cat_level, level0..level{max}, name_col,
     FundingFrac]`` with ``FundingFrac`` summing to 1.0 per id.
     """
-    # Local import: taxonomy_mapping pulls in the embedding stack, which
-    # this module otherwise doesn't need.
-    from vdl_tools.shared_tools.taxonomy_mapping.taxonomy_mapping import (
-        redistribute_funding_fracs,
-    )
-
     levels = normalize_levels(levels)
     output_cols = [lvl["output_col"] for lvl in levels]
 
