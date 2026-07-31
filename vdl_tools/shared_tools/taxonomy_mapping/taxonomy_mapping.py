@@ -277,47 +277,40 @@ def _filter_to_leaf_nodes(df: pd.DataFrame, id_attr: str, name_attr: str, n_leve
 
 def redistribute_funding_fracs(
     df,
-    taxonomy=None,
     max_level=2,
     funding_attrs=[],
     keepcols=['Organization', 'P_vs_V'],
     id_attr='uid',
-    across_levels=False,
     clear_duplicates=True
 ):
     """
-    If across_levels is False, fill in missing lower level values to assign funding to a
-    "No level" category so mapping is complete at all levels
+    Compute per-(entity, path) funding fractions from taxonomy mapping
+    results, filling in missing lower level values to assign funding to a
+    "No_Level_n" category so mapping is complete at all levels.
 
-    If across_levels is True, distribute funding assigned to higher level nodes
-    across lower-level (child) taxonomy nodes.
-    If 'taxonomy' is given, funding is distributed across all child nodes, if not
-    then it is only distributed to nodes that appear in the mapping results df.
-    If an entity is originally mapped for example to level 1 and max_level is 2,
-    rows will be added for level 2 taxonomy nodes and fracrion of 1 / n where n
-    is the number of level 2 nodes will be applied.
+    Funding is never redistributed across taxonomy levels: an entity's
+    weight stays on the paths it was actually mapped to. (A former
+    ``across_levels=True`` mode that spread higher-level funding across
+    child nodes was removed deliberately — it fabricates funding
+    allocations the mapping never made. Do not reintroduce it.)
 
     Parameters
     ----------
     df : pandas.DataFrame
         Raw results of taxonomy mapping potentially with multiple rows per entity.
-    taxonomy : list
-        List of data at each level in multilevel taxonomy. If None then use the taxonomy nodes
-        that occur in the input dataframe
     max_level : int, optional
-        Max level to redsitbute to. The default is 2.
+        Max level to redistribute to. The default is 2.
     funding_attrs : list, optional
-        List of attributes to compute distributed fuding amounts on. The default is [].
+        List of attributes to compute distributed funding amounts on. The default is [].
     keepcols : list, optional
         List of column names of entity attributes to keep in the output.
         The default is ['Organization', 'P_vs_V'].
     id_attr : string, optional
         Name of entity id attribute column. The default is 'uid'.
-    across_levels: bool, optional
-        If True map lower level to higher levels; if False assign fraction to 'No_Leveln'
-    merge_duplicates: bool, optional
-        If True set FundingFrac to zero in all rows but one entities with rows that are duplicates
-        below max_level; if False keep multiple rows with non-zero FundingFrac
+    clear_duplicates: bool, optional
+        If True set FundingFrac to zero in all rows but one for entities with
+        rows that are duplicates below max_level; if False keep multiple rows
+        with non-zero FundingFrac
 
     Returns
     -------
@@ -366,129 +359,34 @@ def redistribute_funding_fracs(
         dup_df = df[df[id_attr].isin(dup_ids)]
         for uid, edf in dup_df.groupby(id_attr):
             df.loc[edf.index, 'FundingFrac'] /= df.loc[edf.index, 'FundingFrac'].sum()
-    if not across_levels:
-        # get entities with empty level assignments
-        row_with_na = df[levels].isna().sum(axis=1) > 0
-        uid_with_na = set(df[id_attr][row_with_na].unique())
-        na_df = df[df[id_attr].isin(uid_with_na)]
-        for uid, edf in na_df.groupby(id_attr):
-            # for each entity with level_n == na, see if it matches another row in the entity
-            na_rows = edf.loc[edf[levels].isna().sum(axis=1) > 0]
-            for idx, row in na_rows.iterrows():
-                # get matches at each (non-na) level
-                match_df = edf[levels].copy()
-                for attr in levels:
-                    if not type(row[attr]) is str:
-                        break
-                    match_df = match_df[match_df[attr] == row[attr]]
-                if len(match_df) > 1:   # current row (with na's) matches more than itself
-                    df.loc[idx, 'FundingFrac'] = 0
-            # normalize the FundingFrac values
-            df.loc[edf.index, 'FundingFrac'] /= df.loc[edf.index, 'FundingFrac'].sum()
-        # set the na level entries to "No_level_n"
-        for idx, attr in enumerate(levels):
-            mask = df[attr].isna()
-            if idx > 0:
-                df.loc[mask, attr] = f'No_Level_{idx}_' + df.loc[mask, levels[idx - 1]]
-            else:
-                df.loc[mask, attr] = f'No_Level_{idx}'
-        _total_df = df
-    else:
-        def _get_level_fracs(taxonomy, level):
-            # helper fn to get taxonomy node names and fractions at a given level
-            #
-            # map taxonomy names to generic (leveln) names used in the mapped data
-            levs = {tx['name']: f'level{idx}' for idx, tx in enumerate(taxonomy[0:level + 1])}
-            # rename columns in the taxonomy data to use the generic level names
-            df = taxonomy[level]['data'].rename(columns=levs)
-            # get list of levels
-            levels = list(levs.values())
-            # level m is one level up from current (n) level
-            lm = levels[level - 1]
-            # compute fractions
-            lm_counts = df[lm].value_counts()
-            df['Fractions'] = 1 / df[lm].map(lm_counts)
-            return df[levels + ['Fractions']].set_index(levels)
-
-        if max_level < 1 or max_level > 2:
-            logger.error("max_level must be 1 or 2")
-            return None
-
-        if max_level >= 1:
-            # first distribute level0 (pillar-level) funding across level1 (subpillars)
-            #
-            # compute subpillar fractions of each pillar
-            # get orgs with solutions and subpillars
-            l1_df = df[df.cat_level != 0]
-            # compute funding fractions of each pillar+subpillar
-            l1f_df = pd.DataFrame(l1_df.groupby(['level0', 'level1'])[frac_attr].sum())
-            if taxonomy is not None:     # if taxonomy is given, redistribute across all chold nodes
-                l1f_df = l1f_df.join(_get_level_fracs(taxonomy, 1), how='outer').fillna(0).reset_index()
-            else:           # otherwise distribute across child nodes that are in the data
-                l1f_df.reset_index(inplace=True)
-                l0_tots = l1f_df.level0.map(l1f_df.groupby('level0')[frac_attr].count())
-                l1f_df['Fractions'] = 1 / l0_tots
-
-            # get orgs with only pillars
-            missing_l1_df = df[df.cat_level == 0]
-            # distribute pillar fraction across it's subpillars based on observed subpillar fractions
-            mapped_frac = (missing_l1_df.level0.apply(lambda x: l1f_df[l1f_df.level0 == x]['Fractions'].values)
-                           * missing_l1_df[frac_attr])
-            mapped_l1 = missing_l1_df.level0.apply(lambda x: l1f_df[l1f_df.level0 == x]['level1'].values)
-            mapped_l0 = missing_l1_df.level0.apply(lambda x: l1f_df[l1f_df.level0 == x]['level0'].values)
-            mapped_index = mapped_frac.explode().index
-            mapped_df = pd.DataFrame({'level0': mapped_l0.explode().values,
-                                      'level1': mapped_l1.explode().values,
-                                      frac_attr: mapped_frac.explode().values,
-                                      'cat_level': missing_l1_df.cat_level.loc[mapped_index].values,
-                                      id_attr: missing_l1_df[id_attr].loc[mapped_index].values
-                                      })
-            total_l1_df = pd.concat([l1_df[[id_attr, 'cat_level', frac_attr] + all_levels], mapped_df])
-            total_l1_df = total_l1_df.reset_index(drop=True)
-
-            if max_level >= 2:
-                # distribute subpillar-level funding across solutions
-                #
-                # compute soln fractions of each subpillar
-                # get orgs with solutions
-                l2_df = total_l1_df[~total_l1_df.level2.isna()]
-                l1_with_l2 = l2_df.level1.unique()
-                # compute funding fractions of each soln (level 2)
-                l2f_df_ = pd.DataFrame(l2_df.groupby(levels)[frac_attr].sum())
-                if taxonomy is not None:
-                    fracs_df = _get_level_fracs(taxonomy, 2)
-                    l2f_df = l2f_df_.join(fracs_df, how='outer').fillna(0).reset_index()
-                else:
-                    l2f_df = l2f_df_.reset_index()
-                    l1_tots = l2f_df.level1.map(l2f_df.groupby('level1')[frac_attr].count())
-                    l2f_df['Fractions'] = 1 / l1_tots
-
-                no_l2_df = total_l1_df[total_l1_df.level2.isna()]
-                mask = no_l2_df.level1.isin(l1_with_l2)
-                missing_l2_df = no_l2_df[mask]  # these l1 values have no l2 assignment but there is l2 data in the taxonomy
-                no_l2_df = no_l2_df[~mask]  # these level1 values are leaf nodes, there is no level 2 in this part of the taxonomy
-                # distribute subpillar fractions across it's solns based on observed soln fractions
-                l2_mapped_frac = (missing_l2_df.level1.apply(lambda x: l2f_df[l2f_df.level1 == x]['Fractions'].values)
-                                  * missing_l2_df[frac_attr])
-                l2_mapped_l2s = missing_l2_df.level1.apply(lambda x: l2f_df[l2f_df.level1 == x]['level2'].values)
-                l2_mapped_l1s = missing_l2_df.level1.apply(lambda x: l2f_df[l2f_df.level1 == x]['level1'].values)
-                l2_mapped_l0s = missing_l2_df.level1.apply(lambda x: l2f_df[l2f_df.level1 == x]['level0'].values)
-                mapped_index = l2_mapped_frac.explode().index
-                l2_mapped_df = pd.DataFrame({'level0': l2_mapped_l0s.explode().values,
-                                             'level1': l2_mapped_l1s.explode().values,
-                                             'level2': l2_mapped_l2s.explode().values,
-                                             frac_attr: l2_mapped_frac.explode().values,
-                                             'cat_level': missing_l2_df.cat_level.loc[mapped_index].values,
-                                             id_attr: missing_l2_df[id_attr].loc[mapped_index].values})
-                _total_df = pd.concat([l2_df[[id_attr, 'cat_level', frac_attr] + all_levels],
-                                       l2_mapped_df, no_l2_df])
-            else:
-                _total_df = total_l1_df
+    # get entities with empty level assignments
+    row_with_na = df[levels].isna().sum(axis=1) > 0
+    uid_with_na = set(df[id_attr][row_with_na].unique())
+    na_df = df[df[id_attr].isin(uid_with_na)]
+    for uid, edf in na_df.groupby(id_attr):
+        # for each entity with level_n == na, see if it matches another row in the entity
+        na_rows = edf.loc[edf[levels].isna().sum(axis=1) > 0]
+        for idx, row in na_rows.iterrows():
+            # get matches at each (non-na) level
+            match_df = edf[levels].copy()
+            for attr in levels:
+                if not type(row[attr]) is str:
+                    break
+                match_df = match_df[match_df[attr] == row[attr]]
+            if len(match_df) > 1:   # current row (with na's) matches more than itself
+                df.loc[idx, 'FundingFrac'] = 0
+        # normalize the FundingFrac values
+        df.loc[edf.index, 'FundingFrac'] /= df.loc[edf.index, 'FundingFrac'].sum()
+    # set the na level entries to "No_level_n"
+    for idx, attr in enumerate(levels):
+        mask = df[attr].isna()
+        if idx > 0:
+            df.loc[mask, attr] = f'No_Level_{idx}_' + df.loc[mask, levels[idx - 1]]
         else:
-            _total_df = df
+            df.loc[mask, attr] = f'No_Level_{idx}'
 
     # for each uid, group togather fractions with same soln level
-    total_grps = _total_df.groupby([id_attr, 'cat_level'] + levels)
+    total_grps = df.groupby([id_attr, 'cat_level'] + levels)
     parts = [total_grps[frac_attr].sum()]
     # and add concatenated high-level terms
     for lev in all_levels:

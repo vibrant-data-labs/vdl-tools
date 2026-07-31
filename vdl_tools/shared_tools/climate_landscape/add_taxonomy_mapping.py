@@ -210,7 +210,6 @@ def add_taxonomy_mapping(
         filtered_all_df.pop('FundingFrac')
         distributed_funding_df = tm.redistribute_funding_fracs(
             df=filtered_all_df,
-            taxonomy=taxonomy,
             id_attr=id_col,
             keepcols=[name_col],
             max_level=max_distr_funding_level,

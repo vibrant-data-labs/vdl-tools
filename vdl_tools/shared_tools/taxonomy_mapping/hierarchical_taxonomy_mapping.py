@@ -1290,10 +1290,7 @@ def distribute_funding_from_matches(
     Rows with no level-0 match are dropped (consumers emit their own
     "No Match" rows). Level columns are renamed to the generic
     ``level{i}`` names ``redistribute_funding_fracs`` expects, so this
-    works for any taxonomy's ``output_col`` naming. Exact duplicate
-    (id, path) rows are dropped before distribution — each copy would
-    otherwise be zeroed by the shallow-duplicate check downstream,
-    erasing the org's funding entirely.
+    works for any taxonomy's ``output_col`` naming.
 
     Returns columns ``[id_col, cat_level, level0..level{max}, name_col,
     FundingFrac]`` with ``FundingFrac`` summing to 1.0 per id.
@@ -1348,7 +1345,6 @@ def distribute_funding_from_matches(
         id_attr=id_col,
         keepcols=keepcols,
         max_level=max_level,
-        across_levels=False,
     )
 
 

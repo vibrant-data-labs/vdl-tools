@@ -113,7 +113,6 @@ class AttentionIndexer:
         # This function is what adds the No_Level categories to the funding mapped to taxonomy df
         self.distributed_funding_df = redistribute_funding_fracs(
             df=self.taxonomy_mapping_results,
-            taxonomy=self.taxonomy,
             id_attr=self._taxonomy_mapping_id_col,
             keepcols=[],
             max_level=self.distributed_funding_level,
