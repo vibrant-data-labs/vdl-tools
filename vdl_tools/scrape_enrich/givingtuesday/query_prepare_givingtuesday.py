@@ -364,7 +364,9 @@ def query_process_givingtuesday_data(
 
     if remove_granter_eins:
         # Remove from hits the EINs thare in all_granter_eins
-        clean_hit_eins = seen.difference(all_granter_eins)
+        forced = set(force_include_eins or [])
+        clean_hit_eins = seen.difference(all_granter_eins - forced)
+
     else:
         clean_hit_eins = seen
     basic_long = basic_long[basic_long["ein"].isin(clean_hit_eins)]

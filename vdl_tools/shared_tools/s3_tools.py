@@ -57,7 +57,15 @@ def get_s3_client():
 
 def create_bucket(s3_client, bucket_name):
     # create public bucket if it doesn't exist
-    s3_client.create_bucket(Bucket=bucket_name)
+    try:
+        s3_client.create_bucket(Bucket=bucket_name)
+    except (
+        s3_client.exceptions.BucketAlreadyOwnedByYou,
+        s3_client.exceptions.BucketAlreadyExists,
+    ):
+        # Bucket is already there (owned by us), so just (re)apply the
+        # public-access config and policy below.
+        pass
     s3_client.put_public_access_block(Bucket=bucket_name, PublicAccessBlockConfiguration={
         "BlockPublicPolicy": False
     })
