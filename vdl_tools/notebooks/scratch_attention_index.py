@@ -248,7 +248,6 @@ def _(aier):
 def _(aier, edited_df, redistribute_funding_fracs):
     redistribute_funding_fracs(
         df=edited_df.value.copy(),
-        taxonomy=aier.taxonomy,
         id_attr=aier._taxonomy_mapping_id_col,
         keepcols=[],
         max_level=1,
@@ -261,7 +260,6 @@ def _(aier, copy_df, redistribute_funding_fracs):
 
     redistribute_funding_fracs(
         df=copy_df.copy(),
-        taxonomy=aier.taxonomy,
         id_attr=aier._taxonomy_mapping_id_col,
         keepcols=[],
         max_level=1,
@@ -273,7 +271,6 @@ def _(aier, copy_df, redistribute_funding_fracs):
 def _(aier, edited_df, redistribute_funding_fracs):
     redistribute_funding_fracs(
         df=edited_df.value.copy(),
-        taxonomy=aier.taxonomy,
         id_attr=aier._taxonomy_mapping_id_col,
         keepcols=[],
         max_level=2,
@@ -285,7 +282,6 @@ def _(aier, edited_df, redistribute_funding_fracs):
 def _(aier, copy_df, redistribute_funding_fracs):
     redistribute_funding_fracs(
         df=copy_df.copy(),
-        taxonomy=aier.taxonomy,
         id_attr=aier._taxonomy_mapping_id_col,
         keepcols=[],
         max_level=2,
@@ -297,7 +293,6 @@ def _(aier, copy_df, redistribute_funding_fracs):
 def _(aier, copy_df, redistribute_funding_fracs):
     redistribute_funding_fracs(
         df=copy_df.copy(),
-        taxonomy=aier.taxonomy,
         id_attr=aier._taxonomy_mapping_id_col,
         keepcols=[],
         max_level=3,
@@ -309,7 +304,6 @@ def _(aier, copy_df, redistribute_funding_fracs):
 def _(aier, edited_df, redistribute_funding_fracs):
     redistribute_funding_fracs(
         df=edited_df.value.copy(),
-        taxonomy=aier.taxonomy,
         id_attr=aier._taxonomy_mapping_id_col,
         keepcols=[],
         max_level=3,
@@ -321,7 +315,6 @@ def _(aier, edited_df, redistribute_funding_fracs):
 def _(aier, redistribute_funding_fracs):
     redistribute_funding_fracs(
         df=aier.taxonomy_mapping_results[aier.taxonomy_mapping_results['id'] == '00062c60-a35d-43e5-8a93-611741edce8d'],
-        taxonomy=aier.taxonomy,
         id_attr=aier._taxonomy_mapping_id_col,
         keepcols=[],
         max_level=2,
@@ -333,7 +326,6 @@ def _(aier, redistribute_funding_fracs):
 def _(aier, redistribute_funding_fracs):
     redistribute_funding_fracs(
         df=aier.taxonomy_mapping_results[aier.taxonomy_mapping_results['id'] == '00062c60-a35d-43e5-8a93-611741edce8d'],
-        taxonomy=aier.taxonomy,
         id_attr=aier._taxonomy_mapping_id_col,
         keepcols=[],
         max_level=3,

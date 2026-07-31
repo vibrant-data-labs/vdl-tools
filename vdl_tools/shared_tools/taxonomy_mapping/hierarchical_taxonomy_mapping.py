@@ -194,6 +194,9 @@ from vdl_tools.shared_tools.taxonomy_mapping.taxonomy_mapping_cache import (
     TaxonomyMatchCache,
 )
 from vdl_tools.shared_tools.tools.logger import logger
+from vdl_tools.shared_tools.taxonomy_mapping.taxonomy_mapping import (
+    redistribute_funding_fracs,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1295,12 +1298,6 @@ def distribute_funding_from_matches(
     Returns columns ``[id_col, cat_level, level0..level{max}, name_col,
     FundingFrac]`` with ``FundingFrac`` summing to 1.0 per id.
     """
-    # Local import: taxonomy_mapping pulls in the embedding stack, which
-    # this module otherwise doesn't need.
-    from vdl_tools.shared_tools.taxonomy_mapping.taxonomy_mapping import (
-        redistribute_funding_fracs,
-    )
-
     levels = normalize_levels(levels)
     output_cols = [lvl["output_col"] for lvl in levels]
 
@@ -1323,6 +1320,13 @@ def distribute_funding_from_matches(
     })
     for i, col in enumerate(output_cols):
         paths_df[f"level{i}"] = matched[col].map(_clean_str)
+
+    # Duplicate ids in the input frame are walked once per row (emitting
+    # identical match rows), and concatenated precomputed frames can repeat
+    # rows outright. redistribute_funding_fracs' shallow-duplicate check
+    # zeroes every copy of a duplicated shallow path (each copy "matches
+    # more than itself"), which would erase the org's funding.
+    paths_df = paths_df.drop_duplicates()
 
     if paths_df.empty:
         logger.warning("distribute_funding_from_matches: no matched paths")
