@@ -971,6 +971,29 @@ def build_recovery_scope_prompt(taxonomy_path: Path | None = None) -> str:
     )
 
 
+def _seed_recovered_pillars_for_funding(per_row_df: pd.DataFrame) -> pd.DataFrame:
+    """Funding-only view of ``per_row_df`` with recovered pillars filled in.
+
+    With ``recover_unmatched=True`` and ``walk_recovered=False``, an
+    in-scope recovery leaves its pillar in ``recovered_Pillar`` while the
+    level columns stay empty, so ``distribute_funding_from_matches`` would
+    drop the entity and its funding would silently vanish from the pillar
+    totals. Returns a copy with ``Pillar`` seeded from ``recovered_Pillar``
+    for those rows so they enter funding at pillar depth. The caller's
+    frame is untouched — ``per_row_df`` / ``collapsed_df`` keep walk
+    evidence and recovery guesses separate.
+    """
+    top_col = ONEEARTH_LEVELS[0]["output_col"]
+    recovered_col = f"recovered_{top_col}"
+    out = per_row_df.copy()
+    pillar = out[top_col]
+    # Same emptiness test as recover_unmatched's own unmatched-id scan.
+    empty = pillar.isna() | pillar.astype(str).str.strip().isin(["", "None", "nan"])
+    mask = out["recovered_in_scope"].eq(True) & out[recovered_col].notna() & empty
+    out.loc[mask, top_col] = out.loc[mask, recovered_col]
+    return out
+
+
 def map_to_oneearth(
     entities: pd.DataFrame,
     *,
@@ -1119,9 +1142,12 @@ def map_to_oneearth(
         sum to 1.0 per id (see ``distribute_funding_from_matches``).
         Funding depth is capped at Solution level; matches shallower
         than that are backfilled with synthetic ``No_Level_n`` labels.
-        Entities with no level-0 match have no rows in this frame —
-        emit your own "No Match" rows if totals must reconcile with
-        the input entity set.
+        With ``recover_unmatched=True`` (and ``walk_recovered=False``),
+        entities the recovery marked in scope enter this frame at
+        pillar depth via their ``recovered_Pillar``. Entities with no
+        match anywhere have no rows in this frame — emit your own
+        "No Match" rows if totals must reconcile with the input
+        entity set.
     """
     if walk_recovered and not recover_unmatched:
         raise ValueError("walk_recovered=True requires recover_unmatched=True")
@@ -1222,8 +1248,13 @@ def map_to_oneearth(
                 llm_api_kwargs=llm_api_kwargs
             )
 
+    funding_input_df = (
+        _seed_recovered_pillars_for_funding(per_row_df)
+        if recover_unmatched and not walk_recovered
+        else per_row_df
+    )
     distributed_funding_results_df = _htm.distribute_funding_from_matches(
-        per_row_df, ONEEARTH_LEVELS, id_col, name_col=name_col,
+        funding_input_df, ONEEARTH_LEVELS, id_col, name_col=name_col,
     )
     collapsed_df = collapse_to_one_row_per_uid(per_row_df, id_col=id_col)
     return per_row_df, collapsed_df, distributed_funding_results_df
