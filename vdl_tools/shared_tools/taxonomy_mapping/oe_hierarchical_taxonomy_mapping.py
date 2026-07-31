@@ -57,6 +57,7 @@ import vdl_tools.shared_tools.taxonomy_mapping.hierarchical_taxonomy_mapping as 
 from vdl_tools.shared_tools.taxonomy_mapping.hierarchical_taxonomy_mapping import (
     build_system_prompt,
     classify_entities,
+    add_hierarchical_taxonomy_mapping,
 )
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 
@@ -1211,8 +1212,18 @@ def map_to_oneearth(
                 llm_api_kwargs=llm_api_kwargs
             )
 
-    collapsed_df = collapse_to_one_row_per_uid(per_row_df, id_col=id_col)
-    return per_row_df, collapsed_df
+    _, distributed_funding_results_df, per_row_mapping_df = add_hierarchical_taxonomy_mapping(
+        df=entities,
+        levels=ONEEARTH_LEVELS,
+        id_col=id_col,
+        name_col=name_col,
+        text_col=text_col,
+        model=model,
+        descent_fanout_cap=descent_fanout_cap,
+        per_row_mapping_df=per_row_df
+    )
+    collapsed_df = collapse_to_one_row_per_uid(per_row_mapping_df, id_col=id_col)
+    return per_row_mapping_df, collapsed_df, distributed_funding_results_df
 
 
 def _walk_recovered_entities(

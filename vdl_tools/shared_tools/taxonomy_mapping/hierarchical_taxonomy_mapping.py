@@ -1338,6 +1338,7 @@ def distribute_funding_from_matches(
         id_attr=id_col,
         keepcols=keepcols,
         max_level=max_level,
+        across_levels=False,
     )
 
 
