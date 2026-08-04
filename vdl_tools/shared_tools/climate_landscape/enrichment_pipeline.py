@@ -606,8 +606,9 @@ def run_pipeline(
             df_relevant,
             id_col='id',
             text_col='text_for_one_earth',
-            # Latest "OE Solutions Terms *VDL.xlsx" next to the pinned taxonomy file
-            taxonomy_dir=paths['one_earth_taxonomy'].parent,
+            # Pinned in paths.ini so the taxonomy vintage is explicit and part of
+            # the run's lineage (rather than "newest VDL file on the machine").
+            taxonomy_path=paths['one_earth_hierarchical_taxonomy'],
             results_path=paths.get('one_earth_taxonomy_mapping_results'),
             distributed_funding_results_path=paths.get('oe_tax_mapping_distributed_funding_results'),
             emit_per_level=True,
