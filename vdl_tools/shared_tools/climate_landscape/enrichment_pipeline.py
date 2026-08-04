@@ -11,7 +11,7 @@ from vdl_tools.scrape_enrich.combine_crunchbase_candid_linkedin import combine_c
 from vdl_tools.scrape_enrich.scraper.scrape_websites import extract_website_name, scrape_websites_psql
 from vdl_tools.shared_tools import climatebert_adaptation as adp
 from vdl_tools.shared_tools.all_source_organization_summarization import generate_summary_of_summaries, BASE_SUMMARY_OF_SUMMARIES_PROMPT
-from vdl_tools.shared_tools.climate_landscape.add_taxonomy_mapping import add_one_earth_taxonomy
+from vdl_tools.shared_tools.climate_landscape.add_taxonomy_mapping import add_one_earth_hierarchical_taxonomy
 from vdl_tools.shared_tools.climate_landscape.diversity_keywords import DIVERSITY_BIPOC_DICT
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 from vdl_tools.shared_tools.geotagging_prompting import geotag_texts_bulk
@@ -602,18 +602,13 @@ def run_pipeline(
     df_relevant.to_json(paths['results_path'] / "df_relevant_pre_taxonomy.json", orient='records')
 
     if run_one_earth_taxonomy:
-        df_relevant = add_one_earth_taxonomy(
+        df_relevant = add_one_earth_hierarchical_taxonomy(
             df_relevant,
             'id',
             'text_for_one_earth',
+            paths=paths,
             use_cached_results=True,
             max_workers=max_workers,
-            force_parents=True,
-            add_intersectional=False,
-            add_falsesolns=False,
-            add_levers_of_change=False,
-            run_primary_category_selection=False,
-            n_per_commit=n_per_commit,
         )
 
     # PROCESS DIVERSITY TAGS
