@@ -1,0 +1,88 @@
+"""Review queues and decision merge-back.
+
+Humans review by exception: only rows without a confident auto-match reach a
+queue. Every decision is appended to ``decisions.jsonl`` (the lineage record
+and, over time, threshold-tuning data) and written back into the ID Mapping
+File, which always holds current state.
+"""
+
+import json
+from dataclasses import asdict
+from datetime import datetime, timezone
+from pathlib import Path
+
+import pandas as pd
+
+from vdl_tools.portfolio_comparison.matching.source_adapter import Candidate
+from vdl_tools.portfolio_comparison.schema import validate_id_mapping
+
+DECISIONS_FILENAME = "decisions.jsonl"
+
+
+def build_review_queue(
+    id_mapping: pd.DataFrame, candidates_by_row: dict[str, list[Candidate]]
+) -> pd.DataFrame:
+    """Rows needing a human, with their candidate lists serialized alongside."""
+    pending = id_mapping[id_mapping["status"] == "needs_review"].copy()
+    pending["candidates"] = pending["customer_row_id"].map(
+        lambda rid: [asdict(c) for c in candidates_by_row.get(rid, [])]
+    )
+    return pending
+
+
+def record_decision(
+    id_mapping: pd.DataFrame,
+    results_dir: str | Path,
+    customer_row_id: str,
+    decided_by: str,
+    status: str,
+    reason: str = "",
+    **fields,
+) -> pd.DataFrame:
+    """Apply one human decision: update the row, append to the decisions log.
+
+    ``fields`` may set matched_id/matched_name/matched_url/match_method/
+    confidence/in_universe/out_of_universe_reason/notes.
+    """
+    mask = id_mapping["customer_row_id"] == customer_row_id
+    if not mask.any():
+        raise KeyError(f"no row with customer_row_id={customer_row_id!r}")
+
+    before = id_mapping.loc[mask].iloc[0].to_dict()
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    updates = {**fields, "status": status, "decided_by": decided_by, "decided_at": now}
+    for col, val in updates.items():
+        id_mapping.loc[mask, col] = val
+    validate_id_mapping(id_mapping)
+
+    entry = {
+        "customer_row_id": customer_row_id,
+        "gate": "match_review",
+        "decided_by": decided_by,
+        "decided_at": now,
+        "reason": reason,
+        "before": {k: before.get(k) for k in updates},
+        "after": updates,
+    }
+    log_path = Path(results_dir) / DECISIONS_FILENAME
+    with open(log_path, "a") as f:
+        f.write(json.dumps(entry, default=str) + "\n")
+    return id_mapping
+
+
+def match_rate_report(id_mapping: pd.DataFrame) -> pd.DataFrame:
+    """Match-rate summary by entity type and disposition — the Phase-1 exit report."""
+    df = id_mapping.copy()
+    df["matched"] = df["matched_id"].notna()
+    grouped = (
+        df.groupby(["entity_type", "disposition"], dropna=False)
+        .agg(
+            n_rows=("customer_row_id", "count"),
+            n_matched=("matched", "sum"),
+            n_in_universe=("in_universe", lambda s: int(s.eq(True).sum())),
+            n_needs_review=("status", lambda s: int((s == "needs_review").sum())),
+        )
+        .reset_index()
+    )
+    grouped["match_rate"] = (grouped["n_matched"] / grouped["n_rows"]).round(3)
+    return grouped

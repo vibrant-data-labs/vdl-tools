@@ -1,0 +1,183 @@
+"""Stage runners — the glue the engagement skills and CLI call into.
+
+Each runner loads ``engagement.yaml`` from the engagement repo root, does one
+stage, records it in pipeline state, and writes its artifacts under
+``data/results/``.
+"""
+
+import json
+from pathlib import Path
+
+import pandas as pd
+
+from vdl_tools.shared_tools.tools.logger import logger
+from vdl_tools.portfolio_comparison import baseline as baseline_mod
+from vdl_tools.portfolio_comparison.engagement_config import EngagementConfig
+from vdl_tools.portfolio_comparison.intake.normalize import (
+    normalize_domain,
+    normalize_ein,
+)
+from vdl_tools.portfolio_comparison.intake import profile_inputs as pi
+from vdl_tools.portfolio_comparison.matching.queue import (
+    build_review_queue,
+    match_rate_report,
+)
+from vdl_tools.portfolio_comparison.matching.universe import UniverseIndex, run_tier1
+from vdl_tools.portfolio_comparison.schema import ID_MAPPING_COLUMNS
+from vdl_tools.portfolio_comparison.state import PipelineState
+
+# Which input slot a file arrived in determines its default entity type.
+INPUT_ENTITY_TYPES = {"companies": "for_profit", "nonprofits": "nonprofit"}
+
+
+def _load_config(engagement_root: str | Path) -> EngagementConfig:
+    return EngagementConfig.from_yaml(Path(engagement_root) / "engagement.yaml")
+
+
+def _read_customer_file(path: Path) -> pd.DataFrame:
+    if path.suffix in (".xlsx", ".xls"):
+        return pd.read_excel(path)
+    return pd.read_csv(path)
+
+
+def run_pin_baseline(engagement_root: str | Path) -> pd.DataFrame:
+    config = _load_config(engagement_root)
+    return baseline_mod.pin_baseline(config)
+
+
+def run_intake(engagement_root: str | Path) -> dict:
+    config = _load_config(engagement_root)
+    state = PipelineState(config.root)
+
+    profiles = []
+    for label in config.inputs:
+        entity_type = INPUT_ENTITY_TYPES.get(label, "unknown")
+        df = _read_customer_file(config.input_path(label))
+        profiles.append(profile := pi.profile_file(df, label, entity_type))
+        if profile.get("blocking"):
+            logger.warning("intake blocking issue in %s: %s", label, profile["blocking"])
+
+    out = pi.write_intake_profile(profiles, config.results_dir())
+    state.record_artifact("intake_profile", out)
+    state.record_stage(
+        "intake",
+        status="completed",
+        n_files=len(profiles),
+        n_rows=sum(p["n_rows"] for p in profiles),
+    )
+    payload = json.loads(out.read_text())
+    logger.info("intake pre-flight: %s", payload["preflight"])
+    return payload
+
+
+def _customer_rows(config: EngagementConfig, profiles: dict) -> pd.DataFrame:
+    """Build normalized customer rows from the confirmed column mappings."""
+    frames = []
+    for profile in profiles["files"]:
+        label = profile["file"]
+        mapping = profile["column_mapping"]
+        inverse = {v: k for k, v in mapping.items() if v != "passthrough"}
+        df = _read_customer_file(config.input_path(label))
+
+        name_col = inverse["name"]
+        url_col = inverse.get("url")
+        ein_col = inverse.get("ein")
+        dispo_col = inverse.get("disposition")
+
+        rows = pd.DataFrame({
+            "customer_name": df[name_col],
+            "customer_url": df[url_col] if url_col else None,
+            "customer_ein": df[ein_col].map(normalize_ein) if ein_col else None,
+        })
+        rows["customer_row_id"] = [
+            pi.make_row_id(label, n, u or "", i)
+            for i, (n, u) in enumerate(zip(rows["customer_name"], rows["customer_url"]))
+        ]
+        default_type = profile["default_entity_type"]
+        if ein_col is not None:
+            rows["entity_type"] = rows["customer_ein"].where(
+                rows["customer_ein"].eq(""), "nonprofit"
+            ).replace("", default_type)
+        else:
+            rows["entity_type"] = default_type
+        if dispo_col is not None:
+            rows["disposition"] = (
+                df[dispo_col].fillna("").astype(str).str.strip().str.lower()
+                .map(pi.DISPOSITION_VALUE_MAP)
+            )
+        else:
+            rows["disposition"] = "invested"
+        frames.append(rows)
+    return pd.concat(frames, ignore_index=True)
+
+
+def run_match(engagement_root: str | Path) -> pd.DataFrame:
+    """Tier 1 + nonprofit EIN lane. Tier 2 (source API) is next-sprint work."""
+    config = _load_config(engagement_root)
+    state = PipelineState(config.root)
+    results_dir = config.results_dir()
+
+    profile_path = results_dir / "intake_profile.json"
+    if not profile_path.exists():
+        raise FileNotFoundError("run intake first — intake_profile.json not found")
+    universe_path = results_dir / "baseline_universe.parquet"
+    if not universe_path.exists():
+        raise FileNotFoundError("run pin-baseline first — baseline_universe.parquet not found")
+
+    profiles = json.loads(profile_path.read_text())
+    rows = _customer_rows(config, profiles)
+
+    enriched = baseline_mod._load_records(
+        results_dir / "baseline" / Path(config.baseline_run.enriched_uri).name
+    )
+    id_col = baseline_mod._find_id_column(enriched, "enriched file")
+    universe_ids = set(
+        pd.read_parquet(universe_path)[id_col].astype(str)
+    )
+    index = UniverseIndex(enriched, universe_ids, id_col=id_col)
+
+    id_mapping, candidates = run_tier1(rows, index)
+
+    # Nonprofit EIN lane — optional at this stage: needs GT datamart access.
+    nonprofit_rows = rows[rows["entity_type"] == "nonprofit"]
+    if not nonprofit_rows.empty:
+        try:
+            from vdl_tools.portfolio_comparison.matching.nonprofit import match_by_ein
+
+            for row_id, cand in match_by_ein(nonprofit_rows).items():
+                mask = id_mapping["customer_row_id"] == row_id
+                id_mapping.loc[mask, ["matched_id", "matched_name", "matched_url"]] = (
+                    cand.matched_id, cand.matched_name, cand.matched_url,
+                )
+                id_mapping.loc[mask, ["match_method", "confidence", "status", "decided_by"]] = (
+                    cand.method, cand.score, "auto_matched", "auto",
+                )
+        except Exception as exc:  # no DB access, client missing, etc.
+            logger.warning("nonprofit EIN lane skipped: %s", exc)
+
+    id_mapping = id_mapping[ID_MAPPING_COLUMNS]
+    mapping_path = results_dir / "id_mapping.parquet"
+    id_mapping.to_parquet(mapping_path, index=False)
+    id_mapping.to_csv(results_dir / "id_mapping.csv", index=False)
+
+    queue = build_review_queue(id_mapping, candidates)
+    queue_path = results_dir / "review_queue.json"
+    queue.to_json(queue_path, orient="records", indent=2)
+
+    report = match_rate_report(id_mapping)
+    logger.info("match rates:\n%s", report.to_string(index=False))
+
+    state.record_artifact("id_mapping", mapping_path)
+    state.record_stage(
+        "match",
+        status="completed",
+        n_rows=len(id_mapping),
+        n_auto=int((id_mapping["status"] == "auto_matched").sum()),
+        n_review=int((id_mapping["status"] == "needs_review").sum()),
+        n_unresolved=int(id_mapping["status"].isna().sum()),
+    )
+    return id_mapping
+
+
+def run_status(engagement_root: str | Path) -> str:
+    return PipelineState(engagement_root).render_status()
