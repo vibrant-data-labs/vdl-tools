@@ -41,7 +41,22 @@ def _(mo):
 
 
 @app.cell
-def _(RESULTS, get_version, json, load_id_mapping, mo):
+def _(mo):
+    sort_ui = mo.ui.dropdown(
+        options={
+            "Top score first (easy wins)": "score_desc",
+            "Low score first (hard ones)": "score_asc",
+            "Entity type": "entity_type",
+            "Queue order": "original",
+        },
+        value="Top score first (easy wins)",
+        label="Sort",
+    )
+    return (sort_ui,)
+
+
+@app.cell
+def _(RESULTS, get_version, json, load_id_mapping, mo, sort_ui):
     get_version()  # reload after every decision
     id_mapping = load_id_mapping(RESULTS)
     queue_rows = json.loads((RESULTS / "review_queue.json").read_text())
@@ -51,6 +66,17 @@ def _(RESULTS, get_version, json, load_id_mapping, mo):
         id_mapping[id_mapping["status"] == "needs_review"]["customer_row_id"]
     )
     pending = [r for r in queue_rows if r["customer_row_id"] in still_pending]
+
+    def _top_score(r):
+        return max((c["score"] for c in r.get("candidates") or []), default=0.0)
+
+    if sort_ui.value == "score_desc":
+        pending.sort(key=_top_score, reverse=True)
+    elif sort_ui.value == "score_asc":
+        pending.sort(key=_top_score)
+    elif sort_ui.value == "entity_type":
+        pending.sort(key=lambda r: (str(r.get("entity_type")), -_top_score(r)))
+
     n_done = len(queue_rows) - len(pending)
     mo.stop(not pending, mo.md("## ✅ Review queue is empty — all rows decided."))
     return id_mapping, n_done, pending
@@ -106,8 +132,9 @@ def _(mo, row):
 
 
 @app.cell
-def _(header, mo, nav, choice, notes, reviewer, submit):
-    mo.vstack([nav, header, choice, mo.hstack([reviewer, notes]), submit])
+def _(header, mo, nav, choice, notes, reviewer, sort_ui, submit):
+    mo.vstack([mo.hstack([sort_ui]), nav, header, choice,
+               mo.hstack([reviewer, notes]), submit])
     return
 
 
