@@ -59,6 +59,8 @@ from vdl_tools.shared_tools.taxonomy_mapping.hierarchical_taxonomy_mapping impor
     classify_entities,
 )
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
+from vdl_tools.shared_tools.json_cache import write_json
+from vdl_tools.shared_tools.tools.logger import logger
 
 
 # ---------------------------------------------------------------------------
@@ -1324,6 +1326,98 @@ def _walk_recovered_entities(
     return merged
 
 
+# ---------------------------------------------------------------------------
+# Pipeline-facing wrapper (legacy column schema + persisted results)
+# ---------------------------------------------------------------------------
+
+def add_one_earth_hierarchical_taxonomy(
+    df: pd.DataFrame,
+    *,
+    id_col: str,
+    text_col: str,
+    name_col: str = "Organization",
+    mapping_name: str = "one_earth_category",
+    results_path=None,
+    distributed_funding_results_path=None,
+    **map_kwargs,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Map orgs to One Earth and attach the legacy mapping-column schema.
+
+    Pipeline-facing successor of ``climate_landscape.add_taxonomy_mapping.
+    add_one_earth_taxonomy`` (the embedding retrieval + fewshot re-ranking
+    flow), built on the hierarchical walk. One org-level DataFrame in, the
+    same DataFrame back with the legacy mapping columns attached
+    (``one_earth_category`` / ``cat_level_{name}`` / ``level{i}_{name}`` /
+    ``all_level{i}_{name}`` via ``attach_mapping_columns``), plus the
+    distributed-funding frame — so downstream consumers of the embedding
+    flow's outputs are unchanged. Note there are no ``pct``/``sim``
+    columns: the walk has no embedding scores.
+
+    Parameters
+    ----------
+    df
+        Org-level DataFrame. Must contain ``id_col``, ``name_col``,
+        ``text_col``. Mapping columns are attached to it in place.
+    id_col, text_col, name_col
+        Column names for the org id, description text, and org name.
+    mapping_name
+        Suffix for the attached mapping columns. Default
+        ``"one_earth_category"`` (the climate-landscape convention).
+    results_path
+        When set, the per-row mapping results (classification columns
+        only, keyed by ``id_col``) are written here as JSON (local or
+        ``s3://``).
+    distributed_funding_results_path
+        When set, the distributed-funding frame is written here as JSON
+        (local or ``s3://``).
+    **map_kwargs
+        Everything else is forwarded to ``map_to_oneearth`` —
+        ``taxonomy_path`` / ``taxonomy_dir`` (one is required), ``model``,
+        ``max_workers``, ``emit_per_level``, ``recover_unmatched``,
+        ``read_from_cache``, ``llm_api_kwargs``, ...
+
+    Returns
+    -------
+    (df, distributed_funding_df)
+        ``df`` with the mapping columns attached, and the per-(org, path)
+        ``FundingFrac`` frame (summing to 1.0 per org — see
+        ``distribute_funding_from_matches``).
+    """
+    per_row_df, _collapsed_df, distributed_funding_df = map_to_oneearth(
+        entities=df,
+        id_col=id_col,
+        name_col=name_col,
+        text_col=text_col,
+        **map_kwargs,
+    )
+
+    if results_path:
+        original_columns = set(df.columns)
+        new_columns = list(per_row_df.columns.difference(original_columns))
+        per_row_df[[id_col, name_col, text_col] + new_columns].to_json(
+            results_path, orient="records"
+        )
+        logger.info("Wrote %s per-row One Earth mapping rows to %s",
+                    len(per_row_df), results_path)
+
+    if distributed_funding_df is not None and distributed_funding_results_path:
+        if not str(distributed_funding_results_path).startswith("s3://"):
+            Path(distributed_funding_results_path).parent.mkdir(
+                parents=True, exist_ok=True
+            )
+        write_json(
+            distributed_funding_df.to_dict(orient="records"),
+            distributed_funding_results_path,
+        )
+        logger.info("Wrote %s distributed-funding rows to %s",
+                    len(distributed_funding_df), distributed_funding_results_path)
+
+    df = _htm.attach_mapping_columns(
+        df, per_row_df, ONEEARTH_LEVELS, id_col, mapping_name=mapping_name
+    )
+    return df, distributed_funding_df
+
+
 # Re-exports for callers that want to drive the engine directly.
 __all__ = [
     "MODEL",
@@ -1351,6 +1445,7 @@ __all__ = [
     "load_taxonomy",
     "collapse_to_one_row_per_uid",
     "map_to_oneearth",
+    "add_one_earth_hierarchical_taxonomy",
     # Engine re-exports
     "build_system_prompt",
     "classify_entities",
