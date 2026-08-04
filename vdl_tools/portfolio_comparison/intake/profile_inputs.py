@@ -32,15 +32,43 @@ DISPOSITION_VALUE_MAP = {
     "portfolio": "invested", "active": "invested",
     "passed": "passed", "pass": "passed", "no": "passed", "declined": "passed",
 }
+# Per-engagement overrides may additionally map values to "exclude"
+# (e.g. spreadsheet TOTAL rows) — excluded rows are counted, never silent.
+DISPOSITION_TARGETS = {"invested", "passed", "exclude"}
+
+
+def map_dispositions(series, overrides: dict[str, str] | None = None):
+    """Normalize raw disposition values via the base map + engagement
+    overrides (overrides win; the "" key covers blank cells)."""
+    overrides = {k.lower(): v for k, v in (overrides or {}).items()}
+    bad_targets = set(overrides.values()) - DISPOSITION_TARGETS
+    if bad_targets:
+        raise ValueError(
+            f"disposition_value_overrides targets must be {sorted(DISPOSITION_TARGETS)}, "
+            f"got {sorted(bad_targets)}"
+        )
+    mapping = {**DISPOSITION_VALUE_MAP, **overrides}
+    raw = series.fillna("").astype(str).str.strip().str.lower()
+    return raw.map(mapping)
+
+
+import re as _re
 
 
 def _norm_header(header: str) -> str:
-    return " ".join(str(header).lower().replace("_", " ").replace("-", " ").split())
+    cleaned = _re.sub(r"[^\w\s]", " ", str(header).lower().replace("_", " "))
+    return " ".join(cleaned.split())
 
 
 def propose_column_mapping(columns) -> dict[str, str]:
-    """Map each customer column to a canonical field or 'passthrough'."""
-    mapping = {}
+    """Map each customer column to a canonical field or 'passthrough'.
+
+    Two passes: exact alias match first, then a token-superset fallback for
+    multi-token aliases only ("Organization / Project Name" ⊇ "organization
+    name"). Single-token aliases never fall back — "name" would otherwise
+    claim headers like "Fiscal Sponsor Name".
+    """
+    mapping = {col: "passthrough" for col in columns}
     claimed = set()
     for col in columns:
         normed = _norm_header(col)
@@ -49,8 +77,20 @@ def propose_column_mapping(columns) -> dict[str, str]:
                 mapping[col] = canonical
                 claimed.add(canonical)
                 break
-        else:
-            mapping[col] = "passthrough"
+    for col in columns:
+        if mapping[col] != "passthrough":
+            continue
+        header_tokens = set(_norm_header(col).split())
+        for canonical, aliases in CANONICAL_HEADERS.items():
+            if canonical in claimed:
+                continue
+            if any(
+                len(alias.split()) > 1 and set(alias.split()) <= header_tokens
+                for alias in aliases
+            ):
+                mapping[col] = canonical
+                claimed.add(canonical)
+                break
     return mapping
 
 
@@ -60,18 +100,21 @@ def make_row_id(file_label: str, name: str, url: str, index: int) -> str:
     return hashlib.sha1(basis.encode()).hexdigest()[:16]
 
 
-def _validate_disposition(series: pd.Series) -> dict:
+def _validate_disposition(series: pd.Series, overrides: dict | None = None) -> dict:
     raw = series.fillna("").astype(str).str.strip().str.lower()
-    mapped = raw.map(DISPOSITION_VALUE_MAP)
+    mapped = map_dispositions(series, overrides)
+    blank_covered = "" in {k.lower() for k in (overrides or {})}
     n_blank = int((raw == "").sum())
     unrecognized = sorted(set(raw[(raw != "") & mapped.isna()]))
     result = {
         "present": True,
         "n_invested": int((mapped == "invested").sum()),
         "n_passed": int((mapped == "passed").sum()),
+        "n_excluded": int((mapped == "exclude").sum()),
         "n_blank": n_blank,
         "unrecognized_values": unrecognized,
-        "blocking": bool(unrecognized) or (0 < n_blank < len(series)),
+        "blocking": bool(unrecognized)
+        or (0 < n_blank < len(series) and not blank_covered),
     }
     return result
 
@@ -81,9 +124,11 @@ def profile_file(
     file_label: str,
     default_entity_type: str,
     column_mapping: dict[str, str] | None = None,
+    disposition_overrides: dict[str, str] | None = None,
 ) -> dict:
     """Profile one customer file. ``default_entity_type`` comes from which
     input slot the file was provided in (companies vs nonprofits)."""
+    df = df.rename(columns=str)
     mapping = column_mapping or propose_column_mapping(df.columns)
     inverse = {v: k for k, v in mapping.items() if v != "passthrough"}
 
@@ -121,7 +166,9 @@ def profile_file(
     profile["entity_type_counts"] = entity_type.value_counts().to_dict()
 
     if "disposition" in inverse:
-        profile["disposition"] = _validate_disposition(df[inverse["disposition"]])
+        profile["disposition"] = _validate_disposition(
+            df[inverse["disposition"]], disposition_overrides
+        )
     else:
         profile["disposition"] = {"present": False, "note": "all rows default to invested"}
 

@@ -36,8 +36,13 @@ def _load_config(engagement_root: str | Path) -> EngagementConfig:
 
 def _read_customer_file(path: Path) -> pd.DataFrame:
     if path.suffix in (".xlsx", ".xls"):
-        return pd.read_excel(path)
-    return pd.read_csv(path)
+        df = pd.read_excel(path)
+    else:
+        df = pd.read_csv(path)
+    # Excel year headers arrive as mixed int/str ('2021' vs 2022) — stringify
+    # so mappings and JSON serialization are stable.
+    df.columns = [str(c) for c in df.columns]
+    return df
 
 
 def run_pin_baseline(engagement_root: str | Path) -> pd.DataFrame:
@@ -50,11 +55,20 @@ def run_intake(engagement_root: str | Path) -> dict:
     config.validate_inputs_exist()
     state = PipelineState(config.root)
 
+    column_overrides = config.intake.get("column_overrides", {})
+    dispo_overrides = config.intake.get("disposition_value_overrides", {})
+
     profiles = []
     for label in config.inputs:
         entity_type = INPUT_ENTITY_TYPES.get(label, "unknown")
         df = _read_customer_file(config.input_path(label))
-        profiles.append(profile := pi.profile_file(df, label, entity_type))
+        mapping = pi.propose_column_mapping(df.columns)
+        mapping.update(column_overrides.get(label, {}))
+        profiles.append(profile := pi.profile_file(
+            df, label, entity_type,
+            column_mapping=mapping,
+            disposition_overrides=dispo_overrides,
+        ))
         if profile.get("blocking"):
             logger.warning("intake blocking issue in %s: %s", label, profile["blocking"])
 
@@ -73,6 +87,9 @@ def run_intake(engagement_root: str | Path) -> dict:
 
 def _customer_rows(config: EngagementConfig, profiles: dict) -> pd.DataFrame:
     """Build normalized customer rows from the confirmed column mappings."""
+    dispo_overrides = config.intake.get("disposition_value_overrides", {})
+    ein_ignore = config.intake.get("ein_ignore")
+
     frames = []
     for profile in profiles["files"]:
         label = profile["file"]
@@ -85,29 +102,41 @@ def _customer_rows(config: EngagementConfig, profiles: dict) -> pd.DataFrame:
         ein_col = inverse.get("ein")
         dispo_col = inverse.get("disposition")
 
+        eins = df[ein_col].map(normalize_ein) if ein_col else None
+        if eins is not None and ein_ignore and ein_ignore["column"] in df.columns:
+            # Rows whose EIN belongs to someone else (e.g. fiscal sponsor):
+            # the EIN is context, not identity — blank it for matching.
+            not_own = df[ein_ignore["column"]].astype(str).str.contains(
+                ein_ignore["pattern"], case=False, na=False
+            )
+            n_ignored = int((not_own & eins.ne("")).sum())
+            if n_ignored:
+                logger.info(
+                    "%s: ignoring %d EINs for identity (%s ~ %r)",
+                    label, n_ignored, ein_ignore["column"], ein_ignore["pattern"],
+                )
+            eins = eins.mask(not_own, "")
+
         rows = pd.DataFrame({
             "customer_name": df[name_col],
             "customer_url": df[url_col] if url_col else None,
-            "customer_ein": df[ein_col].map(normalize_ein) if ein_col else None,
+            "customer_ein": eins,
         })
         rows["customer_row_id"] = [
             pi.make_row_id(label, n, u or "", i)
             for i, (n, u) in enumerate(zip(rows["customer_name"], rows["customer_url"]))
         ]
-        default_type = profile["default_entity_type"]
-        if ein_col is not None:
-            rows["entity_type"] = rows["customer_ein"].where(
-                rows["customer_ein"].eq(""), "nonprofit"
-            ).replace("", default_type)
-        else:
-            rows["entity_type"] = default_type
+        rows["entity_type"] = profile["default_entity_type"]
         if dispo_col is not None:
-            rows["disposition"] = (
-                df[dispo_col].fillna("").astype(str).str.strip().str.lower()
-                .map(pi.DISPOSITION_VALUE_MAP)
-            )
+            rows["disposition"] = pi.map_dispositions(df[dispo_col], dispo_overrides)
         else:
             rows["disposition"] = "invested"
+
+        n_excluded = int((rows["disposition"] == "exclude").sum())
+        if n_excluded:
+            logger.info("%s: excluding %d rows per disposition overrides", label, n_excluded)
+        rows = rows[rows["disposition"] != "exclude"]
+        rows = rows[rows["customer_name"].fillna("").astype(str).str.strip() != ""]
         frames.append(rows)
     return pd.concat(frames, ignore_index=True)
 

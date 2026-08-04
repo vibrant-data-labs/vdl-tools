@@ -26,6 +26,14 @@ class EngagementConfig:
     baseline_run: BaselineRun
     inputs: dict[str, str]
     confidentiality: dict[str, str] = field(default_factory=dict)
+    # Optional per-engagement intake rulings (decisions are data):
+    #   column_overrides: {input_label: {customer_column: canonical_field}}
+    #   disposition_value_overrides: {raw_value_lower: invested|passed|exclude}
+    #     ("" covers blank cells)
+    #   ein_ignore: {column: <header>, pattern: <substr>} — rows whose column
+    #     matches carry someone else's EIN (e.g. fiscal sponsor); ignore it
+    #     for identity matching
+    intake: dict = field(default_factory=dict)
     root: Path = field(default_factory=Path.cwd)
 
     @classmethod
@@ -41,6 +49,7 @@ class EngagementConfig:
                 baseline_run=baseline,
                 inputs=eng["inputs"],
                 confidentiality=eng.get("confidentiality", {}),
+                intake=eng.get("intake", {}),
                 root=path.parent,
             )
         except (KeyError, TypeError) as exc:
