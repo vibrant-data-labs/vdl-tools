@@ -11,7 +11,7 @@ from vdl_tools.scrape_enrich.combine_crunchbase_candid_linkedin import combine_c
 from vdl_tools.scrape_enrich.scraper.scrape_websites import extract_website_name, scrape_websites_psql
 from vdl_tools.shared_tools import climatebert_adaptation as adp
 from vdl_tools.shared_tools.all_source_organization_summarization import generate_summary_of_summaries, BASE_SUMMARY_OF_SUMMARIES_PROMPT
-from vdl_tools.shared_tools.climate_landscape.add_taxonomy_mapping import add_one_earth_hierarchical_taxonomy
+from vdl_tools.shared_tools.taxonomy_mapping.oe_hierarchical_taxonomy_mapping import add_one_earth_hierarchical_taxonomy
 from vdl_tools.shared_tools.climate_landscape.diversity_keywords import DIVERSITY_BIPOC_DICT
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 from vdl_tools.shared_tools.geotagging_prompting import geotag_texts_bulk
@@ -602,12 +602,16 @@ def run_pipeline(
     df_relevant.to_json(paths['results_path'] / "df_relevant_pre_taxonomy.json", orient='records')
 
     if run_one_earth_taxonomy:
-        df_relevant = add_one_earth_hierarchical_taxonomy(
+        df_relevant, _oe_distributed_funding_df = add_one_earth_hierarchical_taxonomy(
             df_relevant,
-            'id',
-            'text_for_one_earth',
-            paths=paths,
-            use_cached_results=True,
+            id_col='id',
+            text_col='text_for_one_earth',
+            # Latest "OE Solutions Terms *VDL.xlsx" next to the pinned taxonomy file
+            taxonomy_dir=paths['one_earth_taxonomy'].parent,
+            results_path=paths.get('one_earth_taxonomy_mapping_results'),
+            distributed_funding_results_path=paths.get('oe_tax_mapping_distributed_funding_results'),
+            emit_per_level=True,
+            read_from_cache=True,
             max_workers=max_workers,
         )
 

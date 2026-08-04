@@ -5,8 +5,6 @@ import pandas as pd
 import vdl_tools.shared_tools.project_config as pc
 import vdl_tools.shared_tools.taxonomy_mapping.taxonomy_mapping as tm
 import vdl_tools.shared_tools.taxonomy_mapping.fewshot_examples as fse
-import vdl_tools.shared_tools.taxonomy_mapping.oe_hierarchical_taxonomy_mapping as oe_htm
-from vdl_tools.shared_tools.taxonomy_mapping.hierarchical_taxonomy_mapping import attach_mapping_columns
 from vdl_tools.shared_tools.tools.logger import logger
 from vdl_tools.shared_tools.json_cache import write_json
 
@@ -714,122 +712,6 @@ def add_one_earth_taxonomy(
         new_df = tm.add_mapping_to_orgs(new_df, loc_all_df, id_col, pct=pct, sim=sim, cats=cols)
 
     return new_df
-
-
-def add_one_earth_hierarchical_taxonomy(
-    df,
-    id_col,
-    text_col,
-    name_col='Organization',
-    use_cached_results=True,
-    paths=None,
-    max_workers=oe_htm.DEFAULT_WORKERS,
-    model=oe_htm.MODEL,
-    taxonomy_path=None,
-    results_path=None,
-    distributed_funding_results_path=None,
-    mapping_name="one_earth_category",
-    emit_per_level=True,
-    recover_unmatched=False,
-    walk_recovered=False,
-    llm_api_kwargs=None,
-):
-    """Add the One Earth mapping via the hierarchical LLM walk.
-
-    Successor of ``add_one_earth_taxonomy``: instead of the embedding
-    retrieval + fewshot re-ranking flow, each org is classified by the
-    hierarchical walk in ``taxonomy_mapping.oe_hierarchical_taxonomy_mapping``
-    (Pillar -> Sub-Pillar -> Solution -> Sub-Term). The output keeps the
-    legacy mapping-column schema (``one_earth_category`` /
-    ``cat_level_one_earth_category`` / ``level{i}_one_earth_category`` /
-    ``all_level{i}_one_earth_category``) via ``attach_mapping_columns``,
-    and the per-row and distributed-funding results are written to the
-    same paths the embedding flow used, so downstream consumers are
-    unchanged. Note there are no ``pct``/``sim`` columns — the walk has
-    no embedding scores.
-
-    Parameters
-    ----------
-    df : pandas.DataFrame
-        Org-level dataframe. Must contain ``id_col``, ``name_col``,
-        ``text_col``.
-    id_col, text_col, name_col : str
-        Column names for the org id, description text, and org name.
-    use_cached_results : bool, optional
-        When False, bypass cached LLM responses and re-issue every call.
-    paths : dict, optional
-        Project paths; defaults to ``pc.get_paths()``.
-    max_workers : int, optional
-        Concurrency for the LLM calls. The walk is I/O-bound, large
-        pools are fine (default ``oe_htm.DEFAULT_WORKERS``).
-    model : str, optional
-        OpenAI model id for the classifier.
-    taxonomy_path : Path, optional
-        Taxonomy xlsx. Defaults to the latest ``OE Solutions Terms
-        *VDL.xlsx`` in the directory of ``paths['one_earth_taxonomy']``.
-    results_path, distributed_funding_results_path : optional
-        Output locations; default to the same paths keys the embedding
-        flow wrote (``one_earth_taxonomy_mapping_results`` /
-        ``oe_tax_mapping_distributed_funding_results``).
-    emit_per_level : bool, optional
-        Emit per-level evidence/reason columns in the per-row results.
-    recover_unmatched, walk_recovered : bool, optional
-        Second-stage recovery for orgs the walk left unmatched; see
-        ``oe_htm.map_to_oneearth``.
-    llm_api_kwargs : dict, optional
-        Extra Responses-API kwargs (e.g. ``{"reasoning": {"effort":
-        "low"}}``). When None, ``map_to_oneearth``'s default is used.
-
-    Returns
-    -------
-    pandas.DataFrame
-        ``df`` with the mapping columns attached.
-    """
-    paths = paths or pc.get_paths()
-    if taxonomy_path is None:
-        taxonomy_path = oe_htm.find_latest_taxonomy(Path(paths["one_earth_taxonomy"]).parent)
-    results_path = results_path or paths.get("one_earth_taxonomy_mapping_results", None)
-    distributed_funding_results_path = distributed_funding_results_path or paths.get("oe_tax_mapping_distributed_funding_results", None)
-
-    logger.info("Starting hierarchical One Earth mapping with taxonomy %s", taxonomy_path)
-
-    # Only forward llm_api_kwargs when set so map_to_oneearth's default
-    # (low reasoning effort) applies otherwise.
-    extra_kwargs = {"llm_api_kwargs": llm_api_kwargs} if llm_api_kwargs is not None else {}
-    per_row_df, _collapsed_df, distr_df = oe_htm.map_to_oneearth(
-        entities=df,
-        id_col=id_col,
-        name_col=name_col,
-        text_col=text_col,
-        taxonomy_path=taxonomy_path,
-        model=model,
-        max_workers=max_workers,
-        emit_per_level=emit_per_level,
-        recover_unmatched=recover_unmatched,
-        walk_recovered=walk_recovered,
-        read_from_cache=use_cached_results,
-        **extra_kwargs,
-    )
-
-    # Persist per-row results (new columns only) like the embedding flow
-    original_columns = set(df.columns)
-    new_columns = list(per_row_df.columns.difference(original_columns))
-    keep_columns = [id_col, name_col, text_col] + new_columns
-    if results_path:
-        per_row_df[keep_columns].to_json(results_path, orient='records')
-
-    if distr_df is not None and distributed_funding_results_path:
-        if not str(distributed_funding_results_path).startswith('s3://'):
-            Path(distributed_funding_results_path).parent.mkdir(parents=True, exist_ok=True)
-        write_json(distr_df.to_dict(orient='records'), distributed_funding_results_path)
-
-    return attach_mapping_columns(
-        df,
-        per_row_df,
-        oe_htm.ONEEARTH_LEVELS,
-        id_col,
-        mapping_name=mapping_name,
-    )
 
 
 def add_tailwind_taxonomy(
