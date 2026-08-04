@@ -33,6 +33,20 @@ def _similarity(name_a: str, name_b: str) -> float:
     return max(char, jaccard)
 
 
+NAME_COLUMN_CANDIDATES = ["Organization", "Name", "name"]
+URL_COLUMN_CANDIDATES = ["url_homepage", "Website", "url"]
+
+
+def _detect_column(df: pd.DataFrame, candidates: list[str], kind: str) -> str:
+    for col in candidates:
+        if col in df.columns:
+            return col
+    raise ValueError(
+        f"enriched file has no {kind} column (looked for {candidates}) — "
+        "matching would silently lose that signal, refusing to run"
+    )
+
+
 class UniverseIndex:
     """Search index over the baseline enriched file."""
 
@@ -40,10 +54,12 @@ class UniverseIndex:
         self,
         enriched: pd.DataFrame,
         universe_ids: set[str],
-        id_col: str = "uuid",
-        name_col: str = "Organization",
-        url_col: str = "url_homepage",
+        id_col: str = "uid",
+        name_col: str | None = None,
+        url_col: str | None = None,
     ):
+        name_col = name_col or _detect_column(enriched, NAME_COLUMN_CANDIDATES, "name")
+        url_col = url_col or _detect_column(enriched, URL_COLUMN_CANDIDATES, "url")
         self.universe_ids = universe_ids
         records = []
         for _, row in enriched.iterrows():
@@ -168,9 +184,8 @@ def run_tier1(
     candidates_by_row: dict[str, list[Candidate]] = {}
     for _, row in rows.iterrows():
         base = {col: row.get(col, pd.NA) for col in ID_MAPPING_COLUMNS}
-        if row.get("entity_type") == "nonprofit":
-            results.append(base)  # GT lane handles these
-            continue
+        # All rows go through Tier 1 — multi-source universes (e.g. CFT)
+        # contain nonprofits too; the GT EIN lane confirms/overrides after.
         cands = index.match(row.get("customer_name"), row.get("customer_url"))
         if cands:
             candidates_by_row[row["customer_row_id"]] = cands

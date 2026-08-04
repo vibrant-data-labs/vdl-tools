@@ -47,6 +47,7 @@ def run_pin_baseline(engagement_root: str | Path) -> pd.DataFrame:
 
 def run_intake(engagement_root: str | Path) -> dict:
     config = _load_config(engagement_root)
+    config.validate_inputs_exist()
     state = PipelineState(config.root)
 
     profiles = []
@@ -120,9 +121,9 @@ def run_match(engagement_root: str | Path) -> pd.DataFrame:
     profile_path = results_dir / "intake_profile.json"
     if not profile_path.exists():
         raise FileNotFoundError("run intake first — intake_profile.json not found")
-    universe_path = results_dir / "baseline_universe.parquet"
+    universe_path = results_dir / "baseline_universe.json"
     if not universe_path.exists():
-        raise FileNotFoundError("run pin-baseline first — baseline_universe.parquet not found")
+        raise FileNotFoundError("run pin-baseline first — baseline_universe.json not found")
 
     profiles = json.loads(profile_path.read_text())
     rows = _customer_rows(config, profiles)
@@ -130,9 +131,11 @@ def run_match(engagement_root: str | Path) -> pd.DataFrame:
     enriched = baseline_mod._load_records(
         results_dir / "baseline" / Path(config.baseline_run.enriched_uri).name
     )
-    id_col = baseline_mod._find_id_column(enriched, "enriched file")
+    id_col = baseline_mod._find_id_column(
+        enriched, "enriched file", config.baseline_run.source
+    )
     universe_ids = set(
-        pd.read_parquet(universe_path)[id_col].astype(str)
+        pd.read_json(universe_path)[id_col].astype(str)
     )
     index = UniverseIndex(enriched, universe_ids, id_col=id_col)
 

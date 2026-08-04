@@ -57,11 +57,18 @@ class EngagementConfig:
             )
         if not self.inputs:
             problems.append("inputs is empty — at least one customer file is required")
-        for label, rel in self.inputs.items():
-            if not (self.root / rel).exists():
-                problems.append(f"inputs.{label}: file not found at {self.root / rel}")
         if problems:
             raise ValueError("engagement.yaml invalid: " + "; ".join(problems))
+
+    def validate_inputs_exist(self):
+        """Called at intake — pin_baseline may run before customer files arrive."""
+        missing = [
+            f"inputs.{label}: file not found at {self.root / rel}"
+            for label, rel in self.inputs.items()
+            if not (self.root / rel).exists()
+        ]
+        if missing:
+            raise ValueError("engagement.yaml invalid: " + "; ".join(missing))
 
     def input_path(self, label: str) -> Path:
         return self.root / self.inputs[label]

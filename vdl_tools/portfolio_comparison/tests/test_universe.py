@@ -7,14 +7,14 @@ from vdl_tools.portfolio_comparison.matching.universe import (
 )
 
 ENRICHED = pd.DataFrame([
-    {"uuid": "u-solaris", "Organization": "Solaris Energy Inc",
+    {"uid": "u-solaris", "Organization": "Solaris Energy Inc",
      "url_homepage": "https://www.solarisenergy.com"},
-    {"uuid": "u-windward", "Organization": "Windward Climate Analytics",
+    {"uid": "u-windward", "Organization": "Windward Climate Analytics",
      "url_homepage": "https://windward.io"},
-    {"uuid": "u-tidal", "Organization": "Tidal Power Co",
+    {"uid": "u-tidal", "Organization": "Tidal Power Co",
      "url_homepage": "https://tidalpower.com"},
     # In the enriched file but removed by the landscape's relevance filtering:
-    {"uuid": "u-filtered", "Organization": "Generic SaaS Corp",
+    {"uid": "u-filtered", "Organization": "Generic SaaS Corp",
      "url_homepage": "https://genericsaas.com"},
 ])
 UNIVERSE_IDS = {"u-solaris", "u-windward", "u-tidal"}
@@ -101,11 +101,14 @@ def test_filtered_out_org_flags_scope_not_identity(index):
     assert not row["in_universe"]
 
 
-def test_nonprofit_rows_skip_tier1(index):
+def test_nonprofit_rows_also_match_tier1(index):
+    # Multi-source universes (CFT = CB + Candid) contain nonprofits, so the
+    # nonprofit lane runs Tier 1 too; the GT EIN lane confirms afterwards.
     rows = make_rows([{
         "customer_row_id": "r6", "customer_name": "Solaris Energy Inc",
         "customer_url": "solarisenergy.com", "entity_type": "nonprofit",
     }])
-    result, candidates = run_tier1(rows, index)
-    assert pd.isna(result.iloc[0]["status"])
-    assert "r6" not in candidates
+    result, _ = run_tier1(rows, index)
+    row = result.iloc[0]
+    assert row["status"] == "auto_matched"
+    assert row["matched_id"] == "u-solaris"
