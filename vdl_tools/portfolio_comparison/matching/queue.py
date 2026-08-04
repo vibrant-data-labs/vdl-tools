@@ -17,6 +17,50 @@ from vdl_tools.portfolio_comparison.matching.source_adapter import Candidate
 from vdl_tools.portfolio_comparison.schema import validate_id_mapping
 
 DECISIONS_FILENAME = "decisions.jsonl"
+ID_MAPPING_BASENAME = "id_mapping"
+
+
+def load_id_mapping(results_dir: str | Path) -> pd.DataFrame:
+    return pd.read_parquet(Path(results_dir) / f"{ID_MAPPING_BASENAME}.parquet")
+
+
+def save_id_mapping(df: pd.DataFrame, results_dir: str | Path):
+    results_dir = Path(results_dir)
+    df.to_parquet(results_dir / f"{ID_MAPPING_BASENAME}.parquet", index=False)
+    df.to_csv(results_dir / f"{ID_MAPPING_BASENAME}.csv", index=False)
+
+
+def replay_decisions(id_mapping: pd.DataFrame, results_dir: str | Path) -> pd.DataFrame:
+    """Re-apply recorded human decisions onto a freshly rebuilt ID Mapping File.
+
+    match reruns recompute every row from scratch; humans must never lose
+    work to a rerun. Last decision per row wins. Decisions for rows that no
+    longer exist (customer file changed) are skipped.
+    """
+    log_path = Path(results_dir) / DECISIONS_FILENAME
+    if not log_path.exists():
+        return id_mapping
+    latest: dict[str, dict] = {}
+    with open(log_path) as f:
+        for line in f:
+            entry = json.loads(line)
+            latest[entry["customer_row_id"]] = entry
+    for row_id, entry in latest.items():
+        mask = id_mapping["customer_row_id"] == row_id
+        if not mask.any():
+            continue
+        for col, val in entry["after"].items():
+            if col in id_mapping.columns:
+                id_mapping.loc[mask, col] = val
+    return id_mapping
+
+
+def apply_decision(results_dir: str | Path, customer_row_id: str, **kwargs) -> pd.DataFrame:
+    """Load → record one decision → persist. The review app's entry point."""
+    df = load_id_mapping(results_dir)
+    df = record_decision(df, results_dir, customer_row_id, **kwargs)
+    save_id_mapping(df, results_dir)
+    return df
 
 
 def build_review_queue(

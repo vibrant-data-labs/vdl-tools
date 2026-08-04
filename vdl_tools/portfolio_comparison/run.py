@@ -21,6 +21,8 @@ from vdl_tools.portfolio_comparison.intake import profile_inputs as pi
 from vdl_tools.portfolio_comparison.matching.queue import (
     build_review_queue,
     match_rate_report,
+    replay_decisions,
+    save_id_mapping,
 )
 from vdl_tools.portfolio_comparison.matching.universe import UniverseIndex, run_tier1
 from vdl_tools.portfolio_comparison.schema import ID_MAPPING_COLUMNS
@@ -188,9 +190,10 @@ def run_match(engagement_root: str | Path) -> pd.DataFrame:
             logger.warning("nonprofit EIN lane skipped: %s", exc)
 
     id_mapping = id_mapping[ID_MAPPING_COLUMNS]
+    # Reruns rebuild from scratch; recorded human decisions always win.
+    id_mapping = replay_decisions(id_mapping, results_dir)
     mapping_path = results_dir / "id_mapping.parquet"
-    id_mapping.to_parquet(mapping_path, index=False)
-    id_mapping.to_csv(results_dir / "id_mapping.csv", index=False)
+    save_id_mapping(id_mapping, results_dir)
 
     queue = build_review_queue(id_mapping, candidates)
     queue_path = results_dir / "review_queue.json"
