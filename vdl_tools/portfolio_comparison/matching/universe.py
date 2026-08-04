@@ -157,15 +157,12 @@ def _resolve(
         "confidence": top.score,
         "in_universe": index.in_universe(top.matched_id),
     }
-    if auto and not matched["in_universe"]:
-        # Identity is confident but the landscape filtering removed this org:
-        # scope, not identity, is the question — a human decides.
-        return {
-            **matched,
-            "status": "needs_review",
-            "out_of_universe_reason": "excluded_by_landscape_filter",
-            "decided_by": pd.NA,
-        }
+    # Identity and scope are separate axes: a row in the enriched file is
+    # fully usable on the portfolio side regardless of universe membership.
+    # excluded_by_landscape_filter is an attribute the comparison phase
+    # consumes (and the baseline re-pin may flip), not a review trigger.
+    if not matched["in_universe"]:
+        matched["out_of_universe_reason"] = "excluded_by_landscape_filter"
     if auto:
         return {**matched, "status": "auto_matched", "decided_by": "auto"}
     return {**matched, "status": "needs_review", "decided_by": pd.NA}

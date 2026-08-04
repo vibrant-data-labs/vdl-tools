@@ -86,17 +86,17 @@ def test_no_signal_leaves_status_na_for_tier2(index):
     assert pd.isna(result.iloc[0]["status"])
 
 
-def test_filtered_out_org_flags_scope_not_identity(index):
+def test_filtered_out_org_auto_matches_with_scope_flag(index):
     rows = make_rows([{
         "customer_row_id": "r5", "customer_name": "Generic SaaS",
         "customer_url": "https://www.genericsaas.com",
     }])
     result, _ = run_tier1(rows, index)
     row = result.iloc[0]
-    # Confident identity (domain exact) but excluded from the universe:
-    # never auto-accepts — review decides scope.
+    # Identity and scope are separate axes: confident identity auto-accepts;
+    # universe membership is metadata for the comparison phase.
     assert row["matched_id"] == "u-filtered"
-    assert row["status"] == "needs_review"
+    assert row["status"] == "auto_matched"
     assert row["out_of_universe_reason"] == "excluded_by_landscape_filter"
     assert not row["in_universe"]
 
