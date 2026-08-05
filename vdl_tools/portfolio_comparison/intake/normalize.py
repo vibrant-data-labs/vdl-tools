@@ -62,6 +62,26 @@ def resolve_redirect(url: str, timeout: float = 10.0) -> str:
         return domain
 
 
+_REDIRECT_CACHE: dict[str, str] = {}
+
+
+def domains_converge(domain_a: str, domain_b: str, resolver=None) -> bool:
+    """True when two domains resolve (via HTTP redirects) to the same final
+    domain — e.g. abalobi.info and abalobi.org both landing on abalobi.org.
+    Mechanical identity evidence: makes human review unnecessary for
+    renamed/moved domains that still redirect."""
+    if not domain_a or not domain_b:
+        return False
+    if domain_a == domain_b:
+        return True
+    resolver = resolver or resolve_redirect
+    for d in (domain_a, domain_b):
+        if d not in _REDIRECT_CACHE:
+            _REDIRECT_CACHE[d] = resolver(d)
+    final_a, final_b = _REDIRECT_CACHE[domain_a], _REDIRECT_CACHE[domain_b]
+    return bool(final_a) and final_a == final_b
+
+
 def normalize_ein(ein) -> str:
     """Canonical EIN form: 9 digits as NN-NNNNNNN; '' when unparseable."""
     if ein is None:

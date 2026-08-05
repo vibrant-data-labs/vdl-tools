@@ -46,6 +46,19 @@ def run_tier2(
         if pd.isna(row["status"]):
             top = cands[0]
             sole_domain = len(cands) == 1 and top.evidence.get("signal") == "domain"
+            if not sole_domain and len(cands) == 1 and top.score >= 0.95:
+                # Near-exact name, different domain: check whether the two
+                # domains redirect to the same site (abalobi.info →
+                # abalobi.org). Mechanical evidence — no human needed.
+                from vdl_tools.portfolio_comparison.intake.normalize import (
+                    domains_converge,
+                    normalize_domain,
+                )
+
+                customer_domain = normalize_domain(row["customer_url"])
+                if domains_converge(customer_domain, top.evidence.get("domain")):
+                    top.evidence["redirect_confirmed"] = True
+                    sole_domain = True
             if sole_domain:
                 # The customer's own domain resolves to exactly one org in
                 # the source — identity confirmed, outside the universe.

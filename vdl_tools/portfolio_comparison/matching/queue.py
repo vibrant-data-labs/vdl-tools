@@ -48,12 +48,17 @@ def replay_decisions(id_mapping: pd.DataFrame, results_dir: str | Path) -> pd.Da
         for line in f:
             entry = json.loads(line)
             latest[entry["customer_row_id"]] = entry
+    # Legacy entries serialized missing values as strings; normalize both
+    # them and proper nulls back to pd.NA.
+    _null_strings = {"<NA>", "nan", "NaT", "None"}
     for row_id, entry in latest.items():
         mask = id_mapping["customer_row_id"] == row_id
         if not mask.any():
             continue
         for col, val in entry["after"].items():
             if col in id_mapping.columns:
+                if val is None or (isinstance(val, str) and val in _null_strings):
+                    val = pd.NA
                 id_mapping.loc[mask, col] = val
     return id_mapping
 
@@ -128,14 +133,25 @@ def record_decision(
         id_mapping.loc[mask, col] = val
     validate_id_mapping(id_mapping)
 
+    def _jsonable(value):
+        # pd.NA/nan must serialize as JSON null — default=str would write
+        # the literal string "<NA>", which replay then applies as a real
+        # status value (and Tier 2 skips the row as "already decided").
+        try:
+            if pd.isna(value):
+                return None
+        except (TypeError, ValueError):
+            pass
+        return value
+
     entry = {
         "customer_row_id": customer_row_id,
         "gate": "match_review",
         "decided_by": decided_by,
         "decided_at": now,
         "reason": reason,
-        "before": {k: before.get(k) for k in updates},
-        "after": updates,
+        "before": {k: _jsonable(before.get(k)) for k in updates},
+        "after": {k: _jsonable(v) for k, v in updates.items()},
     }
     log_path = Path(results_dir) / DECISIONS_FILENAME
     with open(log_path, "a") as f:

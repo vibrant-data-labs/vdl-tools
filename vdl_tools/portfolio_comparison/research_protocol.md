@@ -38,6 +38,12 @@ anchors — its domain and description — still point at the customer's org.
 
 - Old domain 301-redirects to the customer's current domain → continuous
   identity, strong evidence (verify the redirect yourself: `curl -sIL`).
+- **Redirect convergence**: when the candidate's domain and the customer's
+  domain are different but similar, resolve BOTH — if they land on the same
+  final domain (abalobi.info and abalobi.org → abalobi.org), that is
+  mechanical proof of identity; no human review needed. The matcher runs
+  this check automatically for near-exact names; agents apply it to any
+  domain pair they're weighing.
 - Old domain is dead, parked, or re-registered by an unrelated firm → the
   domain proves nothing about historical ownership (Balance Ocean lesson:
   dropped domains get re-registered).

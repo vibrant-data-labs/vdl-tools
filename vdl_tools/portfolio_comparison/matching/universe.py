@@ -137,13 +137,20 @@ def _resolve(
     sole = len(candidates) == 1
     # A name match whose domain contradicts the customer-supplied URL is
     # never confident enough to auto-accept — same name, different site is
-    # the classic wrong-entity trap.
+    # the classic wrong-entity trap. Exception: the two domains redirecting
+    # to the same site is mechanical proof they're the same org.
     domain_conflict = (
         top.method != "url_exact"
         and bool(customer_domain)
         and bool(top.evidence.get("domain"))
         and customer_domain != top.evidence["domain"]
     )
+    if domain_conflict and top.score >= thresholds.NAME_SIM_AUTO:
+        from vdl_tools.portfolio_comparison.intake.normalize import domains_converge
+
+        if domains_converge(customer_domain, top.evidence["domain"]):
+            top.evidence["redirect_confirmed"] = True
+            domain_conflict = False
     auto = not domain_conflict and (
         (top.method == "url_exact" and sole and thresholds.DOMAIN_EXACT_AUTO)
         or (top.method in ("name_exact", "name_fuzzy") and sole

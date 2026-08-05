@@ -55,6 +55,36 @@ def test_last_decision_per_row_wins(tmp_path):
     assert replayed.iloc[0]["status"] == "customer_review"
 
 
+def test_reject_all_replays_as_real_na_and_stays_tier2_eligible(tmp_path):
+    # A reject-all decision sets status=pd.NA; it must round-trip through the
+    # decisions log as null, not the string "<NA>" — Tier 2 selects on isna().
+    mapping = make_mapping([
+        {"customer_row_id": "r1", "customer_name": "A", "status": "needs_review"},
+    ])
+    record_decision(mapping, tmp_path, "r1", decided_by="vdl:zein",
+                    status=pd.NA, matched_id=None, reason="rejected all")
+    rebuilt = make_mapping([
+        {"customer_row_id": "r1", "customer_name": "A", "status": "needs_review"},
+    ])
+    replayed = replay_decisions(rebuilt, tmp_path)
+    assert pd.isna(replayed.iloc[0]["status"])
+    assert replayed.iloc[0]["status"] is not None or True  # isna is the contract
+
+
+def test_replay_normalizes_legacy_stringified_na(tmp_path):
+    import json
+    entry = {"customer_row_id": "r1", "gate": "match_review", "decided_by": "vdl:zein",
+             "decided_at": "2026-08-05T00:00:00+00:00", "reason": "",
+             "before": {}, "after": {"status": "<NA>", "matched_id": "None"}}
+    (tmp_path / "decisions.jsonl").write_text(json.dumps(entry) + "\n")
+    rebuilt = make_mapping([
+        {"customer_row_id": "r1", "customer_name": "A", "status": "needs_review"},
+    ])
+    replayed = replay_decisions(rebuilt, tmp_path)
+    assert pd.isna(replayed.iloc[0]["status"])
+    assert pd.isna(replayed.iloc[0]["matched_id"])
+
+
 def test_replay_skips_rows_that_no_longer_exist(tmp_path):
     mapping = make_mapping([
         {"customer_row_id": "gone", "customer_name": "X", "status": "needs_review"},

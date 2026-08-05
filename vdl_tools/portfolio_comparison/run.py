@@ -139,6 +139,13 @@ def _customer_rows(config: EngagementConfig, profiles: dict) -> pd.DataFrame:
             logger.info("%s: excluding %d rows per disposition overrides", label, n_excluded)
         rows = rows[rows["disposition"] != "exclude"]
         rows = rows[rows["customer_name"].fillna("").astype(str).str.strip() != ""]
+        # Summary/junk rows the disposition overrides can't catch (e.g. a
+        # TOTAL row whose disposition cell is blank).
+        for pattern in config.intake.get("exclude_name_patterns", []):
+            hit = rows["customer_name"].astype(str).str.contains(pattern, case=False, regex=True)
+            if hit.any():
+                logger.info("%s: excluding %d rows matching %r", label, int(hit.sum()), pattern)
+                rows = rows[~hit]
         frames.append(rows)
     return pd.concat(frames, ignore_index=True)
 
