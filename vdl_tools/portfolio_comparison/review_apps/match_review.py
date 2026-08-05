@@ -99,11 +99,17 @@ def _(mo, row):
     def _fmt(v):
         return "—" if v in (None, "", float("nan")) else str(v)
 
+    def _link(url):
+        if not url or not isinstance(url, str) or not url.strip():
+            return "—"
+        href = url if "://" in url else f"https://{url}"
+        return f"[{url}]({href})"
+
     header = mo.md(f"""
 ### {row["customer_name"]}
 | | |
 |---|---|
-| customer URL | {_fmt(row.get("customer_url"))} |
+| customer URL | {_link(row.get("customer_url"))} |
 | EIN | {_fmt(row.get("customer_ein"))} |
 | type / disposition | {row.get("entity_type")} / {row.get("disposition")} |
 | out-of-universe | {_fmt(row.get("out_of_universe_reason"))} |
@@ -130,6 +136,26 @@ def _(mo, row):
 @app.cell
 def _(mo, row):
     cands = row.get("candidates") or []
+
+    def _site(c):
+        d = c["evidence"].get("domain")
+        return f"[{d}](https://{d})" if d else "—"
+
+    def _desc(c):
+        text = (c["evidence"].get("description") or "").strip().replace("|", "/")
+        return text[:90] + "…" if len(text) > 90 else (text or "—")
+
+    _lines = ["| # | Candidate | Site | Signal · Score | Universe | Description |",
+              "|---|---|---|---|---|---|"]
+    for _i, _c in enumerate(cands):
+        _uni = "in" if _c["evidence"].get("in_universe") else "**OUT**"
+        _rc = " 🔁" if _c["evidence"].get("redirect_confirmed") else ""
+        _lines.append(
+            f"| {_i} | {_c['matched_name']} | {_site(_c)} | "
+            f"{_c['method']} · {_c['score']:.2f}{_rc} | {_uni} | {_desc(_c)} |"
+        )
+    cand_table = mo.md("\n".join(_lines)) if cands else mo.md("")
+
     options = {}
     for _i, _c in enumerate(cands):
         _in_uni = "in universe" if _c["evidence"].get("in_universe") else "OUT of universe"
@@ -144,12 +170,12 @@ def _(mo, row):
     reviewer = mo.ui.text(value="zein", label="Reviewer")
     notes = mo.ui.text_area(placeholder="Why (optional — lands in decisions.jsonl)", label="Notes")
     submit = mo.ui.run_button(label="Record decision")
-    return cands, choice, notes, reviewer, submit
+    return cand_table, cands, choice, notes, reviewer, submit
 
 
 @app.cell
-def _(header, mo, nav, choice, notes, research_md, reviewer, sort_ui, submit):
-    mo.vstack([mo.hstack([sort_ui]), nav, header, research_md, choice,
+def _(cand_table, header, mo, nav, choice, notes, research_md, reviewer, sort_ui, submit):
+    mo.vstack([mo.hstack([sort_ui]), nav, header, research_md, cand_table, choice,
                mo.hstack([reviewer, notes]), submit])
     return
 
