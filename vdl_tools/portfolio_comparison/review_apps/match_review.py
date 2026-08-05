@@ -113,6 +113,22 @@ def _(mo, row):
 
 @app.cell
 def _(mo, row):
+    _res = row.get("research")
+    if _res:
+        _badge = {"reject_all": "🔴 reject all", "accept_candidate": "🟢 accept",
+                  "baseline_match_found": "🟡 baseline match found (see candidates)",
+                  "unsure": "⚪ unsure"}.get(_res["recommendation"], _res["recommendation"])
+        _links = "  ·  ".join(f"[{_i+1}]({_u})" for _i, _u in enumerate(_res.get("sources", [])))
+        research_md = mo.callout(mo.md(
+            f"**Pre-research: {_badge}** — {_res['note']}  {_links}"
+        ), kind="info")
+    else:
+        research_md = mo.md("")
+    return (research_md,)
+
+
+@app.cell
+def _(mo, row):
     cands = row.get("candidates") or []
     options = {}
     for _i, _c in enumerate(cands):
@@ -132,8 +148,8 @@ def _(mo, row):
 
 
 @app.cell
-def _(header, mo, nav, choice, notes, reviewer, sort_ui, submit):
-    mo.vstack([mo.hstack([sort_ui]), nav, header, choice,
+def _(header, mo, nav, choice, notes, research_md, reviewer, sort_ui, submit):
+    mo.vstack([mo.hstack([sort_ui]), nav, header, research_md, choice,
                mo.hstack([reviewer, notes]), submit])
     return
 
