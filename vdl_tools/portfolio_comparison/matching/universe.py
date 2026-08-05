@@ -135,6 +135,17 @@ def _resolve(
 
     top = candidates[0]
     sole = len(candidates) == 1
+    if top.method != "url_exact" and customer_domain:
+        from vdl_tools.portfolio_comparison.matching.source_adapter import (
+            pick_converging_candidate,
+        )
+
+        winner = pick_converging_candidate(
+            customer_domain, candidates, thresholds.NAME_SIM_AUTO
+        )
+        if winner is not None:
+            winner.evidence["redirect_confirmed"] = True
+            top, sole = winner, True
     # A name match whose domain contradicts the customer-supplied URL is
     # never confident enough to auto-accept — same name, different site is
     # the classic wrong-entity trap. Exception: the two domains redirecting

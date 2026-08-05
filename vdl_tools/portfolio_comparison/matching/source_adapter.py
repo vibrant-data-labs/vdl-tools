@@ -149,3 +149,27 @@ class NZIClient:
 def get_source_client(source: str, **kwargs) -> SourceClient:
     clients = {"crunchbase": CrunchbaseClient, "nzi": NZIClient}
     return clients[source](**kwargs)
+
+
+def pick_converging_candidate(
+    customer_domain: str, candidates: list[Candidate], min_score: float = 0.95
+) -> Candidate | None:
+    """Among near-exact-name candidates, find the ONE whose domain redirects
+    to the same site as the customer's (aquila.earth → aquila.space).
+
+    Many same-named companies is the normal case for name searches; redirect
+    convergence singles out the right one mechanically. Returns None unless
+    exactly one candidate converges — two converging candidates means
+    something strange, and strange goes to review.
+    """
+    from vdl_tools.portfolio_comparison.intake.normalize import domains_converge
+
+    if not customer_domain:
+        return None
+    winners = [
+        c for c in candidates
+        if c.score >= min_score
+        and c.evidence.get("domain")
+        and domains_converge(customer_domain, c.evidence["domain"])
+    ]
+    return winners[0] if len(winners) == 1 else None

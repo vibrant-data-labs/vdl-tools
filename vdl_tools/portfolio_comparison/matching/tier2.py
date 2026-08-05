@@ -45,21 +45,27 @@ def run_tier2(
 
         if pd.isna(row["status"]):
             top = cands[0]
-            sole_domain = len(cands) == 1 and top.evidence.get("signal") == "domain"
-            if not sole_domain and len(cands) == 1 and top.score >= 0.95:
-                # Near-exact name, different domain: check whether the two
-                # domains redirect to the same site (abalobi.info →
-                # abalobi.org). Mechanical evidence — no human needed.
+            confident = len(cands) == 1 and top.evidence.get("signal") == "domain"
+            if not confident:
+                # Near-exact-name candidates (however many — name searches
+                # return every same-named company): if exactly one's domain
+                # redirects to the same site as the customer's
+                # (aquila.earth → aquila.space), that's the org. Mechanical
+                # evidence — no human needed.
                 from vdl_tools.portfolio_comparison.intake.normalize import (
-                    domains_converge,
                     normalize_domain,
+                )
+                from vdl_tools.portfolio_comparison.matching.source_adapter import (
+                    pick_converging_candidate,
                 )
 
                 customer_domain = normalize_domain(row["customer_url"])
-                if domains_converge(customer_domain, top.evidence.get("domain")):
-                    top.evidence["redirect_confirmed"] = True
-                    sole_domain = True
-            if sole_domain:
+                winner = pick_converging_candidate(customer_domain, cands)
+                if winner is not None:
+                    winner.evidence["redirect_confirmed"] = True
+                    top = winner
+                    confident = True
+            if confident:
                 # The customer's own domain resolves to exactly one org in
                 # the source — identity confirmed, outside the universe.
                 id_mapping.loc[idx, [

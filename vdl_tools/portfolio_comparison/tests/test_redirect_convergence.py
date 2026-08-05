@@ -61,6 +61,51 @@ def test_tier2_redirect_convergence_auto_accepts():
     assert cands["r1"][0].evidence.get("redirect_confirmed") is True
 
 
+def test_tier2_multi_candidate_convergence_picks_the_one(monkeypatch):
+    # The Aquila case: name search returns many same-named companies; the
+    # one whose domain redirects to the customer's site wins.
+    table = {"aquila.earth": "aquila.space", "aquila.space": "aquila.space"}
+    monkeypatch.setattr(normalize, "_REDIRECT_CACHE", {})
+    monkeypatch.setattr(normalize, "resolve_redirect", lambda d, timeout=10.0: table.get(d, d))
+
+    def aquila(cid, domain):
+        return Candidate(
+            matched_id=cid, matched_name="Aquila", matched_url=f"https://{domain}",
+            score=1.0, method="api_search",
+            evidence={"signal": "name", "domain": domain, "in_universe": False},
+        )
+
+    m = make_mapping([{
+        "customer_row_id": "r3", "customer_name": "Aquila",
+        "customer_url": "https://aquila.space/", "entity_type": "for_profit",
+    }])
+    cands = [aquila("cb-earth", "aquila.earth"), aquila("cb-za", "aquilaproductions.co.za"),
+             aquila("cb-br", "aquila.com.br"), aquila("cb-ro", "aquila.ro")]
+    m, out_cands, _ = run_tier2(m, FakeClient({"Aquila": cands}), {})
+    row = m.iloc[0]
+    assert row["status"] == "auto_matched"
+    assert row["matched_id"] == "cb-earth"
+    assert any(c.evidence.get("redirect_confirmed") for c in out_cands["r3"])
+
+
+def test_two_converging_candidates_go_to_review(monkeypatch):
+    table = {"a.com": "same.com", "b.com": "same.com", "same.com": "same.com"}
+    monkeypatch.setattr(normalize, "_REDIRECT_CACHE", {})
+    monkeypatch.setattr(normalize, "resolve_redirect", lambda d, timeout=10.0: table.get(d, d))
+
+    def cand2(cid, domain):
+        return Candidate(matched_id=cid, matched_name="Same Co",
+                         matched_url=f"https://{domain}", score=1.0, method="api_search",
+                         evidence={"signal": "name", "domain": domain, "in_universe": False})
+
+    m = make_mapping([{
+        "customer_row_id": "r4", "customer_name": "Same Co",
+        "customer_url": "https://same.com/", "entity_type": "for_profit",
+    }])
+    m, _, _ = run_tier2(m, FakeClient({"Same Co": [cand2("c1", "a.com"), cand2("c2", "b.com")]}), {})
+    assert m.iloc[0]["status"] == "needs_review"
+
+
 def test_tier2_no_convergence_still_reviews():
     m = make_mapping([{
         "customer_row_id": "r2", "customer_name": "Acme",
