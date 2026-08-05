@@ -192,6 +192,23 @@ def run_match(engagement_root: str | Path) -> pd.DataFrame:
     id_mapping = id_mapping[ID_MAPPING_COLUMNS]
     # Reruns rebuild from scratch; recorded human decisions always win.
     id_mapping = replay_decisions(id_mapping, results_dir)
+
+    # Tier 2: source-API pre-research BEFORE any human/web research (higher
+    # recall than the baseline). Decided rows are excluded by construction.
+    try:
+        from vdl_tools.portfolio_comparison.matching.source_adapter import get_source_client
+        from vdl_tools.portfolio_comparison.matching.tier2 import run_tier2
+
+        client = get_source_client(
+            config.baseline_run.source,
+            cache_path=results_dir / "source_search_cache.json",
+        )
+        id_mapping, candidates, _ = run_tier2(id_mapping, client, candidates)
+    except NotImplementedError as exc:
+        logger.warning("Tier 2 skipped: %s", exc)
+    except Exception as exc:
+        logger.warning("Tier 2 failed, continuing without it: %s", exc)
+
     mapping_path = results_dir / "id_mapping.parquet"
     save_id_mapping(id_mapping, results_dir)
 

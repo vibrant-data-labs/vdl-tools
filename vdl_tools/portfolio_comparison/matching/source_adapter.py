@@ -28,15 +28,100 @@ class SourceClient(Protocol):
 
 
 class CrunchbaseClient:
-    """Tier-2 adapter over vdl_tools.scrape_enrich.crunchbase (name + domain search)."""
+    """Tier-2 adapter over vdl_tools.scrape_enrich.crunchbase.
+
+    Domain search first (high precision: `domain_eq` on website_url), then
+    name search (`contains` on identifier). Results are cached to a local
+    JSON file so match reruns don't re-bill the API.
+    """
 
     source = "crunchbase"
+    SEARCH_FIELDS = [
+        "identifier", "website_url", "short_description", "operating_status",
+    ]
+
+    def __init__(self, cache_path=None, limit: int = 10):
+        self.limit = limit
+        self.cache_path = cache_path
+        self._cache = {}
+        if cache_path is not None:
+            import json
+            from pathlib import Path
+
+            self.cache_path = Path(cache_path)
+            if self.cache_path.exists():
+                self._cache = json.loads(self.cache_path.read_text())
+
+    def _save_cache(self):
+        if self.cache_path is not None:
+            import json
+
+            self.cache_path.write_text(json.dumps(self._cache))
+
+    def _query(self, filters) -> list[dict]:
+        import vdl_tools.scrape_enrich.crunchbase.api as api  # noqa: F401
+        import vdl_tools.scrape_enrich.crunchbase.companies_api as companies_api
+
+        df = companies_api.query(
+            fields=self.SEARCH_FIELDS, filters=filters, limit=self.limit
+        )
+        return df.to_dict(orient="records") if len(df) else []
+
+    def _to_candidates(self, hits: list[dict], name: str, signal: str) -> list[Candidate]:
+        from vdl_tools.portfolio_comparison.intake.normalize import (
+            normalize_domain,
+            normalize_name,
+        )
+        from vdl_tools.portfolio_comparison.matching.universe import _similarity
+
+        candidates = []
+        for hit in hits:
+            hit_name = (hit.get("identifier") or {}).get("value") or ""
+            score = (
+                0.97 if signal == "domain"
+                else round(_similarity(normalize_name(name), normalize_name(hit_name)), 3)
+            )
+            candidates.append(Candidate(
+                matched_id=str(hit["uuid"]),
+                matched_name=hit_name,
+                matched_url=hit.get("website_url") or "",
+                score=score,
+                method="api_search",
+                evidence={
+                    "signal": signal,
+                    "domain": normalize_domain(hit.get("website_url")),
+                    "description": hit.get("short_description") or "",
+                    "operating_status": hit.get("operating_status") or "",
+                    "in_universe": False,
+                },
+            ))
+        candidates.sort(key=lambda c: c.score, reverse=True)
+        return candidates
 
     def search(self, name: str, url: str) -> list[Candidate]:
-        raise NotImplementedError(
-            "Tier-2 Crunchbase search is next-sprint work; wrap "
-            "vdl_tools/scrape_enrich/crunchbase/organizations_api*.py here"
-        )
+        import vdl_tools.scrape_enrich.crunchbase.api as api
+
+        from vdl_tools.portfolio_comparison.intake.normalize import normalize_domain
+
+        domain = normalize_domain(url)
+        cache_key = f"{domain}|{(name or '').strip().lower()}"
+        if cache_key in self._cache:
+            return [Candidate(**c) for c in self._cache[cache_key]]
+
+        hits, signal = [], None
+        if domain:
+            hits = self._query([api.domain_eq("website_url", [domain])])
+            signal = "domain"
+        if not hits and name and name.strip():
+            hits = self._query([api.contains("identifier", [name.strip()])])
+            signal = "name"
+        candidates = self._to_candidates(hits, name, signal) if hits else []
+
+        from dataclasses import asdict
+
+        self._cache[cache_key] = [asdict(c) for c in candidates]
+        self._save_cache()
+        return candidates
 
 
 class NZIClient:
@@ -49,13 +134,18 @@ class NZIClient:
 
     source = "nzi"
 
+    def __init__(self, cache_path=None, limit: int = 10):
+        self.cache_path = cache_path
+        self.limit = limit
+
     def search(self, name: str, url: str) -> list[Candidate]:
         raise NotImplementedError(
-            "Tier-2 NZI search is next-sprint work; wrap "
-            "vdl_tools/scrape_enrich/netzero_insights/search_netzero_api.py here"
+            "Tier-2 NZI search is follow-on work; wrap "
+            "vdl_tools/scrape_enrich/netzero_insights/search_netzero_api.py here "
+            "(name search only — confirm by returned website domain, spec §4.4)"
         )
 
 
-def get_source_client(source: str) -> SourceClient:
+def get_source_client(source: str, **kwargs) -> SourceClient:
     clients = {"crunchbase": CrunchbaseClient, "nzi": NZIClient}
-    return clients[source]()
+    return clients[source](**kwargs)

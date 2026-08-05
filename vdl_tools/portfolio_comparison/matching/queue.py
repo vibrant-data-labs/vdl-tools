@@ -26,6 +26,9 @@ def load_id_mapping(results_dir: str | Path) -> pd.DataFrame:
 
 def save_id_mapping(df: pd.DataFrame, results_dir: str | Path):
     results_dir = Path(results_dir)
+    # Normalize missing values to a single representation (np.nan and pd.NA
+    # both appear after .loc writes and read-backs, splitting value_counts).
+    df = df.astype(object).where(pd.notna(df), pd.NA)
     df.to_parquet(results_dir / f"{ID_MAPPING_BASENAME}.parquet", index=False)
     df.to_csv(results_dir / f"{ID_MAPPING_BASENAME}.csv", index=False)
 

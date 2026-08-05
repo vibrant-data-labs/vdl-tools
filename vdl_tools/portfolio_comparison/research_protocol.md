@@ -5,6 +5,20 @@ Spawned research agents MUST receive this protocol verbatim in their prompt.
 Born from real misses in the one-small-planet pilot (Loa Carbon/Aether
 Diamonds false rebrand; Global Solutions Tracker unverified inference).
 
+## Source-API pre-research comes first (pilot ruling)
+
+The engagement's source API (Crunchbase/NZI) has higher recall than the
+baseline universe. Tier 2 runs it automatically before any review, and its
+candidates arrive on queue rows as `method: api_search` with descriptions
+and operating status. Consume that evidence FIRST:
+
+- An `api_search` domain-signal candidate is the org's own source record —
+  it usually settles identity without any web search (Loa Carbon lesson:
+  one domain lookup beat an entire web-research chain).
+- Web research is for what the API couldn't settle: no source record found,
+  conflicting candidates, or rebrand/alias questions the record itself
+  raises. Never web-research what the API already answered.
+
 ## Asymmetric rigor
 
 A wrong match poisons every downstream stage; a missed match costs one
