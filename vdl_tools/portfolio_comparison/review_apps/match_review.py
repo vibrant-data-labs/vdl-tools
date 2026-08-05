@@ -137,21 +137,32 @@ def _(mo, row):
 def _(mo, row):
     cands = row.get("candidates") or []
 
+    import re as _re
+
     def _site(c):
         d = c["evidence"].get("domain")
         return f"[{d}](https://{d})" if d else "—"
+
+    def _cb(c):
+        permalink = c["evidence"].get("cb_permalink")
+        if permalink:
+            return f"[CB ↗](https://www.crunchbase.com/organization/{permalink})"
+        # Older cached candidates: CB web URLs also resolve uuids.
+        if c["method"] == "api_search" or _re.fullmatch(r"[0-9a-f-]{36}", str(c["matched_id"])):
+            return f"[CB ↗](https://www.crunchbase.com/organization/{c['matched_id']})"
+        return "—"
 
     def _desc(c):
         text = (c["evidence"].get("description") or "").strip().replace("|", "/")
         return text[:90] + "…" if len(text) > 90 else (text or "—")
 
-    _lines = ["| # | Candidate | Site | Signal · Score | Universe | Description |",
-              "|---|---|---|---|---|---|"]
+    _lines = ["| # | Candidate | Site | CB | Signal · Score | Universe | Description |",
+              "|---|---|---|---|---|---|---|"]
     for _i, _c in enumerate(cands):
         _uni = "in" if _c["evidence"].get("in_universe") else "**OUT**"
         _rc = " 🔁" if _c["evidence"].get("redirect_confirmed") else ""
         _lines.append(
-            f"| {_i} | {_c['matched_name']} | {_site(_c)} | "
+            f"| {_i} | {_c['matched_name']} | {_site(_c)} | {_cb(_c)} | "
             f"{_c['method']} · {_c['score']:.2f}{_rc} | {_uni} | {_desc(_c)} |"
         )
     cand_table = mo.md("\n".join(_lines)) if cands else mo.md("")

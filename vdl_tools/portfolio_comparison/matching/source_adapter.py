@@ -76,7 +76,8 @@ class CrunchbaseClient:
 
         candidates = []
         for hit in hits:
-            hit_name = (hit.get("identifier") or {}).get("value") or ""
+            identifier = hit.get("identifier") or {}
+            hit_name = identifier.get("value") or ""
             score = (
                 0.97 if signal == "domain"
                 else round(_similarity(normalize_name(name), normalize_name(hit_name)), 3)
@@ -92,6 +93,7 @@ class CrunchbaseClient:
                     "domain": normalize_domain(hit.get("website_url")),
                     "description": hit.get("short_description") or "",
                     "operating_status": hit.get("operating_status") or "",
+                    "cb_permalink": identifier.get("permalink") or "",
                     "in_universe": False,
                 },
             ))

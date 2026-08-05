@@ -106,6 +106,31 @@ def test_two_converging_candidates_go_to_review(monkeypatch):
     assert m.iloc[0]["status"] == "needs_review"
 
 
+def test_queued_row_with_converging_candidate_auto_resolves(monkeypatch):
+    # A row the baseline matcher already sent to review must still escape
+    # the queue when one of its candidates redirect-converges.
+    table = {"old-site.org": "current.org", "current.org": "current.org"}
+    monkeypatch.setattr(normalize, "_REDIRECT_CACHE", {})
+    monkeypatch.setattr(normalize, "resolve_redirect", lambda d, timeout=10.0: table.get(d, d))
+
+    m = make_mapping([{
+        "customer_row_id": "r5", "customer_name": "Current Org",
+        "customer_url": "https://current.org/", "entity_type": "for_profit",
+        "status": "needs_review",
+    }])
+    tier1_cand = Candidate(
+        matched_id="u-old", matched_name="Current Org",
+        matched_url="https://old-site.org", score=1.0, method="name_exact",
+        evidence={"domain": "old-site.org", "in_universe": True},
+    )
+    m, cands, _ = run_tier2(m, FakeClient({"Current Org": []}), {"r5": [tier1_cand]})
+    row = m.iloc[0]
+    assert row["status"] == "auto_matched"
+    assert row["matched_id"] == "u-old"
+    assert row["in_universe"] == True  # noqa: E712  (Tier-1 origin keeps universe flag)
+    assert cands["r5"][0].evidence["redirect_confirmed"] is True
+
+
 def test_tier2_no_convergence_still_reviews():
     m = make_mapping([{
         "customer_row_id": "r2", "customer_name": "Acme",
