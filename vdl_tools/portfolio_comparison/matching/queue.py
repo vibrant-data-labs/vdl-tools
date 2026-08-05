@@ -66,14 +66,40 @@ def apply_decision(results_dir: str | Path, customer_row_id: str, **kwargs) -> p
     return df
 
 
+RESEARCH_FILENAME = "research_annotations.json"
+
+
 def build_review_queue(
-    id_mapping: pd.DataFrame, candidates_by_row: dict[str, list[Candidate]]
+    id_mapping: pd.DataFrame,
+    candidates_by_row: dict[str, list[Candidate]],
+    results_dir: str | Path | None = None,
 ) -> pd.DataFrame:
-    """Rows needing a human, with their candidate lists serialized alongside."""
+    """Rows needing a human, with their candidate lists serialized alongside.
+
+    Research annotations (agent pre-research verdicts + any candidates they
+    discovered) persist in ``research_annotations.json`` and re-attach on
+    every rebuild — queue regeneration must never eat research, same rule
+    as decisions.
+    """
     pending = id_mapping[id_mapping["status"] == "needs_review"].copy()
     pending["candidates"] = pending["customer_row_id"].map(
         lambda rid: [asdict(c) for c in candidates_by_row.get(rid, [])]
     )
+    pending["research"] = None
+
+    research_path = Path(results_dir) / RESEARCH_FILENAME if results_dir else None
+    if research_path is not None and research_path.exists():
+        annotations = json.loads(research_path.read_text())
+        for idx, row in pending.iterrows():
+            ann = annotations.get(row["customer_row_id"])
+            if not ann:
+                continue
+            pending.at[idx, "research"] = ann.get("research")
+            extra = ann.get("extra_candidates") or []
+            seen = {c["matched_id"] for c in row["candidates"]}
+            pending.at[idx, "candidates"] = row["candidates"] + [
+                c for c in extra if c["matched_id"] not in seen
+            ]
     return pending
 
 

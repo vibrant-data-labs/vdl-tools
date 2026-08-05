@@ -50,7 +50,9 @@ def _fetch(uri: str, dest: Path) -> Path:
 def _load_records(path: Path) -> pd.DataFrame:
     if path.suffix == ".parquet":
         return pd.read_parquet(path)
-    return pd.read_json(path)
+    # convert_dates=False: read verbatim — pandas' date inference both
+    # mangles lineage and can overflow on large numeric columns.
+    return pd.read_json(path, convert_dates=False)
 
 
 def _source_id_share(ids: pd.Series, source: str) -> float:

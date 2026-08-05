@@ -166,7 +166,7 @@ def run_match(engagement_root: str | Path) -> pd.DataFrame:
         enriched, "enriched file", config.baseline_run.source
     )
     universe_ids = set(
-        pd.read_json(universe_path)[id_col].astype(str)
+        pd.read_json(universe_path, convert_dates=False)[id_col].astype(str)
     )
     index = UniverseIndex(enriched, universe_ids, id_col=id_col)
 
@@ -209,10 +209,35 @@ def run_match(engagement_root: str | Path) -> pd.DataFrame:
     except Exception as exc:
         logger.warning("Tier 2 failed, continuing without it: %s", exc)
 
+    # Nonprofit identity lane (EIN-less + fiscal-sponsor rows): GT datamart
+    # ranked identity search — same source-API-first ordering as Tier 2.
+    np_pending = id_mapping[
+        (id_mapping["entity_type"] == "nonprofit")
+        & (id_mapping["status"].isna() | (id_mapping["status"] == "needs_review"))
+    ]
+    if not np_pending.empty:
+        try:
+            from vdl_tools.portfolio_comparison.matching.nonprofit import (
+                apply_identity_matches,
+                match_identity,
+            )
+            from vdl_tools.portfolio_comparison.matching.tier2 import _dedupe
+
+            gt_matches = match_identity(np_pending, universe_ids=universe_ids)
+            for row_id, cands in gt_matches.items():
+                candidates[row_id] = _dedupe(candidates.get(row_id, []), cands)
+            id_mapping = apply_identity_matches(id_mapping, gt_matches)
+            logger.info(
+                "GT identity lane: %d of %d pending nonprofit rows got candidates",
+                len(gt_matches), len(np_pending),
+            )
+        except Exception as exc:
+            logger.warning("nonprofit identity lane skipped: %s", exc)
+
     mapping_path = results_dir / "id_mapping.parquet"
     save_id_mapping(id_mapping, results_dir)
 
-    queue = build_review_queue(id_mapping, candidates)
+    queue = build_review_queue(id_mapping, candidates, results_dir=results_dir)
     queue_path = results_dir / "review_queue.json"
     queue.to_json(queue_path, orient="records", indent=2)
 
