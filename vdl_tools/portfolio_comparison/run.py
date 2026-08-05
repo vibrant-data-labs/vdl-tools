@@ -151,10 +151,26 @@ def _customer_rows(config: EngagementConfig, profiles: dict) -> pd.DataFrame:
 
 
 def run_match(engagement_root: str | Path) -> pd.DataFrame:
-    """Tier 1 + nonprofit EIN lane. Tier 2 (source API) is next-sprint work."""
+    """All matching lanes: baseline, source API, GT datamart."""
     config = _load_config(engagement_root)
     state = PipelineState(config.root)
     results_dir = config.results_dir()
+
+    # Advisory lock: a live review session must not race a match run —
+    # the run's final save would eclipse decisions recorded mid-run.
+    lock = results_dir / ".match_running"
+    if lock.exists():
+        raise RuntimeError(
+            f"another match run appears active ({lock}); if that's stale, delete it"
+        )
+    lock.write_text("")
+    try:
+        return _run_match_locked(config, state, results_dir)
+    finally:
+        lock.unlink(missing_ok=True)
+
+
+def _run_match_locked(config, state, results_dir) -> pd.DataFrame:
 
     profile_path = results_dir / "intake_profile.json"
     if not profile_path.exists():
@@ -240,6 +256,10 @@ def run_match(engagement_root: str | Path) -> pd.DataFrame:
             )
         except Exception as exc:
             logger.warning("nonprofit identity lane skipped: %s", exc)
+
+    # Replay AGAIN immediately before saving: decisions recorded while the
+    # API lanes were running (minutes) must survive this run's save.
+    id_mapping = replay_decisions(id_mapping, results_dir)
 
     mapping_path = results_dir / "id_mapping.parquet"
     save_id_mapping(id_mapping, results_dir)

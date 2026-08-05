@@ -65,6 +65,12 @@ def replay_decisions(id_mapping: pd.DataFrame, results_dir: str | Path) -> pd.Da
 
 def apply_decision(results_dir: str | Path, customer_row_id: str, **kwargs) -> pd.DataFrame:
     """Load → record one decision → persist. The review app's entry point."""
+    lock = Path(results_dir) / ".match_running"
+    if lock.exists():
+        raise RuntimeError(
+            "A match run is in progress — wait for it to finish before "
+            "recording decisions (your work would race its save)."
+        )
     df = load_id_mapping(results_dir)
     df = record_decision(df, results_dir, customer_row_id, **kwargs)
     save_id_mapping(df, results_dir)

@@ -96,3 +96,19 @@ def test_replay_skips_rows_that_no_longer_exist(tmp_path):
     ])
     replayed = replay_decisions(rebuilt, tmp_path)
     assert replayed.iloc[0]["status"] == "needs_review"
+
+
+def test_apply_decision_refuses_during_match_run(tmp_path):
+    import pytest
+    from vdl_tools.portfolio_comparison.matching.queue import (
+        apply_decision,
+        save_id_mapping,
+    )
+
+    mapping = make_mapping([
+        {"customer_row_id": "r1", "customer_name": "A", "status": "needs_review"},
+    ])
+    save_id_mapping(mapping, tmp_path)
+    (tmp_path / ".match_running").write_text("")
+    with pytest.raises(RuntimeError, match="match run is in progress"):
+        apply_decision(tmp_path, "r1", decided_by="vdl:zein", status="vdl_reviewed")
