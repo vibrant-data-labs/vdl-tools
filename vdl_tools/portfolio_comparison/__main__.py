@@ -16,10 +16,15 @@ from vdl_tools.portfolio_comparison import run as runners
 def main():
     parser = argparse.ArgumentParser(prog="python -m vdl_tools.portfolio_comparison")
     parser.add_argument(
-        "stage", choices=["pin-baseline", "intake", "match", "status"]
+        "stage",
+        choices=["pin-baseline", "intake", "match", "status",
+                 "export-customer", "import-customer"],
     )
     parser.add_argument(
         "--root", default=".", help="engagement repo root (default: cwd)"
+    )
+    parser.add_argument(
+        "--file", default=None, help="filled-in spreadsheet (import-customer)"
     )
     args = parser.parse_args()
     root = Path(args.root).resolve()
@@ -32,6 +37,21 @@ def main():
         print(json.dumps(payload["preflight"], indent=2))
     elif args.stage == "match":
         id_mapping = runners.run_match(root)
+        print(id_mapping["status"].value_counts(dropna=False).to_string())
+    elif args.stage == "export-customer":
+        from vdl_tools.portfolio_comparison.review_apps.customer_export import (
+            export_customer_roundtrip,
+        )
+
+        print(export_customer_roundtrip(root))
+    elif args.stage == "import-customer":
+        if not args.file:
+            parser.error("import-customer requires --file")
+        from vdl_tools.portfolio_comparison.review_apps.customer_export import (
+            import_customer_responses,
+        )
+
+        id_mapping = import_customer_responses(root, args.file)
         print(id_mapping["status"].value_counts(dropna=False).to_string())
     elif args.stage == "status":
         print(runners.run_status(root))

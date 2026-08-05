@@ -115,6 +115,7 @@ def record_decision(
     decided_by: str,
     status: str,
     reason: str = "",
+    gate: str = "match_review",
     **fields,
 ) -> pd.DataFrame:
     """Apply one human decision: update the row, append to the decisions log.
@@ -146,7 +147,7 @@ def record_decision(
 
     entry = {
         "customer_row_id": customer_row_id,
-        "gate": "match_review",
+        "gate": gate,
         "decided_by": decided_by,
         "decided_at": now,
         "reason": reason,
