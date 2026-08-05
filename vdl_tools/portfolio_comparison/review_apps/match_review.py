@@ -1,4 +1,4 @@
-"""Gate 1a — VDL match review (marimo app).
+"""VDL match review (marimo app).
 
 Launch from the ENGAGEMENT REPO ROOT (the app reads data/results/ relative
 to its working directory):

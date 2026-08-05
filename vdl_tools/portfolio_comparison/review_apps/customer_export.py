@@ -1,4 +1,4 @@
-"""Gate 1b — customer round-trip: annotated Excel export and re-import.
+"""Customer round-trip: annotated Excel export and re-import.
 
 Export: every row no automated source could resolve (plus rows a VDL
 reviewer marked ``customer_review``) becomes one spreadsheet row with our
@@ -79,7 +79,7 @@ def export_customer_roundtrip(engagement_root: str | Path) -> Path:
     state = PipelineState(config.root)
     state.record_artifact("customer_roundtrip_export", out)
     state.record_stage("review_customer", status="exported", n_rows=len(frame))
-    logger.info("Gate 1b export: %d rows -> %s", len(frame), out)
+    logger.info("Customer round-trip export: %d rows -> %s", len(frame), out)
     return out
 
 
@@ -173,7 +173,7 @@ def import_customer_responses(
         n_resolved=n_resolved, n_requeued=n_queued, n_unmatched_final=n_final,
     )
     logger.info(
-        "Gate 1b import: %d resolved, %d back to VDL queue, %d unmatched_final",
+        "Customer round-trip import: %d resolved, %d back to VDL queue, %d unmatched_final",
         n_resolved, n_queued, n_final,
     )
     return id_mapping
