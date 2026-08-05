@@ -116,6 +116,10 @@ class CrunchbaseClient:
         hits, signal = [], None
         if domain:
             hits = self._query([api.domain_eq("website_url", [domain])])
+            # CB's domain_eq matches the registrable domain, so shared-hosting
+            # sites (e-z-pack.myshopify.com) return every store on the host.
+            # Only exact-host hits are identity evidence.
+            hits = [h for h in hits if identity_domain(h.get("website_url")) == domain]
             signal = "domain"
         if not hits and name and name.strip():
             hits = self._query([api.contains("identifier", [name.strip()])])

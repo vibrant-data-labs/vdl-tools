@@ -67,3 +67,49 @@ def test_linkedin_url_without_slug_match_falls_to_name():
     # No slug hit, no name hit — and crucially, zero linkedin.com domain noise.
     assert pd.isna(result.iloc[0]["status"])
     assert "r2" not in cands
+
+
+def test_cb_domain_hits_filtered_to_exact_host(monkeypatch):
+    # CB domain_eq on a myshopify subdomain returns every store on the
+    # shared host; only the exact host survives as a domain candidate.
+    from vdl_tools.portfolio_comparison.matching.source_adapter import CrunchbaseClient
+
+    client = CrunchbaseClient()
+    calls = []
+
+    def fake_query(filters):
+        calls.append(filters)
+        if len(calls) == 1:  # domain search
+            return [
+                {"uuid": "cb-ez", "identifier": {"value": "EZ Pack", "permalink": "ez-pack"},
+                 "website_url": "https://e-z-pack.myshopify.com/"},
+                {"uuid": "cb-dig", "identifier": {"value": "DIG Labs", "permalink": "dig"},
+                 "website_url": "https://dig-labs.myshopify.com"},
+            ]
+        return []
+
+    monkeypatch.setattr(client, "_query", fake_query)
+    cands = client.search("EZ Pack", "https://e-z-pack.myshopify.com/")
+    assert [c.matched_id for c in cands] == ["cb-ez"]
+    assert cands[0].evidence["signal"] == "domain"
+
+
+def test_cb_falls_to_name_search_when_no_exact_host(monkeypatch):
+    from vdl_tools.portfolio_comparison.matching.source_adapter import CrunchbaseClient
+
+    client = CrunchbaseClient()
+    calls = []
+
+    def fake_query(filters):
+        calls.append(filters)
+        if len(calls) == 1:  # domain search: only wrong-host stores
+            return [{"uuid": "cb-x", "identifier": {"value": "Other", "permalink": "o"},
+                     "website_url": "https://other.myshopify.com"}]
+        return [{"uuid": "cb-name", "identifier": {"value": "EZ Pack", "permalink": "ez"},
+                 "website_url": "https://ezpack.com"}]
+
+    monkeypatch.setattr(client, "_query", fake_query)
+    cands = client.search("EZ Pack", "https://gone.myshopify.com/")
+    assert len(calls) == 2  # fell through to name search
+    assert cands[0].matched_id == "cb-name"
+    assert cands[0].evidence["signal"] == "name"
