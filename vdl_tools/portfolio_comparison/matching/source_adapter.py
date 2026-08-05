@@ -69,7 +69,7 @@ class CrunchbaseClient:
 
     def _to_candidates(self, hits: list[dict], name: str, signal: str) -> list[Candidate]:
         from vdl_tools.portfolio_comparison.intake.normalize import (
-            normalize_domain,
+            identity_domain,
             normalize_name,
         )
         from vdl_tools.portfolio_comparison.matching.universe import _similarity
@@ -90,7 +90,7 @@ class CrunchbaseClient:
                 method="api_search",
                 evidence={
                     "signal": signal,
-                    "domain": normalize_domain(hit.get("website_url")),
+                    "domain": identity_domain(hit.get("website_url")),
                     "description": hit.get("short_description") or "",
                     "operating_status": hit.get("operating_status") or "",
                     "cb_permalink": identifier.get("permalink") or "",
@@ -103,9 +103,12 @@ class CrunchbaseClient:
     def search(self, name: str, url: str) -> list[Candidate]:
         import vdl_tools.scrape_enrich.crunchbase.api as api
 
-        from vdl_tools.portfolio_comparison.intake.normalize import normalize_domain
+        from vdl_tools.portfolio_comparison.intake.normalize import identity_domain
 
-        domain = normalize_domain(url)
+        # Platform URLs (linkedin.com/...) carry no searchable domain — a
+        # domain_eq on linkedin.com returns every org whose listed website
+        # is its LinkedIn page. Fall through to name search instead.
+        domain = identity_domain(url)
         cache_key = f"{domain}|{(name or '').strip().lower()}"
         if cache_key in self._cache:
             return [Candidate(**c) for c in self._cache[cache_key]]

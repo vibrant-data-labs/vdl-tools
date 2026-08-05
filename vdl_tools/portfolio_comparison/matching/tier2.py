@@ -30,7 +30,7 @@ def run_tier2(
     """Mutates ``id_mapping`` for unresolved for-profit rows; enriches the
     review queue's candidate lists. Returns (id_mapping, candidates, n_searched).
     """
-    from vdl_tools.portfolio_comparison.intake.normalize import normalize_domain
+    from vdl_tools.portfolio_comparison.intake.normalize import identity_domain
     from vdl_tools.portfolio_comparison.matching.source_adapter import (
         pick_converging_candidate,
     )
@@ -59,7 +59,7 @@ def run_tier2(
         if not merged:
             continue
         candidates_by_row[row_id] = merged
-        customer_domain = normalize_domain(row["customer_url"])
+        customer_domain = identity_domain(row["customer_url"])
 
         if pd.isna(row["status"]):
             top = cands[0] if cands else None

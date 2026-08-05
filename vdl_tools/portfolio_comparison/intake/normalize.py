@@ -72,6 +72,9 @@ def domains_converge(domain_a: str, domain_b: str, resolver=None) -> bool:
     renamed/moved domains that still redirect."""
     if not domain_a or not domain_b:
         return False
+    # Platform domains converge on themselves for every org — meaningless.
+    if domain_a in PLATFORM_DOMAINS or domain_b in PLATFORM_DOMAINS:
+        return False
     if domain_a == domain_b:
         return True
     resolver = resolver or resolve_redirect
@@ -79,7 +82,37 @@ def domains_converge(domain_a: str, domain_b: str, resolver=None) -> bool:
         if d not in _REDIRECT_CACHE:
             _REDIRECT_CACHE[d] = resolver(d)
     final_a, final_b = _REDIRECT_CACHE[domain_a], _REDIRECT_CACHE[domain_b]
-    return bool(final_a) and final_a == final_b
+    return bool(final_a) and final_a == final_b and final_a not in PLATFORM_DOMAINS
+
+
+# Shared-platform domains identify a platform, not an org. A customer URL
+# like linkedin.com/company/replant-capital must never domain-match every
+# org whose listed website is its LinkedIn page.
+PLATFORM_DOMAINS = {
+    "linkedin.com", "facebook.com", "instagram.com", "twitter.com", "x.com",
+    "youtube.com", "medium.com", "crunchbase.com", "angel.co", "wellfound.com",
+    "wikipedia.org", "en.wikipedia.org", "google.com", "sites.google.com",
+    "docs.google.com", "linktr.ee", "notion.so", "github.com",
+    "apps.apple.com", "play.google.com",
+}
+
+_LINKEDIN_SLUG_RE = re.compile(
+    r"linkedin\.com/(?:company|school|showcase)/([^/?#\s]+)", re.IGNORECASE
+)
+
+
+def identity_domain(url: str | None) -> str:
+    """A domain usable as identity evidence: '' for shared platforms."""
+    domain = normalize_domain(url)
+    return "" if domain in PLATFORM_DOMAINS else domain
+
+
+def linkedin_slug(url: str | None) -> str:
+    """Company slug from a LinkedIn URL — itself a strong identity signal."""
+    if not url or not isinstance(url, str):
+        return ""
+    match = _LINKEDIN_SLUG_RE.search(url)
+    return match.group(1).lower().strip() if match else ""
 
 
 def normalize_ein(ein) -> str:

@@ -14,8 +14,9 @@ from difflib import SequenceMatcher
 import pandas as pd
 
 from vdl_tools.portfolio_comparison.intake.normalize import (
+    identity_domain,
+    linkedin_slug,
     name_tokens,
-    normalize_domain,
     normalize_name,
 )
 from vdl_tools.portfolio_comparison.matching import thresholds
@@ -35,6 +36,7 @@ def _similarity(name_a: str, name_b: str) -> float:
 
 NAME_COLUMN_CANDIDATES = ["Organization", "Name", "name"]
 URL_COLUMN_CANDIDATES = ["url_homepage", "Website", "url"]
+LINKEDIN_COLUMN_CANDIDATES = ["LinkedIn", "Original LinkedIn", "linkedin_url"]
 
 
 def _detect_column(df: pd.DataFrame, candidates: list[str], kind: str) -> str:
@@ -60,24 +62,34 @@ class UniverseIndex:
     ):
         name_col = name_col or _detect_column(enriched, NAME_COLUMN_CANDIDATES, "name")
         url_col = url_col or _detect_column(enriched, URL_COLUMN_CANDIDATES, "url")
+        linkedin_col = next(
+            (c for c in LINKEDIN_COLUMN_CANDIDATES if c in enriched.columns), None
+        )
         self.universe_ids = universe_ids
         records = []
         for _, row in enriched.iterrows():
+            url = row.get(url_col) or ""
+            li = linkedin_slug(row.get(linkedin_col)) if linkedin_col else ""
             records.append({
                 "id": str(row[id_col]),
                 "name": row.get(name_col) or "",
-                "url": row.get(url_col) or "",
+                "url": url,
                 "norm_name": normalize_name(row.get(name_col)),
-                "domain": normalize_domain(row.get(url_col)),
+                # Platform domains (linkedin.com et al.) are not identity.
+                "domain": identity_domain(url),
+                "linkedin": li or linkedin_slug(url),
             })
         self.records = records
 
         self.by_domain: dict[str, list[dict]] = {}
+        self.by_linkedin: dict[str, list[dict]] = {}
         self.by_name: dict[str, list[dict]] = {}
         self.by_token: dict[str, set[int]] = {}
         for i, rec in enumerate(records):
             if rec["domain"]:
                 self.by_domain.setdefault(rec["domain"], []).append(rec)
+            if rec["linkedin"]:
+                self.by_linkedin.setdefault(rec["linkedin"], []).append(rec)
             if rec["norm_name"]:
                 self.by_name.setdefault(rec["norm_name"], []).append(rec)
             for token in rec["norm_name"].split():
@@ -97,12 +109,21 @@ class UniverseIndex:
         )
 
     def match(self, name: str, url: str) -> list[Candidate]:
-        domain = normalize_domain(url)
+        domain = identity_domain(url)
         if domain and domain in self.by_domain:
             recs = self.by_domain[domain]
             return [
                 self._to_candidate(r, thresholds.DOMAIN_EXACT_CONFIDENCE, "url_exact")
                 for r in recs
+            ]
+
+        # A LinkedIn company URL carries no usable domain, but its slug is
+        # a strong identity signal against the baseline's LinkedIn columns.
+        slug = linkedin_slug(url)
+        if slug and slug in self.by_linkedin:
+            return [
+                self._to_candidate(r, 0.98, "url_exact")
+                for r in self.by_linkedin[slug]
             ]
 
         norm = normalize_name(name)
@@ -204,7 +225,7 @@ def run_tier1(
         cands = index.match(row.get("customer_name"), row.get("customer_url"))
         if cands:
             candidates_by_row[row["customer_row_id"]] = cands
-        customer_domain = normalize_domain(row.get("customer_url"))
+        customer_domain = identity_domain(row.get("customer_url"))
         results.append({**base, **_resolve(cands, index, customer_domain)})
 
     return pd.DataFrame(results, columns=ID_MAPPING_COLUMNS), candidates_by_row
