@@ -67,7 +67,33 @@ class CrunchbaseClient:
         )
         return df.to_dict(orient="records") if len(df) else []
 
-    def _to_candidates(self, hits: list[dict], name: str, signal: str) -> list[Candidate]:
+    def _autocomplete(self, name: str) -> list[dict]:
+        """CB's autocomplete — the forgiving search the manual UI uses
+        (typo-tolerant, partial names). Returns search-result-shaped hits
+        with websites filled by one batched details query."""
+        import requests
+
+        from vdl_tools.shared_tools.tools.config_utils import get_configuration
+
+        key = get_configuration()["crunchbase"]["api_key"]
+        res = requests.get(
+            "https://api.crunchbase.com/api/v4/autocompletes",
+            params={"query": name, "collection_ids": "organizations",
+                    "limit": min(self.limit, 5), "user_key": key},
+            timeout=30,
+        )
+        if not res.ok:
+            return []
+        uuids = [e["identifier"]["uuid"] for e in res.json().get("entities", [])]
+        if not uuids:
+            return []
+        import vdl_tools.scrape_enrich.crunchbase.api as api
+
+        return self._query([api.includes("uuid", uuids)])
+
+    def _to_candidates(
+        self, hits: list[dict], name: str, signal: str, requested_domain: str = ""
+    ) -> list[Candidate]:
         from vdl_tools.portfolio_comparison.intake.normalize import (
             identity_domain,
             normalize_name,
@@ -78,8 +104,14 @@ class CrunchbaseClient:
         for hit in hits:
             identifier = hit.get("identifier") or {}
             hit_name = identifier.get("value") or ""
+            hit_domain = identity_domain(hit.get("website_url"))
+            # Per-hit promotion: a name/autocomplete hit whose website
+            # exact-hosts the customer's domain is domain-grade evidence.
+            hit_signal = signal
+            if hit_signal != "domain" and requested_domain and hit_domain == requested_domain:
+                hit_signal = "domain"
             score = (
-                0.97 if signal == "domain"
+                0.97 if hit_signal == "domain"
                 else round(_similarity(normalize_name(name), normalize_name(hit_name)), 3)
             )
             candidates.append(Candidate(
@@ -89,8 +121,8 @@ class CrunchbaseClient:
                 score=score,
                 method="api_search",
                 evidence={
-                    "signal": signal,
-                    "domain": identity_domain(hit.get("website_url")),
+                    "signal": hit_signal,
+                    "domain": hit_domain,
                     "description": hit.get("short_description") or "",
                     "operating_status": hit.get("operating_status") or "",
                     "cb_permalink": identifier.get("permalink") or "",
@@ -113,6 +145,8 @@ class CrunchbaseClient:
         if cache_key in self._cache:
             return [Candidate(**c) for c in self._cache[cache_key]]
 
+        from vdl_tools.portfolio_comparison.intake.normalize import name_variants
+
         hits, signal = [], None
         if domain:
             hits = self._query([api.domain_eq("website_url", [domain])])
@@ -121,10 +155,17 @@ class CrunchbaseClient:
             # Only exact-host hits are identity evidence.
             hits = [h for h in hits if identity_domain(h.get("website_url")) == domain]
             signal = "domain"
-        if not hits and name and name.strip():
-            hits = self._query([api.contains("identifier", [name.strip()])])
+        if not hits:
+            # contains is strict; autocomplete is the forgiving search the
+            # manual UI uses. Try both, walking the name-variant ladder.
+            for variant in name_variants(name):
+                hits = self._query([api.contains("identifier", [variant])])
+                if not hits:
+                    hits = self._autocomplete(variant)
+                if hits:
+                    break
             signal = "name"
-        candidates = self._to_candidates(hits, name, signal) if hits else []
+        candidates = self._to_candidates(hits, name, signal, requested_domain=domain) if hits else []
 
         from dataclasses import asdict
 
@@ -184,8 +225,16 @@ class NZIClient:
         if cache_key in self._cache:
             return [Candidate(**c) for c in self._cache[cache_key]]
 
+        from vdl_tools.portfolio_comparison.intake.normalize import name_variants
+
+        raw_hits = []
+        for variant in name_variants(name):
+            raw_hits = self._search_api(variant)
+            if raw_hits:
+                break
+
         candidates = []
-        for hit in self._search_api(name):
+        for hit in raw_hits:
             hit_domain = identity_domain(hit.get("website"))
             confirmed = bool(domain) and hit_domain == domain
             score = (

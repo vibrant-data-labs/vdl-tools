@@ -63,10 +63,32 @@ def replay_decisions(id_mapping: pd.DataFrame, results_dir: str | Path) -> pd.Da
     return id_mapping
 
 
+MATCH_LOCK_FILENAME = ".match_running"
+
+
+def match_lock_active(results_dir: str | Path) -> bool:
+    """True only while the locking process is actually alive. A killed match
+    run must never leave a lock that blocks reviewers — stale locks (dead
+    pid, or no pid recorded) are removed on sight."""
+    import os
+
+    lock = Path(results_dir) / MATCH_LOCK_FILENAME
+    if not lock.exists():
+        return False
+    try:
+        pid = int(lock.read_text().strip())
+        os.kill(pid, 0)  # signal 0: existence check only
+        return True
+    except (ValueError, ProcessLookupError):
+        lock.unlink(missing_ok=True)
+        return False
+    except PermissionError:
+        return True  # alive, owned by someone else
+
+
 def apply_decision(results_dir: str | Path, customer_row_id: str, **kwargs) -> pd.DataFrame:
     """Load → record one decision → persist. The review app's entry point."""
-    lock = Path(results_dir) / ".match_running"
-    if lock.exists():
+    if match_lock_active(results_dir):
         raise RuntimeError(
             "A match run is in progress — wait for it to finish before "
             "recording decisions (your work would race its save)."

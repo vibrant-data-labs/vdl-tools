@@ -132,3 +132,39 @@ def test_supplement_nzi_ids_domain_confirmed_only():
     assert pd.isna(out[out.customer_row_id == "r2"].iloc[0]["nzi_id"])
     assert pd.isna(out[out.customer_row_id == "r3"].iloc[0]["nzi_id"])
     assert ("Windward", "w.io") not in [(n, u) for n, u in client.calls]
+
+
+def test_name_variants_ladder():
+    from vdl_tools.portfolio_comparison.intake.normalize import name_variants
+
+    assert name_variants("chifoods.us") == ["chifoods.us", "chifoods", "chifoods us"]
+    assert name_variants("Buzz Power Banks") == ["Buzz Power Banks"]
+    assert name_variants("M.A.R.S.H. Project")[-1] == "M A R S H Project"
+    assert name_variants(None) == []
+
+
+def test_cb_autocomplete_fallback_with_domain_promotion(monkeypatch):
+    from vdl_tools.portfolio_comparison.matching.source_adapter import CrunchbaseClient
+
+    client = CrunchbaseClient()
+    stages = []
+
+    def fake_query(filters):
+        stages.append("query")
+        return []  # domain_eq and contains both miss
+
+    def fake_autocomplete(name):
+        stages.append(f"auto:{name}")
+        if name == "CycleWatt":
+            return [{"uuid": "cb-cyclo", "identifier": {"value": "CycloWatt", "permalink": "cyclowatt"},
+                     "website_url": "https://cyclewatt.com", "short_description": "EV charging"}]
+        return []
+
+    monkeypatch.setattr(client, "_query", fake_query)
+    monkeypatch.setattr(client, "_autocomplete", fake_autocomplete)
+    cands = client.search("CycleWatt", "https://cyclewatt.com")
+    assert cands[0].matched_id == "cb-cyclo"
+    # Autocomplete hit whose website exact-hosts the customer domain is
+    # promoted to domain-grade evidence.
+    assert cands[0].evidence["signal"] == "domain"
+    assert cands[0].score == 0.97

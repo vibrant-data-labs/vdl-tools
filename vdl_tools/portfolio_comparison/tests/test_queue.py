@@ -98,8 +98,8 @@ def test_replay_skips_rows_that_no_longer_exist(tmp_path):
     assert replayed.iloc[0]["status"] == "needs_review"
 
 
-def test_apply_decision_refuses_during_match_run(tmp_path):
-    import pytest
+def test_pidless_lock_is_stale_and_self_clears(tmp_path):
+    # Locks without a recorded pid (pre-hardening format) count as stale.
     from vdl_tools.portfolio_comparison.matching.queue import (
         apply_decision,
         save_id_mapping,
@@ -110,5 +110,37 @@ def test_apply_decision_refuses_during_match_run(tmp_path):
     ])
     save_id_mapping(mapping, tmp_path)
     (tmp_path / ".match_running").write_text("")
+    out = apply_decision(tmp_path, "r1", decided_by="vdl:zein", status="vdl_reviewed")
+    assert out.iloc[0]["status"] == "vdl_reviewed"
+    assert not (tmp_path / ".match_running").exists()
+
+
+def test_stale_lock_from_dead_process_self_clears(tmp_path):
+    from vdl_tools.portfolio_comparison.matching.queue import (
+        apply_decision, match_lock_active, save_id_mapping,
+    )
+
+    mapping = make_mapping([
+        {"customer_row_id": "r1", "customer_name": "A", "status": "needs_review"},
+    ])
+    save_id_mapping(mapping, tmp_path)
+    (tmp_path / ".match_running").write_text("999999999")  # dead pid
+    assert not match_lock_active(tmp_path)  # stale -> cleared
+    out = apply_decision(tmp_path, "r1", decided_by="vdl:zein", status="vdl_reviewed")
+    assert out.iloc[0]["status"] == "vdl_reviewed"
+
+
+def test_live_lock_still_blocks(tmp_path):
+    import os
+    import pytest
+    from vdl_tools.portfolio_comparison.matching.queue import (
+        apply_decision, save_id_mapping,
+    )
+
+    mapping = make_mapping([
+        {"customer_row_id": "r1", "customer_name": "A", "status": "needs_review"},
+    ])
+    save_id_mapping(mapping, tmp_path)
+    (tmp_path / ".match_running").write_text(str(os.getpid()))  # alive: us
     with pytest.raises(RuntimeError, match="match run is in progress"):
         apply_decision(tmp_path, "r1", decided_by="vdl:zein", status="vdl_reviewed")

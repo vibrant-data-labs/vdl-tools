@@ -160,12 +160,20 @@ def run_match(engagement_root: str | Path) -> pd.DataFrame:
 
     # Advisory lock: a live review session must not race a match run —
     # the run's final save would eclipse decisions recorded mid-run.
-    lock = results_dir / ".match_running"
-    if lock.exists():
+    # PID-stamped so a killed run's stale lock self-clears.
+    import os
+
+    from vdl_tools.portfolio_comparison.matching.queue import (
+        MATCH_LOCK_FILENAME,
+        match_lock_active,
+    )
+
+    lock = results_dir / MATCH_LOCK_FILENAME
+    if match_lock_active(results_dir):
         raise RuntimeError(
             f"another match run appears active ({lock}); if that's stale, delete it"
         )
-    lock.write_text("")
+    lock.write_text(str(os.getpid()))
     try:
         return _run_match_locked(config, state, results_dir)
     finally:

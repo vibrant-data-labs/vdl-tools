@@ -118,6 +118,22 @@ def linkedin_slug(url: str | None) -> str:
     return match.group(1).lower().strip() if match else ""
 
 
+def name_variants(name: str | None) -> list[str]:
+    """Search-retry ladder for a customer-supplied name: the raw name, a
+    TLD-stripped form ('chifoods.us' → 'chifoods'), and a depunctuated
+    form. Ordered, deduped, blanks removed."""
+    if not name or not isinstance(name, str) or not name.strip():
+        return []
+    raw = name.strip()
+    tldless = re.sub(r"\.(com|org|net|io|us|co|ai|earth|energy)$", "", raw, flags=re.IGNORECASE)
+    depunct = " ".join(re.sub(r"[^\w\s]", " ", raw).split())
+    variants = []
+    for v in (raw, tldless, depunct):
+        if v and v.lower() not in {x.lower() for x in variants}:
+            variants.append(v)
+    return variants
+
+
 def normalize_ein(ein) -> str:
     """Canonical EIN form: 9 digits as NN-NNNNNNN; '' when unparseable."""
     if ein is None:
