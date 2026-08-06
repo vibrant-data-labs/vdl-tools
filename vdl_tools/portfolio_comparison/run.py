@@ -315,6 +315,15 @@ def _run_match_locked(config, state, results_dir) -> pd.DataFrame:
     report = match_rate_report(id_mapping)
     logger.info("match rates:\n%s", report.to_string(index=False))
 
+    try:
+        from vdl_tools.portfolio_comparison.review_apps.workbook import (
+            write_review_workbook,
+        )
+
+        write_review_workbook(id_mapping, results_dir)
+    except Exception as exc:
+        logger.warning("review workbook not written: %s", exc)
+
     state.record_artifact("id_mapping", mapping_path)
     state.record_stage(
         "match",
