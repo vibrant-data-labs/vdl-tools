@@ -44,6 +44,7 @@ ID_MAPPING_COLUMNS = [
     "disposition",
     "in_universe",
     "matched_id",
+    "matched_source",
     "matched_name",
     "matched_url",
     "match_method",

@@ -10,9 +10,9 @@ import pandas as pd
 
 REVIEW_COLUMNS = [
     "customer_name", "customer_url", "entity_type", "disposition", "status",
-    "matched_name", "matched_url", "matched_id", "nzi_id", "match_method",
-    "confidence", "in_universe", "text_sources", "enrichment_ready",
-    "decided_by", "notes",
+    "matched_name", "matched_source", "matched_id", "matched_url", "nzi_id",
+    "match_method", "confidence", "in_universe", "text_sources",
+    "enrichment_ready", "decided_by", "notes",
 ]
 
 

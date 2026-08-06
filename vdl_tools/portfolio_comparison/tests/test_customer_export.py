@@ -102,3 +102,21 @@ def test_text_mode_export_only_asks_for_textless_rows():
     frame = build_export_frame(m, objective="text")
     assert list(frame["ID (do not edit)"]) == ["r2"]
     assert "paste a 2-3 sentence description" in frame.iloc[0]["What we need"]
+
+
+def test_annotate_sources_by_id_shape():
+    from vdl_tools.portfolio_comparison.run import annotate_sources
+
+    m = make_mapping([
+        {"customer_row_id": "r1", "matched_id": "208486"},                                 # NZI
+        {"customer_row_id": "r2", "matched_id": "fa83c5e0-0412-44ec-8d86-f8e644bb3ae5"},   # CB
+        {"customer_row_id": "r3", "matched_id": "85-2588841"},                             # GT/EIN
+        {"customer_row_id": "r4"},                                                         # unmatched
+    ])
+    out = annotate_sources(m)
+    assert out.iloc[0]["matched_source"] == "nzi"
+    assert out.iloc[0]["nzi_id"] == "208486"  # self-contained NZI column
+    assert out.iloc[1]["matched_source"] == "crunchbase"
+    assert pd.isna(out.iloc[1]["nzi_id"])
+    assert out.iloc[2]["matched_source"] == "givingtuesday"
+    assert pd.isna(out.iloc[3]["matched_source"])

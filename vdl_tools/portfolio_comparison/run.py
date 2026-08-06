@@ -288,6 +288,7 @@ def _run_match_locked(config, state, results_dir) -> pd.DataFrame:
     # Replay AGAIN immediately before saving: decisions recorded while the
     # API lanes were running (minutes) must survive this run's save.
     id_mapping = replay_decisions(id_mapping, results_dir)
+    id_mapping = annotate_sources(id_mapping)
     id_mapping = assess_readiness(id_mapping, config.match_objective)
 
     # Coresignal last resort (opt-in — costs search credits): find LinkedIn
@@ -335,6 +336,34 @@ def _run_match_locked(config, state, results_dir) -> pd.DataFrame:
         match_objective=config.match_objective,
         n_enrichment_ready=int(id_mapping["enrichment_ready"].sum()),
     )
+    return id_mapping
+
+
+def _infer_matched_source(matched_id) -> str:
+    """Which source an id belongs to, by shape: NZI ids are numeric, CB ids
+    are 36-char uuids, Giving Tuesday/Candid ids are EINs (NN-NNNNNNN)."""
+    import re
+
+    s = str(matched_id)
+    if re.fullmatch(r"\d+", s):
+        return "nzi"
+    if re.fullmatch(r"[0-9a-f-]{36}", s, re.IGNORECASE):
+        return "crunchbase"
+    if re.fullmatch(r"\d{2}-\d{7}", s):
+        return "givingtuesday"
+    return "other"
+
+
+def annotate_sources(id_mapping: pd.DataFrame) -> pd.DataFrame:
+    """Make source attribution explicit and self-contained for reviewers:
+    matched_source names the primary id's source, and nzi_id is filled
+    whenever an NZI identity exists — including when it IS the primary."""
+    matched = id_mapping["matched_id"].notna() & id_mapping["matched_id"].astype(str).ne("")
+    id_mapping.loc[matched, "matched_source"] = id_mapping.loc[matched, "matched_id"].map(
+        _infer_matched_source
+    )
+    primary_nzi = matched & (id_mapping["matched_source"] == "nzi")
+    id_mapping.loc[primary_nzi, "nzi_id"] = id_mapping.loc[primary_nzi, "matched_id"]
     return id_mapping
 
 
