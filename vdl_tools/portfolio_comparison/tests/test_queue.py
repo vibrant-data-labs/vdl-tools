@@ -144,3 +144,56 @@ def test_live_lock_still_blocks(tmp_path):
     (tmp_path / ".match_running").write_text(str(os.getpid()))  # alive: us
     with pytest.raises(RuntimeError, match="match run is in progress"):
         apply_decision(tmp_path, "r1", decided_by="vdl:zein", status="vdl_reviewed")
+
+
+def test_rejection_does_not_veto_new_evidence(tmp_path):
+    # Human rejects fuzzy candidates; machine later finds a DIFFERENT record
+    # (Dendra Systems case) — the new match must survive replay.
+    mapping = make_mapping([
+        {"customer_row_id": "r1", "customer_name": "Dendra", "status": "needs_review"},
+    ])
+    record_decision(mapping, tmp_path, "r1", decided_by="vdl:zein",
+                    status=pd.NA, matched_id=None, reason="rejected fuzzy noise",
+                    rejected_ids=["u-petra", "u-other"])
+    rebuilt = make_mapping([
+        {"customer_row_id": "r1", "customer_name": "Dendra", "status": "auto_matched",
+         "matched_id": "cb-dendra", "confidence": 0.97},
+    ])
+    replayed = replay_decisions(rebuilt, tmp_path)
+    assert replayed.iloc[0]["status"] == "auto_matched"
+    assert replayed.iloc[0]["matched_id"] == "cb-dendra"
+
+
+def test_rejection_still_clears_the_rejected_candidate(tmp_path):
+    mapping = make_mapping([
+        {"customer_row_id": "r1", "customer_name": "X", "status": "needs_review"},
+    ])
+    record_decision(mapping, tmp_path, "r1", decided_by="vdl:zein",
+                    status=pd.NA, matched_id=None, reason="wrong org",
+                    rejected_ids=["u-wrong"])
+    # Machine re-proposes the SAME rejected id -> rejection applies.
+    rebuilt = make_mapping([
+        {"customer_row_id": "r1", "customer_name": "X", "status": "auto_matched",
+         "matched_id": "u-wrong", "confidence": 0.99},
+    ])
+    replayed = replay_decisions(rebuilt, tmp_path)
+    assert pd.isna(replayed.iloc[0]["status"])
+    assert pd.isna(replayed.iloc[0]["matched_id"])
+
+
+def test_legacy_rejection_yields_only_to_domain_grade(tmp_path):
+    import json
+    entry = {"customer_row_id": "r1", "gate": "match_review", "decided_by": "vdl:zein",
+             "decided_at": "2026-08-05T00:00:00+00:00", "reason": "",
+             "before": {}, "after": {"status": None, "matched_id": None}}
+    (tmp_path / "decisions.jsonl").write_text(json.dumps(entry) + "\n")
+    strong = make_mapping([
+        {"customer_row_id": "r1", "customer_name": "X", "status": "auto_matched",
+         "matched_id": "cb-1", "confidence": 0.97},
+    ])
+    assert replay_decisions(strong, tmp_path).iloc[0]["status"] == "auto_matched"
+    weak = make_mapping([
+        {"customer_row_id": "r1", "customer_name": "X", "status": "auto_matched",
+         "matched_id": "cb-1", "confidence": 0.9},
+    ])
+    assert pd.isna(replay_decisions(weak, tmp_path).iloc[0]["status"])

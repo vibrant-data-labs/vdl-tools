@@ -203,6 +203,7 @@ def _(
         apply_decision(
             RESULTS, row["customer_row_id"],
             decided_by=_decided_by, status=pd.NA, reason=notes.value or "rejected all candidates",
+            rejected_ids=[c["matched_id"] for c in cands],
             matched_id=None, matched_name=None, matched_url=None,
             match_method=None, confidence=None, in_universe=None,
         )

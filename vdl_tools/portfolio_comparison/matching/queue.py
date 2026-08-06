@@ -51,13 +51,35 @@ def replay_decisions(id_mapping: pd.DataFrame, results_dir: str | Path) -> pd.Da
     # Legacy entries serialized missing values as strings; normalize both
     # them and proper nulls back to pd.NA.
     _null_strings = {"<NA>", "nan", "NaT", "None"}
+
+    def _is_null(v):
+        return v is None or (isinstance(v, str) and v in _null_strings)
+
     for row_id, entry in latest.items():
         mask = id_mapping["customer_row_id"] == row_id
         if not mask.any():
             continue
+
+        # Reject-all decisions veto the candidates the human saw, not the
+        # row forever. If the rebuilt row now holds a DIFFERENT match, the
+        # machine found new evidence after the rejection — let it stand.
+        if _is_null(entry["after"].get("status")) and _is_null(entry["after"].get("matched_id")):
+            row = id_mapping.loc[mask].iloc[0]
+            current_id = row["matched_id"]
+            if pd.notna(current_id) and str(current_id) != "":
+                rejected = entry.get("rejected_ids")
+                if rejected is not None and str(current_id) not in rejected:
+                    continue
+                if rejected is None and row["status"] == "auto_matched" and (
+                    pd.notna(row["confidence"]) and float(row["confidence"]) >= 0.97
+                ):
+                    # Legacy rejection (candidates not recorded): only
+                    # mechanical domain-grade evidence overrides it.
+                    continue
+
         for col, val in entry["after"].items():
             if col in id_mapping.columns:
-                if val is None or (isinstance(val, str) and val in _null_strings):
+                if _is_null(val):
                     val = pd.NA
                 id_mapping.loc[mask, col] = val
     return id_mapping
@@ -144,6 +166,7 @@ def record_decision(
     status: str,
     reason: str = "",
     gate: str = "match_review",
+    rejected_ids: list | None = None,
     **fields,
 ) -> pd.DataFrame:
     """Apply one human decision: update the row, append to the decisions log.
@@ -182,6 +205,10 @@ def record_decision(
         "before": {k: _jsonable(before.get(k)) for k in updates},
         "after": {k: _jsonable(v) for k, v in updates.items()},
     }
+    if rejected_ids:
+        # A reject-all vetoes THESE candidates, not the row forever —
+        # replay lets later evidence with a different id stand.
+        entry["rejected_ids"] = [str(r) for r in rejected_ids]
     log_path = Path(results_dir) / DECISIONS_FILENAME
     with open(log_path, "a") as f:
         f.write(json.dumps(entry, default=str) + "\n")
