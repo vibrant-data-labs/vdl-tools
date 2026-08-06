@@ -19,12 +19,23 @@ class BaselineRun:
     taxonomy_version: str
 
 
+MATCH_OBJECTIVES = {"text", "financials"}
+
+
 @dataclass
 class EngagementConfig:
     customer: str
     vertical: str
     baseline_run: BaselineRun
     inputs: dict[str, str]
+    # What matching must deliver, per the downstream analysis:
+    #   "text"       — taxonomy mapping needs descriptive text; any adequate
+    #                  text bundle (scrapeable URL / LinkedIn / any source
+    #                  description) makes a row enrichment-ready; CB and NZI
+    #                  ids may mix freely (no financials are compared).
+    #   "financials" — funding comparisons need one consistent canonical
+    #                  source; a row is ready only with a matched id.
+    match_objective: str = "financials"
     confidentiality: dict[str, str] = field(default_factory=dict)
     # Optional per-engagement intake rulings (decisions are data):
     #   column_overrides: {input_label: {customer_column: canonical_field}}
@@ -48,6 +59,7 @@ class EngagementConfig:
                 vertical=eng["vertical"],
                 baseline_run=baseline,
                 inputs=eng["inputs"],
+                match_objective=eng.get("match_objective", "financials"),
                 confidentiality=eng.get("confidentiality", {}),
                 intake=eng.get("intake", {}),
                 root=path.parent,
@@ -59,6 +71,11 @@ class EngagementConfig:
 
     def validate(self):
         problems = []
+        if self.match_objective not in MATCH_OBJECTIVES:
+            problems.append(
+                f"match_objective must be one of {sorted(MATCH_OBJECTIVES)}, "
+                f"got {self.match_objective!r}"
+            )
         if self.baseline_run.source not in SOURCES:
             problems.append(
                 f"baseline_run.source must be one of {sorted(SOURCES)}, "

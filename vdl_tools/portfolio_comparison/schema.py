@@ -53,6 +53,12 @@ ID_MAPPING_COLUMNS = [
     "decided_by",
     "decided_at",
     "notes",
+    # Text-sufficiency accounting (drives readiness in text-objective
+    # engagements): which text sources a row has, whether it can proceed to
+    # enrichment, and any description the customer supplied directly.
+    "text_sources",
+    "enrichment_ready",
+    "customer_description",
 ]
 
 _ENUM_COLUMNS = {

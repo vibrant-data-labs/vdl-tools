@@ -102,9 +102,12 @@ _LINKEDIN_SLUG_RE = re.compile(
 
 
 def identity_domain(url: str | None) -> str:
-    """A domain usable as identity evidence: '' for shared platforms."""
+    """A domain usable as identity evidence: '' for shared platforms and
+    for junk that isn't domain-shaped ('Out of Business')."""
     domain = normalize_domain(url)
-    return "" if domain in PLATFORM_DOMAINS else domain
+    if "." not in domain or domain in PLATFORM_DOMAINS:
+        return ""
+    return domain
 
 
 def linkedin_slug(url: str | None) -> str:

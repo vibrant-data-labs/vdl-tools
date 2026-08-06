@@ -14,6 +14,8 @@ from vdl_tools.shared_tools.tools.logger import logger
 from vdl_tools.portfolio_comparison import baseline as baseline_mod
 from vdl_tools.portfolio_comparison.engagement_config import EngagementConfig
 from vdl_tools.portfolio_comparison.intake.normalize import (
+    identity_domain,
+    linkedin_slug,
     normalize_domain,
     normalize_ein,
 )
@@ -260,6 +262,7 @@ def _run_match_locked(config, state, results_dir) -> pd.DataFrame:
     # Replay AGAIN immediately before saving: decisions recorded while the
     # API lanes were running (minutes) must survive this run's save.
     id_mapping = replay_decisions(id_mapping, results_dir)
+    id_mapping = assess_readiness(id_mapping, config.match_objective)
 
     mapping_path = results_dir / "id_mapping.parquet"
     save_id_mapping(id_mapping, results_dir)
@@ -279,6 +282,49 @@ def _run_match_locked(config, state, results_dir) -> pd.DataFrame:
         n_auto=int((id_mapping["status"] == "auto_matched").sum()),
         n_review=int((id_mapping["status"] == "needs_review").sum()),
         n_unresolved=int(id_mapping["status"].isna().sum()),
+        match_objective=config.match_objective,
+        n_enrichment_ready=int(id_mapping["enrichment_ready"].sum()),
+    )
+    return id_mapping
+
+
+def assess_readiness(id_mapping: pd.DataFrame, objective: str) -> pd.DataFrame:
+    """Judge each row against the engagement's match objective.
+
+    text: a row is ready with a matched source record's description, a
+    scrapeable website, or a customer-supplied description. A LinkedIn page
+    alone is the LAST RESORT — queryable, but not sufficient: it stays in
+    text_sources yet does not make a row ready, so the customer still gets
+    asked and source matching keeps trying. Websites can be dead, which is
+    why source URIs (NZI preferred, then CB) remain worth having for every
+    row; liveness is confirmed at enrichment.
+    financials: only a matched canonical id counts.
+    """
+    website = id_mapping["customer_url"].map(lambda u: bool(identity_domain(u)))
+    linkedin = id_mapping["customer_url"].map(lambda u: bool(linkedin_slug(u)))
+    source = id_mapping["matched_id"].notna() & id_mapping["matched_id"].astype(str).ne("")
+    customer_text = (
+        id_mapping["customer_description"].notna()
+        & id_mapping["customer_description"].astype(str).str.strip().ne("")
+    )
+
+    labels = pd.DataFrame({
+        "website": website, "linkedin": linkedin,
+        "source_record": source, "customer_text": customer_text,
+    })
+    id_mapping["text_sources"] = labels.apply(
+        lambda r: ",".join(c for c in labels.columns if r[c]), axis=1
+    )
+    if objective == "text":
+        id_mapping["enrichment_ready"] = source | website | customer_text
+    else:
+        id_mapping["enrichment_ready"] = source
+    n_li_only = int((linkedin & ~id_mapping["enrichment_ready"]).sum())
+    logger.info(
+        "readiness (%s objective): %d of %d rows enrichment-ready"
+        " (%d linkedin-only, last resort)",
+        objective, int(id_mapping["enrichment_ready"].sum()),
+        len(id_mapping), n_li_only,
     )
     return id_mapping
 

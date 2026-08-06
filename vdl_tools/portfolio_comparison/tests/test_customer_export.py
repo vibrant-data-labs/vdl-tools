@@ -67,3 +67,38 @@ def test_response_resolution_order():
     # No usable signals -> final
     r = _resolve_response("", "", "", {}, set(), None)
     assert r == {"status": "unmatched_final"}
+
+
+def test_assess_readiness_text_vs_financials():
+    from vdl_tools.portfolio_comparison.run import assess_readiness
+
+    m = make_mapping([
+        {"customer_row_id": "r1", "customer_url": "https://real.org"},          # website only
+        {"customer_row_id": "r2", "customer_url": "linkedin.com/company/x"},    # linkedin only
+        {"customer_row_id": "r3", "matched_id": "cb-1"},                        # source record
+        {"customer_row_id": "r4", "customer_description": "They plant trees."}, # customer text
+        {"customer_row_id": "r5", "customer_url": "Out of Business"},           # nothing
+    ])
+    text = assess_readiness(m.copy(), "text")
+    # LinkedIn alone is last resort — NOT sufficient for readiness.
+    assert text["enrichment_ready"].tolist() == [True, False, True, True, False]
+    assert text.iloc[0]["text_sources"] == "website"
+    assert text.iloc[1]["text_sources"] == "linkedin"
+
+    fin = assess_readiness(m.copy(), "financials")
+    assert fin["enrichment_ready"].tolist() == [False, False, True, False, False]
+
+
+def test_text_mode_export_only_asks_for_textless_rows():
+    from vdl_tools.portfolio_comparison.run import assess_readiness
+
+    m = make_mapping([
+        {"customer_row_id": "r1", "customer_name": "Has Site",
+         "customer_url": "https://real.org", "entity_type": "for_profit"},
+        {"customer_row_id": "r2", "customer_name": "Nothing Co",
+         "customer_url": "Out of Business", "entity_type": "for_profit"},
+    ])
+    m = assess_readiness(m, "text")
+    frame = build_export_frame(m, objective="text")
+    assert list(frame["ID (do not edit)"]) == ["r2"]
+    assert "paste a 2-3 sentence description" in frame.iloc[0]["What we need"]
