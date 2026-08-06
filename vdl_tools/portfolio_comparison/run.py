@@ -271,6 +271,20 @@ def _run_match_locked(config, state, results_dir) -> pd.DataFrame:
         except Exception as exc:
             logger.warning("nonprofit identity lane skipped: %s", exc)
 
+    # NZI completeness pass (text objective): rows matched via other sources
+    # still get a domain-confirmed supplementary nzi_id for descriptions.
+    if config.match_objective == "text":
+        try:
+            from vdl_tools.portfolio_comparison.matching.source_adapter import NZIClient
+            from vdl_tools.portfolio_comparison.matching.tier2 import supplement_nzi_ids
+
+            id_mapping = supplement_nzi_ids(
+                id_mapping,
+                NZIClient(cache_path=results_dir / "nzi_search_cache.json"),
+            )
+        except Exception as exc:
+            logger.warning("NZI supplement pass skipped: %s", exc)
+
     # Replay AGAIN immediately before saving: decisions recorded while the
     # API lanes were running (minutes) must survive this run's save.
     id_mapping = replay_decisions(id_mapping, results_dir)

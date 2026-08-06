@@ -84,3 +84,51 @@ def test_chained_client_prefers_first_source_with_hits():
         Stub("crunchbase", [cand("cb-2", "name")]),
     ])
     assert [c.matched_id for c in chain.search("X", None)] == ["nzi-1", "cb-2"]
+
+
+def test_supplement_nzi_ids_domain_confirmed_only():
+    import pandas as pd
+    from vdl_tools.portfolio_comparison.matching.tier2 import supplement_nzi_ids
+    from vdl_tools.portfolio_comparison.schema import ID_MAPPING_COLUMNS
+
+    def mapping(rows):
+        df = pd.DataFrame(rows)
+        for col in ID_MAPPING_COLUMNS:
+            if col not in df.columns:
+                df[col] = pd.NA
+        return df[ID_MAPPING_COLUMNS]
+
+    def nzi_cand(cid, signal):
+        return Candidate(matched_id=cid, matched_name="Solaris", matched_url="",
+                         score=0.97, method="api_search", evidence={"signal": signal})
+
+    class StubNZI:
+        def __init__(self, results):
+            self.results, self.calls = results, []
+
+        def search(self, name, url):
+            self.calls.append((name, url))
+            return self.results.get(name, [])
+
+    m = mapping([
+        # CB-matched -> gets searched, domain-confirmed -> nzi_id filled
+        {"customer_row_id": "r1", "entity_type": "for_profit", "customer_name": "Solaris",
+         "matched_id": "80d35449-95fa-9c6e-2d83-1bdd92227246",
+         "matched_name": "Solaris", "matched_url": "https://solaris.com"},
+        # already NZI-matched -> skipped
+        {"customer_row_id": "r2", "entity_type": "for_profit", "customer_name": "Windward",
+         "matched_id": "12345", "matched_name": "Windward", "matched_url": "https://w.io"},
+        # CB-matched but NZI only has name-signal hits -> NOT filled
+        {"customer_row_id": "r3", "entity_type": "for_profit", "customer_name": "Tidal",
+         "matched_id": "9926bec5-645a-46b7-8281-518acaccad30",
+         "matched_name": "Tidal", "matched_url": "https://tidal.com"},
+    ])
+    client = StubNZI({
+        "Solaris": [nzi_cand("777", "domain")],
+        "Tidal": [nzi_cand("888", "name")],
+    })
+    out = supplement_nzi_ids(m, client)
+    assert out[out.customer_row_id == "r1"].iloc[0]["nzi_id"] == "777"
+    assert pd.isna(out[out.customer_row_id == "r2"].iloc[0]["nzi_id"])
+    assert pd.isna(out[out.customer_row_id == "r3"].iloc[0]["nzi_id"])
+    assert ("Windward", "w.io") not in [(n, u) for n, u in client.calls]

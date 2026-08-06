@@ -97,3 +97,43 @@ def run_tier2(
                 _accept(idx, winner, bool(winner.evidence.get("in_universe")))
     logger.info("Tier 2 (%s): searched %d rows", client.source, n_searched)
     return id_mapping, candidates_by_row, n_searched
+
+
+def supplement_nzi_ids(id_mapping: pd.DataFrame, nzi_client) -> pd.DataFrame:
+    """NZI completeness pass for text-objective engagements.
+
+    For-profits whose primary match came from another source (baseline or
+    CB) get one NZI name search; a sole domain-confirmed hit records the
+    NZI id in the supplementary ``nzi_id`` column so enrichment can prefer
+    NZI descriptions. The primary match is never touched, and name-only
+    hits are never accepted.
+    """
+    from vdl_tools.portfolio_comparison.intake.normalize import identity_domain
+
+    targets = id_mapping[
+        (id_mapping["entity_type"] == "for_profit")
+        & id_mapping["matched_id"].notna()
+        & ~id_mapping["matched_id"].astype(str).str.fullmatch(r"\d+")
+        & (id_mapping["nzi_id"].isna() | id_mapping["nzi_id"].astype(str).eq(""))
+    ]
+    n_filled = n_searched = 0
+    for idx, row in targets.iterrows():
+        domain = identity_domain(row["matched_url"]) or identity_domain(row["customer_url"])
+        if not domain:
+            continue
+        name = row["matched_name"] if pd.notna(row["matched_name"]) else row["customer_name"]
+        try:
+            hits = nzi_client.search(name, domain)
+        except Exception as exc:
+            logger.warning("NZI supplement search failed for %r: %s", name, exc)
+            continue
+        n_searched += 1
+        confirmed = [c for c in hits if c.evidence.get("signal") == "domain"]
+        if len(confirmed) == 1:
+            id_mapping.loc[idx, "nzi_id"] = confirmed[0].matched_id
+            n_filled += 1
+    logger.info(
+        "NZI supplement: searched %d non-NZI matches, domain-confirmed %d nzi_ids",
+        n_searched, n_filled,
+    )
+    return id_mapping

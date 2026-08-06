@@ -62,6 +62,10 @@ ID_MAPPING_COLUMNS = [
     # LinkedIn identity found beyond the customer URL (e.g. Coresignal
     # last-resort search) — queryable text source of last resort.
     "linkedin_url",
+    # Supplementary NZI identity for rows whose primary match is another
+    # source (text objective prefers NZI descriptions; domain-confirmed
+    # only; never replaces matched_id).
+    "nzi_id",
 ]
 
 _ENUM_COLUMNS = {
