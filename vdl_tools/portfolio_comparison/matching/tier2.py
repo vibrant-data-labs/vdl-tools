@@ -99,22 +99,20 @@ def run_tier2(
     return id_mapping, candidates_by_row, n_searched
 
 
-def supplement_nzi_ids(id_mapping: pd.DataFrame, nzi_client) -> pd.DataFrame:
-    """NZI completeness pass for text-objective engagements.
-
-    For-profits whose primary match came from another source (baseline or
-    CB) get one NZI name search; a sole domain-confirmed hit records the
-    NZI id in the supplementary ``nzi_id`` column so enrichment can prefer
-    NZI descriptions. The primary match is never touched, and name-only
-    hits are never accepted.
-    """
+def _supplement_ids(
+    id_mapping: pd.DataFrame, client, out_col: str, primary_id_pattern: str
+) -> pd.DataFrame:
+    """Completeness pass: matched for-profits whose primary id came from a
+    DIFFERENT source get one search against ``client``; a sole
+    domain-confirmed hit fills ``out_col``. The primary match is never
+    touched; name-only hits are never accepted."""
     from vdl_tools.portfolio_comparison.intake.normalize import identity_domain
 
     targets = id_mapping[
         (id_mapping["entity_type"] == "for_profit")
         & id_mapping["matched_id"].notna()
-        & ~id_mapping["matched_id"].astype(str).str.fullmatch(r"\d+")
-        & (id_mapping["nzi_id"].isna() | id_mapping["nzi_id"].astype(str).eq(""))
+        & ~id_mapping["matched_id"].astype(str).str.fullmatch(primary_id_pattern)
+        & (id_mapping[out_col].isna() | id_mapping[out_col].astype(str).eq(""))
     ]
     n_filled = n_searched = 0
     for idx, row in targets.iterrows():
@@ -123,17 +121,27 @@ def supplement_nzi_ids(id_mapping: pd.DataFrame, nzi_client) -> pd.DataFrame:
             continue
         name = row["matched_name"] if pd.notna(row["matched_name"]) else row["customer_name"]
         try:
-            hits = nzi_client.search(name, domain)
+            hits = client.search(name, domain)
         except Exception as exc:
-            logger.warning("NZI supplement search failed for %r: %s", name, exc)
+            logger.warning("%s supplement search failed for %r: %s", client.source, name, exc)
             continue
         n_searched += 1
         confirmed = [c for c in hits if c.evidence.get("signal") == "domain"]
         if len(confirmed) == 1:
-            id_mapping.loc[idx, "nzi_id"] = confirmed[0].matched_id
+            id_mapping.loc[idx, out_col] = confirmed[0].matched_id
             n_filled += 1
     logger.info(
-        "NZI supplement: searched %d non-NZI matches, domain-confirmed %d nzi_ids",
-        n_searched, n_filled,
+        "%s supplement: searched %d rows, domain-confirmed %d %s",
+        client.source, n_searched, n_filled, out_col,
     )
     return id_mapping
+
+
+def supplement_nzi_ids(id_mapping: pd.DataFrame, nzi_client) -> pd.DataFrame:
+    """Fill nzi_id for rows whose primary match isn't NZI (numeric ids)."""
+    return _supplement_ids(id_mapping, nzi_client, "nzi_id", r"\d+")
+
+
+def supplement_cb_ids(id_mapping: pd.DataFrame, cb_client) -> pd.DataFrame:
+    """Fill cb_id for rows whose primary match isn't CB (36-char uuids)."""
+    return _supplement_ids(id_mapping, cb_client, "cb_id", r"[0-9a-fA-F-]{36}")

@@ -118,5 +118,6 @@ def test_annotate_sources_by_id_shape():
     assert out.iloc[0]["nzi_id"] == "208486"  # self-contained NZI column
     assert out.iloc[1]["matched_source"] == "crunchbase"
     assert pd.isna(out.iloc[1]["nzi_id"])
+    assert out.iloc[1]["cb_id"] == "fa83c5e0-0412-44ec-8d86-f8e644bb3ae5"  # self-contained CB column
     assert out.iloc[2]["matched_source"] == "givingtuesday"
     assert pd.isna(out.iloc[3]["matched_source"])

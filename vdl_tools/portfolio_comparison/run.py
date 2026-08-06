@@ -279,19 +279,30 @@ def _run_match_locked(config, state, results_dir) -> pd.DataFrame:
         except Exception as exc:
             logger.warning("nonprofit identity lane skipped: %s", exc)
 
-    # NZI completeness pass (text objective): rows matched via other sources
-    # still get a domain-confirmed supplementary nzi_id for descriptions.
+    # Completeness passes (text objective): every matched row gets each
+    # source's domain-confirmed id regardless of which source won the
+    # primary match, so enrichment can choose descriptions freely.
     if config.match_objective == "text":
         try:
-            from vdl_tools.portfolio_comparison.matching.source_adapter import NZIClient
-            from vdl_tools.portfolio_comparison.matching.tier2 import supplement_nzi_ids
+            from vdl_tools.portfolio_comparison.matching.source_adapter import (
+                CrunchbaseClient,
+                NZIClient,
+            )
+            from vdl_tools.portfolio_comparison.matching.tier2 import (
+                supplement_cb_ids,
+                supplement_nzi_ids,
+            )
 
             id_mapping = supplement_nzi_ids(
                 id_mapping,
                 NZIClient(cache_path=results_dir / "nzi_search_cache.json"),
             )
+            id_mapping = supplement_cb_ids(
+                id_mapping,
+                CrunchbaseClient(cache_path=results_dir / "source_search_cache.json"),
+            )
         except Exception as exc:
-            logger.warning("NZI supplement pass skipped: %s", exc)
+            logger.warning("supplement passes skipped: %s", exc)
 
     # Replay AGAIN immediately before saving: decisions recorded while the
     # API lanes were running (minutes) must survive this run's save.
@@ -372,6 +383,8 @@ def annotate_sources(id_mapping: pd.DataFrame) -> pd.DataFrame:
     )
     primary_nzi = matched & (id_mapping["matched_source"] == "nzi")
     id_mapping.loc[primary_nzi, "nzi_id"] = id_mapping.loc[primary_nzi, "matched_id"]
+    primary_cb = matched & (id_mapping["matched_source"] == "crunchbase")
+    id_mapping.loc[primary_cb, "cb_id"] = id_mapping.loc[primary_cb, "matched_id"]
     return id_mapping
 
 

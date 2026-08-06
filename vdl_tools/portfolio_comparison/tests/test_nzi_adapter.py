@@ -103,6 +103,8 @@ def test_supplement_nzi_ids_domain_confirmed_only():
                          score=0.97, method="api_search", evidence={"signal": signal})
 
     class StubNZI:
+        source = "nzi"
+
         def __init__(self, results):
             self.results, self.calls = results, []
 
