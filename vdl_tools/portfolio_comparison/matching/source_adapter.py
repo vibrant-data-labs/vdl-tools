@@ -144,15 +144,111 @@ class NZIClient:
     source = "nzi"
 
     def __init__(self, cache_path=None, limit: int = 10):
-        self.cache_path = cache_path
         self.limit = limit
+        self.cache_path = cache_path
+        self._cache = {}
+        if cache_path is not None:
+            import json
+            from pathlib import Path
+
+            self.cache_path = Path(cache_path)
+            if self.cache_path.exists():
+                self._cache = json.loads(self.cache_path.read_text())
+
+    def _save_cache(self):
+        if self.cache_path is not None:
+            import json
+
+            self.cache_path.write_text(json.dumps(self._cache))
+
+    def _search_api(self, name: str) -> list[dict]:
+        from vdl_tools.scrape_enrich.netzero_insights.search_netzero_api import (
+            search_companies,
+        )
+
+        res = search_companies(name=name, limit=self.limit, checkpoint_dir=None)
+        return (res or {}).get("results", [])
 
     def search(self, name: str, url: str) -> list[Candidate]:
-        raise NotImplementedError(
-            "Tier-2 NZI search is follow-on work; wrap "
-            "vdl_tools/scrape_enrich/netzero_insights/search_netzero_api.py here "
-            "(name search only — confirm by returned website domain, spec §4.4)"
+        from vdl_tools.portfolio_comparison.intake.normalize import (
+            identity_domain,
+            normalize_name,
         )
+        from vdl_tools.portfolio_comparison.matching.universe import _similarity
+
+        name = (name or "").strip()
+        if not name:
+            return []
+        domain = identity_domain(url)
+        cache_key = f"{domain}|{name.lower()}"
+        if cache_key in self._cache:
+            return [Candidate(**c) for c in self._cache[cache_key]]
+
+        candidates = []
+        for hit in self._search_api(name):
+            hit_domain = identity_domain(hit.get("website"))
+            confirmed = bool(domain) and hit_domain == domain
+            score = (
+                0.97 if confirmed
+                else round(_similarity(normalize_name(name), normalize_name(hit.get("name"))), 3)
+            )
+            candidates.append(Candidate(
+                matched_id=str(hit["clientID"]),
+                matched_name=hit.get("name") or "",
+                matched_url=hit.get("website") or "",
+                score=score,
+                method="api_search",
+                evidence={
+                    "signal": "domain" if confirmed else "name",
+                    "domain": hit_domain,
+                    "description": hit.get("pitchLine") or "",
+                    "nzi": True,
+                    "in_universe": False,
+                },
+            ))
+        candidates.sort(key=lambda c: c.score, reverse=True)
+        # A domain-confirmed hit makes the same-name noise irrelevant.
+        confirmed_only = [c for c in candidates if c.evidence["signal"] == "domain"]
+        if confirmed_only:
+            candidates = confirmed_only
+
+        from dataclasses import asdict
+
+        self._cache[cache_key] = [asdict(c) for c in candidates]
+        self._save_cache()
+        return candidates
+
+
+class ChainedSourceClient:
+    """Query sources in preference order without letting preference shadow
+    evidence strength.
+
+    Text-objective engagements prefer NZI descriptions, so NZI is consulted
+    first — but a preferred source's *name-signal* hits must never hide a
+    later source's *domain-confirmed* hit. The first source producing a
+    domain-signal hit wins outright; otherwise all sources' name-signal
+    hits merge, preferred source first. Failing clients (missing
+    credentials, API errors) are logged and skipped, never fatal.
+    """
+
+    def __init__(self, clients: list):
+        self.clients = clients
+        self.source = "+".join(c.source for c in clients)
+
+    def search(self, name: str, url: str) -> list[Candidate]:
+        from vdl_tools.shared_tools.tools.logger import logger
+
+        merged: list[Candidate] = []
+        for client in self.clients:
+            try:
+                hits = client.search(name, url)
+            except Exception as exc:
+                logger.warning("%s search failed, trying next source: %s", client.source, exc)
+                continue
+            if any(c.evidence.get("signal") == "domain" for c in hits):
+                return hits
+            merged.extend(hits)
+        return merged
 
 
 def get_source_client(source: str, **kwargs) -> SourceClient:

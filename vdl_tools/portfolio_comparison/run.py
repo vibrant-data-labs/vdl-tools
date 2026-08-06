@@ -221,13 +221,25 @@ def _run_match_locked(config, state, results_dir) -> pd.DataFrame:
     # Tier 2: source-API pre-research BEFORE any human/web research (higher
     # recall than the baseline). Decided rows are excluded by construction.
     try:
-        from vdl_tools.portfolio_comparison.matching.source_adapter import get_source_client
+        from vdl_tools.portfolio_comparison.matching.source_adapter import (
+            ChainedSourceClient,
+            CrunchbaseClient,
+            NZIClient,
+            get_source_client,
+        )
         from vdl_tools.portfolio_comparison.matching.tier2 import run_tier2
 
-        client = get_source_client(
-            config.baseline_run.source,
-            cache_path=results_dir / "source_search_cache.json",
-        )
+        if config.match_objective == "text":
+            # Text objective mixes sources; NZI descriptions preferred.
+            client = ChainedSourceClient([
+                NZIClient(cache_path=results_dir / "nzi_search_cache.json"),
+                CrunchbaseClient(cache_path=results_dir / "source_search_cache.json"),
+            ])
+        else:
+            client = get_source_client(
+                config.baseline_run.source,
+                cache_path=results_dir / "source_search_cache.json",
+            )
         id_mapping, candidates, _ = run_tier2(id_mapping, client, candidates)
     except NotImplementedError as exc:
         logger.warning("Tier 2 skipped: %s", exc)
@@ -263,6 +275,21 @@ def _run_match_locked(config, state, results_dir) -> pd.DataFrame:
     # API lanes were running (minutes) must survive this run's save.
     id_mapping = replay_decisions(id_mapping, results_dir)
     id_mapping = assess_readiness(id_mapping, config.match_objective)
+
+    # Coresignal last resort (opt-in — costs search credits): find LinkedIn
+    # identities for textless rows, then reassess.
+    if config.match_objective == "text" and config.intake.get("use_coresignal"):
+        try:
+            from vdl_tools.shared_tools.tools.config_utils import get_configuration
+            from vdl_tools.portfolio_comparison.matching.coresignal import (
+                coresignal_last_resort,
+            )
+
+            api_key = get_configuration()["linkedin"]["coresignal_api_key"]
+            id_mapping = coresignal_last_resort(id_mapping, api_key)
+            id_mapping = assess_readiness(id_mapping, config.match_objective)
+        except Exception as exc:
+            logger.warning("Coresignal last resort skipped: %s", exc)
 
     mapping_path = results_dir / "id_mapping.parquet"
     save_id_mapping(id_mapping, results_dir)
@@ -301,7 +328,10 @@ def assess_readiness(id_mapping: pd.DataFrame, objective: str) -> pd.DataFrame:
     financials: only a matched canonical id counts.
     """
     website = id_mapping["customer_url"].map(lambda u: bool(identity_domain(u)))
-    linkedin = id_mapping["customer_url"].map(lambda u: bool(linkedin_slug(u)))
+    linkedin = id_mapping["customer_url"].map(lambda u: bool(linkedin_slug(u))) | (
+        id_mapping["linkedin_url"].notna()
+        & id_mapping["linkedin_url"].astype(str).str.strip().ne("")
+    )
     source = id_mapping["matched_id"].notna() & id_mapping["matched_id"].astype(str).ne("")
     customer_text = (
         id_mapping["customer_description"].notna()

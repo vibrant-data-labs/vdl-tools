@@ -59,6 +59,9 @@ ID_MAPPING_COLUMNS = [
     "text_sources",
     "enrichment_ready",
     "customer_description",
+    # LinkedIn identity found beyond the customer URL (e.g. Coresignal
+    # last-resort search) — queryable text source of last resort.
+    "linkedin_url",
 ]
 
 _ENUM_COLUMNS = {
