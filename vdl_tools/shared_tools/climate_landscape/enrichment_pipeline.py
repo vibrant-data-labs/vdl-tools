@@ -40,7 +40,8 @@ from vdl_tools.shared_tools.model_caches.climate_relevance_cache import (
 GLOBAL_CONFIG = get_configuration()
 
 
-MAX_WORKERS = 10
+MAX_WORKERS = 200
+N_PER_COMMIT = 200 # number of records to commit to the database at a time
 MAX_SCRAPE_WEBSITES_WORKERS = int(os.environ.get("MAX_SCRAPE_WEBSITES_WORKERS", 5))
 MIN_DESCRIPTION_LENGTH = 100
 TEXT_FIELDS = ["Description", "Description_990", "Website Summary", "About LinkedIn"]
@@ -55,7 +56,7 @@ def get_website_summaries(
     summary_prompt=GENERIC_ORG_WEBSITE_PROMPT_TEXT,
     use_combined=True,
     max_workers=MAX_WORKERS,
-    n_per_commit=20,
+    n_per_commit=N_PER_COMMIT,
     max_errors=1,
     max_scrape_websites_workers=MAX_SCRAPE_WEBSITES_WORKERS,
 ):
@@ -121,6 +122,7 @@ def get_scraped_df(
     summary_prompt=GENERIC_ORG_WEBSITE_PROMPT_TEXT,
     return_combined_res=True,
     max_workers=MAX_WORKERS,
+    n_per_commit=N_PER_COMMIT,
     max_errors=1,
     subpage_type='about',
 ):
@@ -140,7 +142,7 @@ def get_scraped_df(
             session=session,
             skip_existing=skip_existing,
             subpage_type=subpage_type,
-            n_per_commit=20,
+            n_per_commit=n_per_commit,
             max_errors=max_errors,
             summary_prompt=summary_prompt,
             return_combined_res=return_combined_res,
@@ -203,7 +205,7 @@ def get_scraped_df(
                 session=session,
                 skip_existing=skip_existing,
                 subpage_type="about",
-                n_per_commit=20,
+                n_per_commit=n_per_commit,
                 max_errors=max_errors,
                 summary_prompt=summary_prompt,
                 return_combined_res=return_combined_res,
@@ -233,6 +235,7 @@ def _missing_description_mask(df, min_description_length=MIN_DESCRIPTION_LENGTH,
 def prepare_for_relevance_model(
     df,
     max_workers=MAX_WORKERS,
+    n_per_commit=N_PER_COMMIT,
     description_col='Description'
 ):
     """The relevance models require descriptive text.
@@ -262,6 +265,7 @@ def prepare_for_relevance_model(
             df_missing_descriptions,
             skip_existing=True,
             max_workers=max_workers,
+            n_per_commit=n_per_commit,
         )
     else:
         summaries_for_missing_desc = {}
@@ -296,7 +300,7 @@ def run_relevance_model(
     system_prompt=None,
     prompt_format=None,
     prompt_name="climate_relevance_classification",
-    n_per_commit=20,
+    n_per_commit=N_PER_COMMIT,
     max_workers=MAX_WORKERS,
 ):
     model_name_safe = model_name.replace("-", "_").replace(":", "_")
@@ -395,7 +399,7 @@ def add_summary_of_summaries(
     max_workers=MAX_WORKERS,
     summary_prompt=BASE_SUMMARY_OF_SUMMARIES_PROMPT,
     summary_column='Summary',
-    n_per_commit=MAX_WORKERS * 50,
+    n_per_commit=N_PER_COMMIT,
 ):
 
     # Remove all the rows that are missing all the text fields
@@ -451,7 +455,7 @@ def run_pipeline(
     text_fields=TEXT_FIELDS,
     label_override_filepath=None,
     max_workers=MAX_WORKERS,
-    n_per_commit=MAX_WORKERS * 2,
+    n_per_commit=N_PER_COMMIT,
 ):
 
     log_major_step("loading pre-processed combined crunchbase + candid data")
