@@ -85,7 +85,7 @@ def _(enriched, mo, pd, re):
         mo.md(f"## Triage — {len(triage_rows)} rows not fully enriched"),
         mo.ui.table(_counts.sort_values("n", ascending=False), selection=None),
     ])
-    return (triage_rows,)
+    return triage, triage_rows
 
 
 @app.cell
@@ -115,28 +115,31 @@ def _(mo, t_problem, triage_rows):
 
 
 @app.cell
-def _(enriched, mo):
-    # Selectable entity table: pick a row, see the whole record below.
+def _(mo, triage):
+    # Selectable entity table (with the triage diagnosis columns, so
+    # problem rows filter/sort in place): pick a row, full record below.
     _view_cols = [c for c in (
-        "customer_name", "entity_type", "disposition", "matched_source",
-        "level0_one_earth_category", "one_earth_category", "text_quality",
-        "city", "state", "customer_row_id") if c in enriched.columns]
+        "customer_name", "entity_type", "disposition", "problem", "remedy",
+        "matched_source", "level0_one_earth_category", "one_earth_category",
+        "customer_row_id") if c in triage.columns]
     wb_table = mo.ui.table(
-        enriched[_view_cols].reset_index(drop=True),
+        triage[_view_cols].reset_index(drop=True),
         selection="single", page_size=15,
     )
-    mo.vstack([mo.md("## Entities — select a row for full detail"), wb_table])
+    mo.vstack([mo.md("## Entities — select a row for full detail "
+                     "(sort/search the `problem` column to diagnose)"),
+               wb_table])
     return (wb_table,)
 
 
 @app.cell
-def _(enriched, mo, pd, wb_table):
+def _(mo, pd, triage, wb_table):
     _sel = pd.DataFrame(wb_table.value)
     if len(_sel) == 0:
         _out = mo.md("*select a row above*")
     else:
-        _row = enriched[
-            enriched["customer_row_id"] == _sel.iloc[0]["customer_row_id"]
+        _row = triage[
+            triage["customer_row_id"] == _sel.iloc[0]["customer_row_id"]
         ].iloc[0]
         _short, _long = [], []
         for _col, _val in _row.items():
