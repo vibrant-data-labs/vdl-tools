@@ -45,6 +45,11 @@ class EngagementConfig:
     #     matches carry someone else's EIN (e.g. fiscal sponsor); ignore it
     #     for identity matching
     intake: dict = field(default_factory=dict)
+    # Optional enrichment settings:
+    #   taxonomy_path: absolute path to the pinned OE taxonomy xlsx (same
+    #     vintage as the baseline run, so portfolio and ecosystem taxonomies
+    #     stay comparable)
+    enrichment: dict = field(default_factory=dict)
     root: Path = field(default_factory=Path.cwd)
 
     @classmethod
@@ -62,6 +67,7 @@ class EngagementConfig:
                 match_objective=eng.get("match_objective", "financials"),
                 confidentiality=eng.get("confidentiality", {}),
                 intake=eng.get("intake", {}),
+                enrichment=eng.get("enrichment", {}),
                 root=path.parent,
             )
         except (KeyError, TypeError) as exc:

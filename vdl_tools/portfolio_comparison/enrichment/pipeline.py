@@ -32,6 +32,14 @@ from vdl_tools.portfolio_comparison.enrichment.summarize import (
     SUMMARIES_BASENAME,
     build_general_summaries,
 )
+from vdl_tools.portfolio_comparison.enrichment.taxonomy_geo import (
+    GEOCODED_BASENAME,
+    TAXONOMY_BASENAME,
+    geocode_rows,
+    map_taxonomy,
+)
+
+ENRICHED_BASENAME = "enriched_portfolio"
 
 
 def _sha(path: Path) -> str:
@@ -81,8 +89,56 @@ def run_enrich(engagement_root: str | Path) -> pd.DataFrame:
         seconds=int(time.time() - t0),
     )
 
-    logger.info(
-        "enrich: %d rows, %d with taxonomy text — ledger updated in pipeline_state.json",
-        len(summaries), int(summaries["text_for_taxonomy"].notna().sum()),
+    taxonomy_path = config.enrichment.get("taxonomy_path")
+    if taxonomy_path:
+        t0 = time.time()
+        taxonomy = map_taxonomy(summaries, results_dir, taxonomy_path)
+        matched = taxonomy["one_earth_category"].notna() & (
+            taxonomy["one_earth_category"] != "NoMatch"
+        )
+        state.record_stage(
+            "enrich_taxonomy",
+            n_rows=len(taxonomy),
+            n_matched=int(matched.sum()),
+            taxonomy_path=str(taxonomy_path),
+            artifact_sha256=_sha(results_dir / f"{TAXONOMY_BASENAME}.parquet"),
+            seconds=int(time.time() - t0),
+        )
+    else:
+        taxonomy = None
+        logger.warning(
+            "enrich: no enrichment.taxonomy_path in engagement.yaml — "
+            "taxonomy stage skipped"
+        )
+
+    t0 = time.time()
+    geocoded = geocode_rows(acquired, results_dir)
+    state.record_stage(
+        "enrich_geocode",
+        n_rows=len(geocoded),
+        n_geocoded=int(geocoded["Latitude"].notna().sum())
+        if "Latitude" in geocoded.columns else 0,
+        artifact_sha256=_sha(results_dir / f"{GEOCODED_BASENAME}.parquet"),
+        seconds=int(time.time() - t0),
     )
-    return summaries
+
+    # The deliverable: one row per customer_row_id, everything joined.
+    enriched = final.merge(
+        acquired.drop(columns=[c for c in acquired.columns
+                               if c in final.columns and c != "customer_row_id"]),
+        on="customer_row_id", how="left",
+    ).merge(
+        summaries.drop(columns=["customer_name"], errors="ignore"),
+        on="customer_row_id", how="left",
+    ).merge(geocoded, on="customer_row_id", how="left")
+    if taxonomy is not None:
+        enriched = enriched.merge(taxonomy, on="customer_row_id", how="left")
+    enriched = enriched.astype(object).where(pd.notna(enriched), pd.NA)
+    enriched.to_parquet(results_dir / f"{ENRICHED_BASENAME}.parquet", index=False)
+    enriched.to_csv(results_dir / f"{ENRICHED_BASENAME}.csv", index=False)
+
+    logger.info(
+        "enrich: %d rows -> %s (ledger updated in pipeline_state.json)",
+        len(enriched), results_dir / f"{ENRICHED_BASENAME}.parquet",
+    )
+    return enriched
