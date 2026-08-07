@@ -33,7 +33,7 @@ def _():
     decisions = [json.loads(line) for line in
                  (RESULTS / "decisions.jsonl").read_text().splitlines()] \
         if (RESULTS / "decisions.jsonl").exists() else []
-    return decisions, enriched, mo, pd, re, state
+    return RESULTS, decisions, enriched, json, mo, pd, re, state
 
 
 @app.cell
@@ -167,6 +167,58 @@ def _(mo, pd, triage, wb_table):
 {_texts_md}
 """)
     _out
+    return
+
+
+@app.cell
+def _(mo):
+    get_notes_ver, set_notes_ver = mo.state(0)
+    return get_notes_ver, set_notes_ver
+
+
+@app.cell
+def _(RESULTS, get_notes_ver, json, mo, pd, wb_table):
+    # Per-entity notes, persisted in entity_notes.json (git-tracked human
+    # work, like decisions.jsonl). Reloads on every save and app restart.
+    get_notes_ver()
+    _path = RESULTS / "entity_notes.json"
+    entity_notes = json.loads(_path.read_text()) if _path.exists() else {}
+    _sel = pd.DataFrame(wb_table.value)
+    if len(_sel):
+        _rid = _sel.iloc[0]["customer_row_id"]
+        _existing = entity_notes.get(_rid, {})
+        note_area = mo.ui.text_area(
+            value=_existing.get("note", ""),
+            placeholder="observations about this entity's texts, match, taxonomy…",
+            label="**Entity notes**")
+        note_by = mo.ui.text(value=_existing.get("by") or "zein", label="By")
+        note_save = mo.ui.run_button(label="Save note")
+        _stamp = (f"*last saved {_existing['at']} by {_existing['by']}*"
+                  if _existing.get("at") else "*no note yet*")
+        _ui = mo.vstack([note_area, mo.hstack([note_by, note_save]),
+                         mo.md(_stamp)])
+    else:
+        note_area = note_by = note_save = None
+        _ui = mo.md("")
+    _ui
+    return entity_notes, note_area, note_by, note_save
+
+
+@app.cell
+def _(RESULTS, entity_notes, json, mo, note_area, note_by, note_save, pd,
+      set_notes_ver, wb_table):
+    mo.stop(note_save is None or not note_save.value)
+    from datetime import datetime, timezone
+
+    _rid = pd.DataFrame(wb_table.value).iloc[0]["customer_row_id"]
+    entity_notes[_rid] = {
+        "note": note_area.value,
+        "by": note_by.value.strip() or "unknown",
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    (RESULTS / "entity_notes.json").write_text(
+        json.dumps(entity_notes, indent=2, sort_keys=True) + "\n")
+    set_notes_ver(lambda v: v + 1)
     return
 
 
