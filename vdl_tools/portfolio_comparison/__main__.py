@@ -18,7 +18,8 @@ def main():
     parser.add_argument(
         "stage",
         choices=["pin-baseline", "intake", "match", "status",
-                 "export-customer", "import-customer", "set-id", "finalize"],
+                 "export-customer", "import-customer", "set-id", "finalize",
+                 "enrich-acquire"],
     )
     parser.add_argument(
         "--root", default=".", help="engagement repo root (default: cwd)"
@@ -81,6 +82,17 @@ def main():
         from vdl_tools.portfolio_comparison.finalize import run_finalize
 
         print(run_finalize(root))
+    elif args.stage == "enrich-acquire":
+        from vdl_tools.portfolio_comparison.engagement_config import EngagementConfig
+        from vdl_tools.portfolio_comparison.enrichment.acquire import acquire_records
+        from vdl_tools.portfolio_comparison.finalize import FINAL_BASENAME
+        import pandas as pd
+
+        config = EngagementConfig.from_yaml(root / "engagement.yaml")
+        results_dir = config.results_dir()
+        final = pd.read_parquet(results_dir / f"{FINAL_BASENAME}.parquet")
+        acquired = acquire_records(final, results_dir)
+        print(f"{len(acquired)} rows -> {results_dir}/enrichment acquired_records.parquet")
     elif args.stage == "status":
         print(runners.run_status(root))
 
