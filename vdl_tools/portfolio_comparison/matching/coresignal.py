@@ -57,10 +57,13 @@ def coresignal_last_resort(
             hits = results[results.get("name", pd.Series(dtype=str)).astype(str).str.lower() == name.lower()]
         if len(hits) != 1:  # ambiguous or absent — last resort stays empty
             continue
-        li = _linkedin_url_from_record(hits.iloc[0].to_dict())
+        rec = hits.iloc[0].to_dict()
+        li = _linkedin_url_from_record(rec)
         if li:
             mask = id_mapping["customer_row_id"] == row["customer_row_id"]
             id_mapping.loc[mask, "linkedin_url"] = li
+            if rec.get("id") and str(rec["id"]).isdigit():
+                id_mapping.loc[mask, "coresignal_id"] = str(rec["id"])
             n_filled += 1
     logger.info("Coresignal last resort: filled linkedin_url for %d rows", n_filled)
     return id_mapping

@@ -14,14 +14,22 @@ from pathlib import Path
 import pandas as pd
 
 from vdl_tools.portfolio_comparison.matching.source_adapter import Candidate
-from vdl_tools.portfolio_comparison.schema import validate_id_mapping
+from vdl_tools.portfolio_comparison.schema import (
+    ID_MAPPING_COLUMNS,
+    validate_id_mapping,
+)
 
 DECISIONS_FILENAME = "decisions.jsonl"
 ID_MAPPING_BASENAME = "id_mapping"
 
 
 def load_id_mapping(results_dir: str | Path) -> pd.DataFrame:
-    return pd.read_parquet(Path(results_dir) / f"{ID_MAPPING_BASENAME}.parquet")
+    df = pd.read_parquet(Path(results_dir) / f"{ID_MAPPING_BASENAME}.parquet")
+    # Files written before a schema column existed heal on load.
+    for col in ID_MAPPING_COLUMNS:
+        if col not in df.columns:
+            df[col] = pd.NA
+    return df
 
 
 def save_id_mapping(df: pd.DataFrame, results_dir: str | Path):
@@ -37,17 +45,18 @@ def replay_decisions(id_mapping: pd.DataFrame, results_dir: str | Path) -> pd.Da
     """Re-apply recorded human decisions onto a freshly rebuilt ID Mapping File.
 
     match reruns recompute every row from scratch; humans must never lose
-    work to a rerun. Last decision per row wins. Decisions for rows that no
-    longer exist (customer file changed) are skipped.
+    work to a rerun. Decisions apply in chronological order so that
+    decisions touching DIFFERENT fields layer instead of shadowing each
+    other (a review accept and a manual source id on the same row must both
+    survive); for the same fields, chronological application means the last
+    decision still wins. Decisions for rows that no longer exist (customer
+    file changed) are skipped.
     """
     log_path = Path(results_dir) / DECISIONS_FILENAME
     if not log_path.exists():
         return id_mapping
-    latest: dict[str, dict] = {}
     with open(log_path) as f:
-        for line in f:
-            entry = json.loads(line)
-            latest[entry["customer_row_id"]] = entry
+        entries = [json.loads(line) for line in f]
     # Legacy entries serialized missing values as strings; normalize both
     # them and proper nulls back to pd.NA.
     _null_strings = {"<NA>", "nan", "NaT", "None"}
@@ -55,15 +64,21 @@ def replay_decisions(id_mapping: pd.DataFrame, results_dir: str | Path) -> pd.Da
     def _is_null(v):
         return v is None or (isinstance(v, str) and v in _null_strings)
 
-    for row_id, entry in latest.items():
-        mask = id_mapping["customer_row_id"] == row_id
+    for entry in entries:
+        mask = id_mapping["customer_row_id"] == entry["customer_row_id"]
         if not mask.any():
             continue
 
         # Reject-all decisions veto the candidates the human saw, not the
         # row forever. If the rebuilt row now holds a DIFFERENT match, the
         # machine found new evidence after the rejection — let it stand.
-        if _is_null(entry["after"].get("status")) and _is_null(entry["after"].get("matched_id")):
+        # Manual-id supplements (gate=manual_id) never carry match fields,
+        # so a null status there is not a rejection.
+        if (
+            entry.get("gate") != "manual_id"
+            and _is_null(entry["after"].get("status"))
+            and _is_null(entry["after"].get("matched_id"))
+        ):
             row = id_mapping.loc[mask].iloc[0]
             current_id = row["matched_id"]
             if pd.notna(current_id) and str(current_id) != "":

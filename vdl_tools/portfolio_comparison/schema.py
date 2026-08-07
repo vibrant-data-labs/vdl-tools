@@ -66,8 +66,10 @@ ID_MAPPING_COLUMNS = [
     # Supplementary source identities: each source's id for this org
     # regardless of which source won the primary match (text objective
     # mixes sources; domain-confirmed only; never replaces matched_id).
+    # VDL employees can set any of these out of process via `set-id`.
     "nzi_id",
     "cb_id",
+    "coresignal_id",
 ]
 
 _ENUM_COLUMNS = {

@@ -18,13 +18,25 @@ def main():
     parser.add_argument(
         "stage",
         choices=["pin-baseline", "intake", "match", "status",
-                 "export-customer", "import-customer"],
+                 "export-customer", "import-customer", "set-id", "finalize"],
     )
     parser.add_argument(
         "--root", default=".", help="engagement repo root (default: cwd)"
     )
     parser.add_argument(
         "--file", default=None, help="filled-in spreadsheet (import-customer)"
+    )
+    setid = parser.add_argument_group("set-id", "record an out-of-process source id")
+    setid.add_argument("--row", default=None, help="customer_row_id")
+    setid.add_argument("--name", default=None, help="customer name (must match one row)")
+    setid.add_argument("--cb-id", default=None, help="Crunchbase uuid")
+    setid.add_argument("--nzi-id", default=None, help="Netzero Insights id")
+    setid.add_argument("--coresignal-id", default=None, help="Coresignal org id")
+    setid.add_argument("--by", default=None, help="who found it (e.g. zein)")
+    setid.add_argument("--note", default="", help="where/how it was found")
+    setid.add_argument(
+        "--no-verify", action="store_true",
+        help="skip the live source-API check of the id",
     )
     args = parser.parse_args()
     root = Path(args.root).resolve()
@@ -53,6 +65,22 @@ def main():
 
         id_mapping = import_customer_responses(root, args.file)
         print(id_mapping["status"].value_counts(dropna=False).to_string())
+    elif args.stage == "set-id":
+        if not args.by:
+            parser.error("set-id requires --by <your name>")
+        from vdl_tools.portfolio_comparison.finalize import set_manual_id
+
+        set_manual_id(
+            root, decided_by=f"vdl:{args.by}",
+            row_id=args.row, name=args.name,
+            cb_id=args.cb_id, nzi_id=args.nzi_id,
+            coresignal_id=args.coresignal_id,
+            note=args.note, verify=not args.no_verify,
+        )
+    elif args.stage == "finalize":
+        from vdl_tools.portfolio_comparison.finalize import run_finalize
+
+        print(run_finalize(root))
     elif args.stage == "status":
         print(runners.run_status(root))
 
