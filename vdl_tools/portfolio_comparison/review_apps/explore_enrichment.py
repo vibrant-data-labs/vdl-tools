@@ -116,27 +116,54 @@ def _(mo, t_problem, triage_rows):
 
 @app.cell
 def _(enriched, mo):
-    # ---- Taxonomy drill-down: pillar → sub-pillar → solution counts.
-    _lvls = ["level0_one_earth_category", "level1_one_earth_category",
-             "level2_one_earth_category", "level3_one_earth_category"]
-    _t = enriched[enriched[_lvls[0]].notna()]
-    drill = (_t.groupby(_lvls, dropna=False).size().reset_index(name="n")
-             .sort_values("n", ascending=False))
-    drill.columns = ["Pillar", "Sub-pillar", "Solution", "Sub-term", "n"]
-    mo.vstack([mo.md("## Taxonomy drill-down"),
-               mo.ui.table(drill, page_size=15, selection=None)])
-    return
+    # Selectable entity table: pick a row, see the whole record below.
+    _view_cols = [c for c in (
+        "customer_name", "entity_type", "disposition", "matched_source",
+        "level0_one_earth_category", "one_earth_category", "text_quality",
+        "city", "state", "customer_row_id") if c in enriched.columns]
+    wb_table = mo.ui.table(
+        enriched[_view_cols].reset_index(drop=True),
+        selection="single", page_size=15,
+    )
+    mo.vstack([mo.md("## Entities — select a row for full detail"), wb_table])
+    return (wb_table,)
 
 
 @app.cell
-def _(enriched, mo):
-    mo.md("## Workbench — every column, marimo's native explorer")
-    return
+def _(enriched, mo, pd, wb_table):
+    _sel = pd.DataFrame(wb_table.value)
+    if len(_sel) == 0:
+        _out = mo.md("*select a row above*")
+    else:
+        _row = enriched[
+            enriched["customer_row_id"] == _sel.iloc[0]["customer_row_id"]
+        ].iloc[0]
+        _short, _long = [], []
+        for _col, _val in _row.items():
+            # List-valued columns (all_level* taxonomy paths) flatten to text.
+            if isinstance(_val, (list, tuple)) or type(_val).__name__ == "ndarray":
+                _val = ", ".join(str(x) for x in _val)
+                if not _val:
+                    continue
+            elif pd.isna(_val) or str(_val).strip() == "":
+                continue
+            if len(str(_val)) > 180:
+                _long.append((_col, str(_val)))
+            else:
+                _short.append((_col, str(_val).replace("|", "/")))
+        _field_md = "\n".join(
+            f"| {c} | {v} |" for c, v in _short)
+        _texts_md = "\n\n".join(
+            f"**{c}**\n\n{v}" for c, v in _long)
+        _out = mo.md(f"""
+### {_row['customer_name']}
+| field | value |
+|---|---|
+{_field_md}
 
-
-@app.cell
-def _(enriched, mo):
-    mo.ui.dataframe(enriched)
+{_texts_md}
+""")
+    _out
     return
 
 
