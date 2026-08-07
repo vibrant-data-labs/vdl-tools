@@ -47,7 +47,15 @@ def _ask(row, objective: str = "financials") -> str:
             "Correct? If not, please fill in the columns to the right."
         )
     if objective == "text":
-        if "linkedin" in str(row.get("text_sources") or ""):
+        sources = str(row.get("text_sources") or "")
+        if "website_dead" in sources:
+            return (
+                f"The website we have for this organization "
+                f"({row['customer_url']}) doesn't respond. If it moved, "
+                "please give us the current URL — or simply paste a 2-3 "
+                "sentence description of what the organization does."
+            )
+        if "linkedin" in sources:
             return (
                 "We only have a LinkedIn page for this organization. A "
                 "working website or a 2-3 sentence description of what it "

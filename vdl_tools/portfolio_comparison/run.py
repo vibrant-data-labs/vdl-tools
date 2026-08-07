@@ -325,6 +325,15 @@ def _run_match_locked(config, state, results_dir) -> pd.DataFrame:
         except Exception as exc:
             logger.warning("Coresignal last resort skipped: %s", exc)
 
+    # A URL nobody ever fetched is not a text source (Zein's ruling,
+    # 2026-08-07): rows whose readiness rests solely on the customer URL get
+    # a liveness check; dead links join the customer round-trip now instead
+    # of failing at enrichment after the customer window has closed.
+    if config.match_objective == "text":
+        id_mapping = verify_website_readiness(
+            id_mapping, cache_path=results_dir / "url_liveness_cache.json"
+        )
+
     mapping_path = results_dir / "id_mapping.parquet"
     save_id_mapping(id_mapping, results_dir)
 
@@ -428,6 +437,68 @@ def assess_readiness(id_mapping: pd.DataFrame, objective: str) -> pd.DataFrame:
         " (%d linkedin-only, last resort)",
         objective, int(id_mapping["enrichment_ready"].sum()),
         len(id_mapping), n_li_only,
+    )
+    return id_mapping
+
+
+def check_url_alive(url: str, timeout: float = 10.0) -> bool:
+    """A streamed GET (headers only, body never read). Dead: DNS/connection
+    failure or a definitive 404/410. Bot walls (403/503) count as alive —
+    the enrichment scraper deals with those."""
+    import httpx
+
+    target = url if "://" in str(url) else f"https://{url}"
+    try:
+        with httpx.stream(
+            "GET", target, follow_redirects=True, timeout=timeout
+        ) as resp:
+            return resp.status_code not in (404, 410)
+    except Exception:
+        return False
+
+
+def verify_website_readiness(
+    id_mapping: pd.DataFrame, cache_path, checker=check_url_alive
+) -> pd.DataFrame:
+    """Liveness-check rows whose enrichment readiness rests SOLELY on the
+    customer-provided URL (no source record, no customer description). Dead
+    URLs demote text_sources ``website`` → ``website_dead`` and drop
+    ``enrichment_ready`` so the row enters the customer round-trip. Results
+    cached per domain (``url_liveness_cache.json``); delete the cache entry
+    to re-check a domain."""
+    import json
+    from pathlib import Path as _Path
+
+    cache_path = _Path(cache_path)
+    cache = json.loads(cache_path.read_text()) if cache_path.exists() else {}
+
+    source = id_mapping["matched_id"].notna() & id_mapping["matched_id"].astype(str).ne("")
+    customer_text = (
+        id_mapping["customer_description"].notna()
+        & id_mapping["customer_description"].astype(str).str.strip().ne("")
+    )
+    website_only = (
+        id_mapping["enrichment_ready"].fillna(False).astype(bool)
+        & ~source
+        & ~customer_text
+    )
+    n_dead = 0
+    for idx, row in id_mapping[website_only].iterrows():
+        domain = identity_domain(row["customer_url"])
+        if not domain:
+            continue
+        if domain not in cache:
+            cache[domain] = checker(str(row["customer_url"]))
+        if not cache[domain]:
+            id_mapping.loc[idx, "text_sources"] = str(
+                id_mapping.loc[idx, "text_sources"] or ""
+            ).replace("website", "website_dead")
+            id_mapping.loc[idx, "enrichment_ready"] = False
+            n_dead += 1
+    cache_path.write_text(json.dumps(cache))
+    logger.info(
+        "website liveness: %d website-only-ready rows checked, %d dead links demoted",
+        int(website_only.sum()), n_dead,
     )
     return id_mapping
 
