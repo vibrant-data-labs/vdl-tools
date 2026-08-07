@@ -172,23 +172,30 @@ def _(mo, row):
         text = (c["evidence"].get("description") or "").strip().replace("|", "/")
         return text[:90] + "…" if len(text) > 90 else (text or "—")
 
-    _lines = ["| # | Candidate | Site | CB | Signal · Score | Universe | Description |",
-              "|---|---|---|---|---|---|---|"]
+    def _fin(c):
+        usd = c["evidence"].get("funding_usd")
+        if usd:
+            return f"${usd / 1e6:.1f}M" if usd >= 1e6 else f"${usd / 1e3:.0f}K"
+        return "💰" if c["evidence"].get("has_financials") else "—"
+
+    _lines = ["| # | Candidate | Site | CB | Signal · Score | Funding | Universe | Description |",
+              "|---|---|---|---|---|---|---|---|"]
     for _i, _c in enumerate(cands):
         _uni = "in" if _c["evidence"].get("in_universe") else "**OUT**"
         _rc = " 🔁" if _c["evidence"].get("redirect_confirmed") else ""
         _lines.append(
             f"| {_i} | {_c['matched_name']} | {_site(_c)} | {_cb(_c)} | "
-            f"{_c['method']} · {_c['score']:.2f}{_rc} | {_uni} | {_desc(_c)} |"
+            f"{_c['method']} · {_c['score']:.2f}{_rc} | {_fin(_c)} | {_uni} | {_desc(_c)} |"
         )
     cand_table = mo.md("\n".join(_lines)) if cands else mo.md("")
 
     options = {}
     for _i, _c in enumerate(cands):
         _in_uni = "in universe" if _c["evidence"].get("in_universe") else "OUT of universe"
+        _funding = f"  ·  💰{_fin(_c)}" if _c["evidence"].get("has_financials") else ""
         options[
             f"[{_i}] {_c['matched_name']}  ·  {_c['evidence'].get('domain') or 'no domain'}"
-            f"  ·  {_c['method']} {_c['score']:.2f}  ·  {_in_uni}"
+            f"  ·  {_c['method']} {_c['score']:.2f}  ·  {_in_uni}{_funding}"
         ] = _i
     options["✗ Reject all — none of these (goes to Tier 2 / customer)"] = "reject"
     options["✉ Send to customer round-trip"] = "customer"

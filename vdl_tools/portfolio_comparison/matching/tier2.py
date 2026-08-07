@@ -33,6 +33,7 @@ def run_tier2(
     from vdl_tools.portfolio_comparison.intake.normalize import identity_domain
     from vdl_tools.portfolio_comparison.matching.source_adapter import (
         pick_converging_candidate,
+        pick_funded_duplicate,
     )
 
     def _accept(idx, cand, in_universe):
@@ -68,6 +69,12 @@ def run_tier2(
                 and len(cands) == 1
                 and top.evidence.get("signal") == "domain"
             )
+            if not confident and cands:
+                # Duplicate profiles on the customer's own domain: the one
+                # reporting financials is the maintained record.
+                funded = pick_funded_duplicate(cands)
+                if funded is not None:
+                    top, confident = funded, True
             if not confident:
                 # Near-exact-name candidates (however many — name searches
                 # return every same-named company): if exactly one's domain
@@ -104,9 +111,13 @@ def _supplement_ids(
 ) -> pd.DataFrame:
     """Completeness pass: matched for-profits whose primary id came from a
     DIFFERENT source get one search against ``client``; a sole
-    domain-confirmed hit fills ``out_col``. The primary match is never
-    touched; name-only hits are never accepted."""
+    domain-confirmed hit fills ``out_col`` (duplicate same-domain profiles:
+    the funded one). The primary match is never touched; name-only hits are
+    never accepted."""
     from vdl_tools.portfolio_comparison.intake.normalize import identity_domain
+    from vdl_tools.portfolio_comparison.matching.source_adapter import (
+        pick_funded_duplicate,
+    )
 
     targets = id_mapping[
         (id_mapping["entity_type"] == "for_profit")
@@ -127,8 +138,9 @@ def _supplement_ids(
             continue
         n_searched += 1
         confirmed = [c for c in hits if c.evidence.get("signal") == "domain"]
-        if len(confirmed) == 1:
-            id_mapping.loc[idx, out_col] = confirmed[0].matched_id
+        pick = confirmed[0] if len(confirmed) == 1 else pick_funded_duplicate(confirmed)
+        if pick is not None:
+            id_mapping.loc[idx, out_col] = pick.matched_id
             n_filled += 1
     logger.info(
         "%s supplement: searched %d rows, domain-confirmed %d %s",

@@ -38,6 +38,7 @@ class CrunchbaseClient:
     source = "crunchbase"
     SEARCH_FIELDS = [
         "identifier", "website_url", "short_description", "operating_status",
+        "funding_total", "num_funding_rounds",
     ]
 
     def __init__(self, cache_path=None, limit: int = 10):
@@ -100,11 +101,19 @@ class CrunchbaseClient:
         )
         from vdl_tools.portfolio_comparison.matching.universe import _similarity
 
+        def _financials(hit):
+            total = hit.get("funding_total")
+            usd = total.get("value_usd") if isinstance(total, dict) else None
+            rounds = hit.get("num_funding_rounds")
+            has_rounds = isinstance(rounds, (int, float)) and rounds == rounds and rounds > 0
+            return bool(usd) or has_rounds, int(usd) if usd else None
+
         candidates = []
         for hit in hits:
             identifier = hit.get("identifier") or {}
             hit_name = identifier.get("value") or ""
             hit_domain = identity_domain(hit.get("website_url"))
+            has_financials, funding_usd = _financials(hit)
             # Per-hit promotion: a name/autocomplete hit whose website
             # exact-hosts the customer's domain is domain-grade evidence.
             hit_signal = signal
@@ -126,10 +135,16 @@ class CrunchbaseClient:
                     "description": hit.get("short_description") or "",
                     "operating_status": hit.get("operating_status") or "",
                     "cb_permalink": identifier.get("permalink") or "",
+                    "has_financials": has_financials,
+                    "funding_usd": funding_usd,
                     "in_universe": False,
                 },
             ))
-        candidates.sort(key=lambda c: c.score, reverse=True)
+        # Funded-first at equal score: duplicate CB profiles on one domain,
+        # the one reporting financial data is the maintained profile.
+        candidates.sort(
+            key=lambda c: (-c.score, not c.evidence.get("has_financials"))
+        )
         return candidates
 
     def search(self, name: str, url: str) -> list[Candidate]:
@@ -303,6 +318,24 @@ class ChainedSourceClient:
 def get_source_client(source: str, **kwargs) -> SourceClient:
     clients = {"crunchbase": CrunchbaseClient, "nzi": NZIClient}
     return clients[source](**kwargs)
+
+
+def pick_funded_duplicate(candidates: list[Candidate]) -> Candidate | None:
+    """Duplicate source profiles on ONE domain (all domain-signal hits): the
+    profile reporting financial data is the maintained one — choose it
+    (Zein's ruling, 2026-08-07). Returns None unless exactly one candidate
+    has financials; both-funded or both-unfunded stays with a human."""
+    if len(candidates) < 2:
+        return None
+    if any(c.evidence.get("signal") != "domain" for c in candidates):
+        return None
+    if len({c.evidence.get("domain") for c in candidates}) != 1:
+        return None
+    funded = [c for c in candidates if c.evidence.get("has_financials")]
+    if len(funded) != 1:
+        return None
+    funded[0].evidence["funded_duplicate_pick"] = True
+    return funded[0]
 
 
 def pick_converging_candidate(
