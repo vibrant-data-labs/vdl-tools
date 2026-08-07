@@ -7,6 +7,11 @@ from vdl_tools.portfolio_comparison.matching.tier2 import run_tier2
 from vdl_tools.portfolio_comparison.schema import ID_MAPPING_COLUMNS
 
 
+# The autouse fixture below fakes resolve_redirect; the HTTP-level test needs
+# the real one.
+_real_resolve_redirect = normalize.resolve_redirect
+
+
 @pytest.fixture(autouse=True)
 def fake_redirects(monkeypatch):
     # abalobi.info and abalobi.org both land on abalobi.org; everything else
@@ -14,6 +19,35 @@ def fake_redirects(monkeypatch):
     table = {"abalobi.info": "abalobi.org", "abalobi.org": "abalobi.org"}
     monkeypatch.setattr(normalize, "_REDIRECT_CACHE", {})
     monkeypatch.setattr(normalize, "resolve_redirect", lambda d, timeout=10.0: table.get(d, d))
+
+
+def test_resolve_redirect_falls_back_to_get_when_head_rejected(monkeypatch):
+    # buzzpowerbank.com: server 405s HEAD requests and only redirects GETs.
+    import httpx
+
+    class FakeResp:
+        def __init__(self, status_code, url):
+            self.status_code, self.url = status_code, url
+
+    class FakeStream:
+        def __init__(self, url):
+            self.url = url
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(
+        httpx, "head",
+        lambda url, **kw: FakeResp(405, "https://buzzpowerbank.com"),
+    )
+    monkeypatch.setattr(
+        httpx, "stream",
+        lambda method, url, **kw: FakeStream("https://buzzpowerbanks.nl"),
+    )
+    assert _real_resolve_redirect("buzzpowerbank.com") == "buzzpowerbanks.nl"
 
 
 def test_domains_converge_via_redirects():

@@ -47,7 +47,12 @@ def normalize_domain(url: str | None) -> str:
 
 
 def resolve_redirect(url: str, timeout: float = 10.0) -> str:
-    """Follow redirects to the final domain. Returns the input's domain on failure."""
+    """Follow redirects to the final domain. Returns the input's domain on failure.
+
+    HEAD first (no body), but some servers reject HEAD (405) or only redirect
+    GETs (buzzpowerbank.com), so an error status falls back to a streamed GET
+    — headers only, the body is never read.
+    """
     import httpx
 
     domain = normalize_domain(url)
@@ -57,7 +62,15 @@ def resolve_redirect(url: str, timeout: float = 10.0) -> str:
         resp = httpx.head(
             f"https://{domain}", follow_redirects=True, timeout=timeout
         )
-        return normalize_domain(str(resp.url)) or domain
+        if resp.status_code < 400:
+            return normalize_domain(str(resp.url)) or domain
+    except Exception:
+        pass
+    try:
+        with httpx.stream(
+            "GET", f"https://{domain}", follow_redirects=True, timeout=timeout
+        ) as resp:
+            return normalize_domain(str(resp.url)) or domain
     except Exception:
         return domain
 
