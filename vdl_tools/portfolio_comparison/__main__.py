@@ -19,7 +19,7 @@ def main():
         "stage",
         choices=["pin-baseline", "intake", "match", "status",
                  "export-customer", "import-customer", "set-id", "finalize",
-                 "enrich-acquire"],
+                 "enrich-acquire", "enrich-scrape"],
     )
     parser.add_argument(
         "--root", default=".", help="engagement repo root (default: cwd)"
@@ -92,7 +92,18 @@ def main():
         results_dir = config.results_dir()
         final = pd.read_parquet(results_dir / f"{FINAL_BASENAME}.parquet")
         acquired = acquire_records(final, results_dir)
-        print(f"{len(acquired)} rows -> {results_dir}/enrichment acquired_records.parquet")
+        print(f"{len(acquired)} rows -> {results_dir}/acquired_records.parquet")
+    elif args.stage == "enrich-scrape":
+        from vdl_tools.portfolio_comparison.engagement_config import EngagementConfig
+        from vdl_tools.portfolio_comparison.enrichment.acquire import ACQUIRED_BASENAME
+        from vdl_tools.portfolio_comparison.enrichment.scrape import scrape_texts
+        import pandas as pd
+
+        config = EngagementConfig.from_yaml(root / "engagement.yaml")
+        results_dir = config.results_dir()
+        acquired = pd.read_parquet(results_dir / f"{ACQUIRED_BASENAME}.parquet")
+        scraped = scrape_texts(acquired, results_dir)
+        print(scraped["text_quality"].value_counts(dropna=False).to_string())
     elif args.stage == "status":
         print(runners.run_status(root))
 
