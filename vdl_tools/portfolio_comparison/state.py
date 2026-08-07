@@ -18,6 +18,12 @@ STAGES = [
     "review_vdl",
     "review_customer",
     "finalize",
+    # Phase 2 (enrichment) — each stage is one ledger entry.
+    "enrich_acquire",
+    "enrich_scrape",
+    "enrich_summarize",
+    "enrich_taxonomy",
+    "enrich_geocode",
 ]
 
 STATE_FILENAME = "pipeline_state.json"
