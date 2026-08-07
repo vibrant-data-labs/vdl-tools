@@ -137,8 +137,42 @@ def run_enrich(engagement_root: str | Path) -> pd.DataFrame:
     enriched.to_parquet(results_dir / f"{ENRICHED_BASENAME}.parquet", index=False)
     enriched.to_csv(results_dir / f"{ENRICHED_BASENAME}.csv", index=False)
 
+    s3_uri = config.enrichment.get("s3_results_uri")
+    if s3_uri:
+        published = _publish_to_s3(
+            [results_dir / f"{ENRICHED_BASENAME}.parquet",
+             results_dir / f"{ENRICHED_BASENAME}.csv",
+             results_dir / "id_mapping_final.parquet"],
+            s3_uri,
+        )
+        state.record_artifact("enriched_portfolio_s3", published[0],
+                              all_uris=published)
+
     logger.info(
         "enrich: %d rows -> %s (ledger updated in pipeline_state.json)",
         len(enriched), results_dir / f"{ENRICHED_BASENAME}.parquet",
     )
     return enriched
+
+
+def _publish_to_s3(paths: list[Path], s3_uri: str) -> list[str]:
+    """Upload artifacts under {s3_uri}/{filename}; returns uploaded URIs.
+    Credentials come from config.ini [aws] (same as every other S3 use)."""
+    import boto3
+
+    from vdl_tools.shared_tools.tools.config_utils import get_configuration
+
+    aws = dict(get_configuration()["aws"])
+    client = boto3.client(
+        "s3",
+        aws_access_key_id=aws.get("access_key_id") or aws.get("aws_access_key_id"),
+        aws_secret_access_key=aws.get("secret_access_key") or aws.get("aws_secret_access_key"),
+    )
+    bucket, _, prefix = s3_uri.removeprefix("s3://").partition("/")
+    uris = []
+    for path in paths:
+        key = f"{prefix.rstrip('/')}/{path.name}" if prefix else path.name
+        client.upload_file(str(path), bucket, key)
+        uris.append(f"s3://{bucket}/{key}")
+        logger.info("published %s", uris[-1])
+    return uris
