@@ -148,8 +148,11 @@ def run_enrich(engagement_root: str | Path) -> pd.DataFrame:
              results_dir / "id_mapping_final.parquet"],
             s3_uri,
         )
-        state.record_artifact("enriched_portfolio_s3", published[0],
-                              all_uris=published)
+        state.record_artifact(
+            "enriched_portfolio_s3",
+            results_dir / f"{ENRICHED_BASENAME}.parquet",  # hash the local copy
+            s3_uris=published,
+        )
 
     logger.info(
         "enrich: %d rows -> %s (ledger updated in pipeline_state.json)",
