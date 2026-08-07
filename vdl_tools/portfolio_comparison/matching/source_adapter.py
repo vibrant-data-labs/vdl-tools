@@ -312,9 +312,12 @@ def pick_converging_candidate(
     to the same site as the customer's (aquila.earth → aquila.space).
 
     Many same-named companies is the normal case for name searches; redirect
-    convergence singles out the right one mechanically. Returns None unless
-    exactly one candidate converges — two converging candidates means
-    something strange, and strange goes to review.
+    convergence singles out the right one mechanically. The ambiguity guard
+    counts distinct DOMAINS, not candidates: a chained search returns the same
+    org once per source (NZI + CB both listing aquila.earth), and that is
+    corroboration. Two different converging domains means something strange,
+    and strange goes to review. Ties break by list order, which is chain
+    preference (NZI first for text engagements).
     """
     from vdl_tools.portfolio_comparison.intake.normalize import domains_converge
 
@@ -326,4 +329,7 @@ def pick_converging_candidate(
         and c.evidence.get("domain")
         and domains_converge(customer_domain, c.evidence["domain"])
     ]
-    return winners[0] if len(winners) == 1 else None
+    if not winners:
+        return None
+    domains = {c.evidence["domain"] for c in winners}
+    return winners[0] if len(domains) == 1 else None

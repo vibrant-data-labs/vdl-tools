@@ -106,6 +106,33 @@ def test_two_converging_candidates_go_to_review(monkeypatch):
     assert m.iloc[0]["status"] == "needs_review"
 
 
+def test_same_domain_from_two_sources_is_corroboration(monkeypatch):
+    # The Aquila regression: the NZI→CB chain returns the SAME org once per
+    # source (both on aquila.earth). Two converging candidates on one domain
+    # is corroboration, not ambiguity — chain order (NZI first) breaks the tie.
+    table = {"aquila.earth": "aquila.space", "aquila.space": "aquila.space"}
+    monkeypatch.setattr(normalize, "_REDIRECT_CACHE", {})
+    monkeypatch.setattr(normalize, "resolve_redirect", lambda d, timeout=10.0: table.get(d, d))
+
+    def src(cid, extra):
+        return Candidate(matched_id=cid, matched_name="Aquila",
+                         matched_url="https://www.aquila.earth", score=1.0,
+                         method="api_search",
+                         evidence={"signal": "name", "domain": "aquila.earth",
+                                   "in_universe": False, **extra})
+
+    m = make_mapping([{
+        "customer_row_id": "r6", "customer_name": "Aquila",
+        "customer_url": "https://aquila.space/", "entity_type": "for_profit",
+    }])
+    both = [src("108278", {"nzi": True}), src("151d5f17-cb-uuid", {})]
+    m, cands, _ = run_tier2(m, FakeClient({"Aquila": both}), {})
+    row = m.iloc[0]
+    assert row["status"] == "auto_matched"
+    assert row["matched_id"] == "108278"  # chain preference: NZI first
+    assert any(c.evidence.get("redirect_confirmed") for c in cands["r6"])
+
+
 def test_queued_row_with_converging_candidate_auto_resolves(monkeypatch):
     # A row the baseline matcher already sent to review must still escape
     # the queue when one of its candidates redirect-converges.
