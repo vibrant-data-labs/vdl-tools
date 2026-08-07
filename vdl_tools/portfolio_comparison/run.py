@@ -444,13 +444,15 @@ def assess_readiness(id_mapping: pd.DataFrame, objective: str) -> pd.DataFrame:
 def check_url_alive(url: str, timeout: float = 10.0) -> bool:
     """A streamed GET (headers only, body never read). Dead: DNS/connection
     failure or a definitive 404/410. Bot walls (403/503) count as alive —
-    the enrichment scraper deals with those."""
+    the enrichment scraper deals with those. Certs are NOT verified:
+    liveness asks whether content exists, and a self-signed cert
+    (winnememwintu.us) still fronts a scrapeable site."""
     import httpx
 
     target = url if "://" in str(url) else f"https://{url}"
     try:
         with httpx.stream(
-            "GET", target, follow_redirects=True, timeout=timeout
+            "GET", target, follow_redirects=True, timeout=timeout, verify=False,
         ) as resp:
             return resp.status_code not in (404, 410)
     except Exception:
