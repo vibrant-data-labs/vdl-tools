@@ -83,13 +83,29 @@ def _(RESULTS, get_version, json, load_id_mapping, mo, sort_ui):
 
 
 @app.cell
-def _(get_pos, mo, n_done, pending, set_pos):
+def _(mo, pending, set_pos):
+    # Buttons must be module globals for marimo to register their on_click,
+    # and must NOT read get_pos (a cell that reads the state it sets gets
+    # recreated on every click). Functional updates keep them stable.
+    prev_btn = mo.ui.button(
+        label="◀ prev",
+        on_click=lambda _: set_pos(lambda p: max(0, min(p, len(pending) - 1) - 1)),
+    )
+    next_btn = mo.ui.button(
+        label="next ▶",
+        on_click=lambda _: set_pos(lambda p: min(len(pending) - 1, p + 1)),
+    )
+    return next_btn, prev_btn
+
+
+@app.cell
+def _(get_pos, mo, n_done, next_btn, pending, prev_btn):
     pos = min(get_pos(), len(pending) - 1)
     row = pending[pos]
     nav = mo.hstack([
-        mo.ui.button(label="◀ prev", on_click=lambda _: set_pos(max(0, pos - 1))),
+        prev_btn,
         mo.md(f"**{pos + 1} / {len(pending)}** pending ({n_done} decided)"),
-        mo.ui.button(label="next ▶", on_click=lambda _: set_pos(min(len(pending) - 1, pos + 1))),
+        next_btn,
     ], justify="center")
     return nav, pos, row
 
