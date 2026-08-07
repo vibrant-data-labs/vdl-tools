@@ -102,9 +102,10 @@ def scrape_texts(
 
     by_key: dict[str, dict] = {}
     for _, s in scraped.iterrows():
+        n_err = s.get("num_errors")
         by_key[s["cleaned_home_key"]] = {
             "text": s.get("combined_text"),
-            "num_errors": int(s.get("num_errors") or 0),
+            "num_errors": int(n_err) if pd.notna(n_err) else 0,
         }
 
     def _lookup(url):
