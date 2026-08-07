@@ -204,7 +204,33 @@ class GeocodeCache:
         self.session.execute(stmt)
 
     @staticmethod
-    def _row_to_location(row) -> dict:
+    def _component_from_response(response_full, component_type: str):
+        """Read one address component out of a stored Google response.
+
+        ``get_component`` takes a geopy object (via ``.raw``); the cached
+        ``response_full`` is already a plain dict, so it needs its own reader.
+
+        Parameters
+        ----------
+        response_full : dict or None
+            The stored raw Google response.
+        component_type : str
+            e.g. ``'administrative_area_level_2'``.
+
+        Returns
+        -------
+        str or None
+            The component's ``long_name``.
+        """
+        if not isinstance(response_full, dict):
+            return None
+        for component in response_full.get("address_components", []):
+            if component_type in component.get("types", []):
+                return component.get("long_name")
+        return None
+
+    @classmethod
+    def _row_to_location(cls, row) -> dict:
         """Map a Geocode row (or success-row dict) to the pipeline location dict."""
         getter = row.get if isinstance(row, dict) else lambda k: getattr(row, k)
         return {
@@ -213,6 +239,15 @@ class GeocodeCache:
             "city": getter("city"),
             "state": getter("state"),
             "country": getter("country"),
+            # County (US) / second-level admin area elsewhere. Read from the
+            # stored response rather than a new column, so there is no
+            # migration and every already-cached address gains it for free.
+            # Google omits it exactly where the city IS the county equivalent
+            # (Washington DC, Baltimore city, Virginia's independent cities),
+            # so callers needing full coverage fall back to `city`.
+            "county": cls._component_from_response(
+                getter("response_full"), "administrative_area_level_2"
+            ),
         }
 
     def bulk_get_cache_or_run(
