@@ -41,12 +41,12 @@ __all__ = [
 def geocode_addresses(df, address, test=None, use_cached_result=True):
     """
     get lat long from address
-    also extract city, state, and country
+    also extract city, county, state, and country
     df : dataframe with address
     address : column name of address
     test : sample size for testing
 
-    Returns: df with added columns of latitude, longitude, city, state, country
+    Returns: df with added columns of latitude, longitude, city, county, state, country
     """
     if test is not None:
         logger.info("subset %d for testing" % test)
@@ -90,6 +90,13 @@ def geocode_addresses(df, address, test=None, use_cached_result=True):
     )
     df_w_geo["country"] = df_w_geo["location"].apply(
         lambda x: x['country'] if x else None
+    )
+    # County (US) / second-level admin area. Google omits it where the city is
+    # itself the county equivalent (DC, Baltimore city, Virginia's independent
+    # cities), so it is None for those — fall back to `city` when full
+    # coverage matters.
+    df_w_geo["county"] = df_w_geo["location"].apply(
+        lambda x: x['county'] if x else None
     )
 
     df_w_geo.drop("location", axis=1, inplace=True)
