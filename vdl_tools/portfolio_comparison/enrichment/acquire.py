@@ -41,7 +41,8 @@ def _fetch_nzi(nzi_ids: list[int]) -> pd.DataFrame:
         get_companies_details,
     )
 
-    return get_companies_details(nzi_ids)
+    res = get_companies_details(nzi_ids)
+    return pd.DataFrame(res) if isinstance(res, list) else res
 
 
 def _jsonish(value, key="value"):
@@ -126,7 +127,12 @@ def _gt_ein(row) -> str | None:
 
 
 def _attach_gt(out: pd.DataFrame, gt_client) -> pd.DataFrame:
-    eins = sorted({e for e in out["_gt_ein"].dropna()})
+    # The datamart stores EINs digits-only; our canonical form is dashed.
+    # Query and key everything by digits.
+    def _digits(ein):
+        return str(ein).replace("-", "")
+
+    eins = sorted({_digits(e) for e in out["_gt_ein"].dropna()})
     if not eins:
         return out
 
@@ -145,7 +151,7 @@ def _attach_gt(out: pd.DataFrame, gt_client) -> pd.DataFrame:
         grants = gt_client.get_grants(eins, role="grantee")
         for g in grants:
             if g.grantee_ein and g.grant_purpose and str(g.grant_purpose).strip():
-                purposes.setdefault(g.grantee_ein, []).append(
+                purposes.setdefault(_digits(g.grantee_ein), []).append(
                     (g.taxyear or 0, str(g.grant_purpose).strip())
                 )
     except Exception as exc:
@@ -172,7 +178,7 @@ def _attach_gt(out: pd.DataFrame, gt_client) -> pd.DataFrame:
                 ordered.append(text)
         return " | ".join(ordered) if ordered else pd.NA
 
-    keys = out["_gt_ein"]
+    keys = out["_gt_ein"].map(lambda e: _digits(e) if pd.notna(e) else e)
     out["gt_name"] = keys.map(lambda e: _np(e, "name") if pd.notna(e) else pd.NA)
     out["gt_website"] = keys.map(lambda e: _np(e, "website") if pd.notna(e) else pd.NA)
     out["gt_unique_text"] = keys.map(lambda e: _np(e, "unique_text") if pd.notna(e) else pd.NA)

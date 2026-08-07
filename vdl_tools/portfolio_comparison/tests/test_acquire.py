@@ -80,15 +80,19 @@ class FakeGrant:
 
 
 class FakeGT:
+    """The datamart stores EINs digits-only — dashed lookups must miss,
+    exactly like the real client (pilot bug: 0 of 53 EINs hit)."""
+
     def get_nonprofit(self, ein):
-        return FakeNonprofit(ein=ein) if ein == "12-3456789" else None
+        return FakeNonprofit(ein=ein) if ein == "123456789" else None
 
     def get_grants(self, eins, role="grantee"):
         assert role == "grantee"
+        assert all("-" not in e for e in eins), "GT queries must use digits-only EINs"
         return [
-            FakeGrant("12-3456789", "Reforestation program", 2024),
-            FakeGrant("12-3456789", "General support", 2023),
-            FakeGrant("12-3456789", "Reforestation program", 2022),  # dupe text
+            FakeGrant("123456789", "Reforestation program", 2024),
+            FakeGrant("123456789", "General support", 2023),
+            FakeGrant("123456789", "Reforestation program", 2022),  # dupe text
         ]
 
 
