@@ -15,7 +15,7 @@ def test_map_taxonomy_only_maps_rows_with_text(tmp_path):
     ])
     seen = {}
 
-    def fake_mapper(df, taxonomy_path, results_dir):
+    def fake_mapper(df, taxonomy_path, results_dir, recovery=False):
         seen["ids"] = list(df["customer_row_id"])
         mapped = df.copy()
         mapped["one_earth_category"] = "Solar Photovoltaic"

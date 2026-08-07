@@ -92,7 +92,9 @@ def run_enrich(engagement_root: str | Path) -> pd.DataFrame:
     taxonomy_path = config.enrichment.get("taxonomy_path")
     if taxonomy_path:
         t0 = time.time()
-        taxonomy = map_taxonomy(summaries, results_dir, taxonomy_path)
+        recovery = bool(config.enrichment.get("recovery"))
+        taxonomy = map_taxonomy(summaries, results_dir, taxonomy_path,
+                                recovery=recovery)
         matched = taxonomy["one_earth_category"].notna() & (
             taxonomy["one_earth_category"] != "NoMatch"
         )
@@ -100,6 +102,7 @@ def run_enrich(engagement_root: str | Path) -> pd.DataFrame:
             "enrich_taxonomy",
             n_rows=len(taxonomy),
             n_matched=int(matched.sum()),
+            recovery=recovery,
             taxonomy_path=str(taxonomy_path),
             artifact_sha256=_sha(results_dir / f"{TAXONOMY_BASENAME}.parquet"),
             seconds=int(time.time() - t0),

@@ -18,7 +18,7 @@ GEOCODED_BASENAME = "geocoded"
 LOCATION_PRECEDENCE = ["cb_location", "nzi_location", "gt_location"]
 
 
-def _default_taxonomy_mapper(df, taxonomy_path, results_dir):
+def _default_taxonomy_mapper(df, taxonomy_path, results_dir, recovery=False):
     from vdl_tools.shared_tools.taxonomy_mapping.oe_hierarchical_taxonomy_mapping import (
         add_one_earth_hierarchical_taxonomy,
     )
@@ -33,6 +33,11 @@ def _default_taxonomy_mapper(df, taxonomy_path, results_dir):
         distributed_funding_results_path=(
             Path(results_dir) / f"{TAXONOMY_BASENAME}_distributed_funding.json"
         ),
+        # enrichment.recovery in engagement.yaml: a second-chance scope pass
+        # for walk-refused orgs; in-scope ones re-walk and land at least at
+        # pillar depth (OSP: recovered 40 of 91).
+        recover_unmatched=recovery,
+        walk_recovered=recovery,
     )
 
 
@@ -41,11 +46,14 @@ def map_taxonomy(
     results_dir: str | Path,
     taxonomy_path: str | Path,
     mapper=_default_taxonomy_mapper,
+    recovery: bool = False,
 ) -> pd.DataFrame:
     """Map every row with taxonomy text; write ``taxonomy_mapping.parquet``."""
     ready = summaries[summaries["text_for_taxonomy"].notna()].copy()
-    logger.info("taxonomy: mapping %d of %d rows", len(ready), len(summaries))
-    mapped, _distributed = mapper(ready, taxonomy_path, results_dir)
+    logger.info("taxonomy: mapping %d of %d rows (recovery=%s)",
+                len(ready), len(summaries), recovery)
+    mapped, _distributed = mapper(ready, taxonomy_path, results_dir,
+                                  recovery=recovery)
 
     tax_cols = [c for c in mapped.columns if c not in summaries.columns]
     out = summaries[["customer_row_id"]].merge(
