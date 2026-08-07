@@ -19,7 +19,7 @@ def main():
         "stage",
         choices=["pin-baseline", "intake", "match", "status",
                  "export-customer", "import-customer", "set-id", "finalize",
-                 "enrich-acquire", "enrich-scrape", "enrich-summarize"],
+                 "enrich", "enrich-acquire", "enrich-scrape", "enrich-summarize"],
     )
     parser.add_argument(
         "--root", default=".", help="engagement repo root (default: cwd)"
@@ -82,6 +82,12 @@ def main():
         from vdl_tools.portfolio_comparison.finalize import run_finalize
 
         print(run_finalize(root))
+    elif args.stage == "enrich":
+        from vdl_tools.portfolio_comparison.enrichment.pipeline import run_enrich
+
+        out = run_enrich(root)
+        print(f"{out['text_for_taxonomy'].notna().sum()} of {len(out)} rows "
+              "carry text_for_taxonomy; stages recorded in pipeline_state.json")
     elif args.stage == "enrich-acquire":
         from vdl_tools.portfolio_comparison.engagement_config import EngagementConfig
         from vdl_tools.portfolio_comparison.enrichment.acquire import acquire_records

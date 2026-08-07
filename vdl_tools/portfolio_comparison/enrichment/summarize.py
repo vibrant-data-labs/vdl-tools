@@ -40,7 +40,10 @@ def _default_sos(ids_text_lists: list) -> dict:
         generate_summary_of_summaries,
     )
 
-    return generate_summary_of_summaries(ids_text_lists)
+    # n_per_commit must be explicit: the function's None default crashes the
+    # prompt cache's commit cadence (10 * n_per_commit). Climate-landscape
+    # always passes it too.
+    return generate_summary_of_summaries(ids_text_lists, n_per_commit=50)
 
 
 def summarize_websites(scraped: pd.DataFrame, summarizer=_default_website_summarizer) -> dict:

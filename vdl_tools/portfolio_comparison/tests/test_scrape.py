@@ -42,8 +42,39 @@ def test_target_selection_dedupes_and_skips_platforms():
     assert t.at["r4", "customer_domain"] is None
 
 
+def test_self_heal_retries_alive_dead_domains(tmp_path):
+    # Shared-cache lesson: a cached permanent-skip ('dead') on a domain that
+    # answers a live GET gets one forced re-scrape before the verdict stands.
+    calls = []
+
+    def scraper(urls, force=False):
+        from vdl_tools.scrape_enrich.scraper.scrape_websites import (
+            extract_website_name,
+        )
+
+        calls.append(force)
+        return pd.DataFrame([{
+            "cleaned_home_key": extract_website_name(u), "home_url": u,
+            "combined_text": LONG if force else None,
+            "num_errors": 0 if force else 3,
+        } for u in urls])
+
+    frame = pd.DataFrame([{
+        "customer_row_id": "r1", "customer_url": "https://blocked.example",
+        "nzi_website": pd.NA, "cb_website": pd.NA, "gt_website": pd.NA,
+    }])
+    out = scrape_texts(frame, tmp_path, scraper=scraper, liveness=lambda d: True)
+    assert calls == [False, True]
+    assert out.iloc[0]["text_quality"] == "ok"
+
+    # A genuinely unreachable domain is never retried.
+    calls.clear()
+    scrape_texts(frame, tmp_path, scraper=scraper, liveness=lambda d: False)
+    assert calls == [False]
+
+
 def test_scrape_texts_fans_out_and_gates(tmp_path):
-    def fake_scraper(urls):
+    def fake_scraper(urls, force=False):
         from vdl_tools.scrape_enrich.scraper.scrape_websites import (
             extract_website_name,
         )

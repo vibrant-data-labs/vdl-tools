@@ -64,18 +64,22 @@ def select_scrape_targets(acquired: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _default_scraper(urls: list[str]) -> pd.DataFrame:
+def _default_scraper(urls: list[str], force: bool = False) -> pd.DataFrame:
     from vdl_tools.scrape_enrich.scraper.scrape_websites import scrape_websites_psql
     from vdl_tools.shared_tools.web_summarization.website_summarization_cache_psql import (
         GENERIC_ORG_WEBSITE_PROMPT_TEXT,
     )
 
     # Same prompt the summarization stage uses, so the scraper's token
-    # budgeting matches what the LLM will actually see.
+    # budgeting matches what the LLM will actually see. force=True is the
+    # self-heal path: bypass cached permanent-skips and ignore TLS (a
+    # self-signed cert still fronts scrapeable content).
     return scrape_websites_psql(
         urls,
         summary_prompt=GENERIC_ORG_WEBSITE_PROMPT_TEXT,
         return_combined_res=True,
+        skip_existing=not force,
+        verify_ssl=not force,
     )
 
 
@@ -83,8 +87,16 @@ def scrape_texts(
     acquired: pd.DataFrame,
     results_dir: str | Path,
     scraper=_default_scraper,
+    self_heal: bool = True,
+    liveness=None,
 ) -> pd.DataFrame:
-    """Scrape each distinct domain once; fan texts back out to rows."""
+    """Scrape each distinct domain once; fan texts back out to rows.
+
+    Self-heal (pilot lesson, 2026-08-07): the shared scrape cache carries
+    permanent-skip failures from historical runs, so a 'dead' verdict is
+    checked against reality — domains that answer a live GET get ONE forced
+    re-scrape (cache bypassed, TLS ignored) before the verdict stands.
+    """
     from vdl_tools.scrape_enrich.scraper.scrape_websites import extract_website_name
 
     targets = select_scrape_targets(acquired)
@@ -101,12 +113,35 @@ def scrape_texts(
     scraped = scraper(sorted(url_by_domain.values()))
 
     by_key: dict[str, dict] = {}
-    for _, s in scraped.iterrows():
-        n_err = s.get("num_errors")
-        by_key[s["cleaned_home_key"]] = {
-            "text": s.get("combined_text"),
-            "num_errors": int(n_err) if pd.notna(n_err) else 0,
-        }
+
+    def _ingest(frame):
+        for _, s in frame.iterrows():
+            n_err = s.get("num_errors")
+            by_key[s["cleaned_home_key"]] = {
+                "text": s.get("combined_text"),
+                "num_errors": int(n_err) if pd.notna(n_err) else 0,
+            }
+
+    _ingest(scraped)
+
+    if self_heal:
+        if liveness is None:
+            from vdl_tools.portfolio_comparison.run import check_url_alive
+            liveness = check_url_alive
+        dead = []
+        for d, url in url_by_domain.items():
+            rec = by_key.get(extract_website_name(url))
+            text = rec["text"] if rec else None
+            n_err = rec["num_errors"] if rec else 1
+            if classify_text_quality(text, n_err) in ("dead", "empty"):
+                dead.append(d)
+        alive = [d for d in dead if liveness(d)]
+        if alive:
+            logger.info(
+                "scrape self-heal: %d dead-verdict domains answer a live GET — "
+                "forced retry (cache bypassed, TLS off)", len(alive),
+            )
+            _ingest(scraper([url_by_domain[d] for d in alive], force=True))
 
     def _lookup(url):
         if not url:
