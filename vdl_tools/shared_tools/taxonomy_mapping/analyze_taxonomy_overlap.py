@@ -787,7 +787,8 @@ def _summary_markdown(pairs_by_level: dict[int, pd.DataFrame],
              "## Levels",
              "",
              "| level | terms in use | terms with ≤3 entities "
-             "| terms with no overlap | co-occurring pairs | nested pairs |",
+             "| terms with no overlap | co-occurring pairs (% of possible) "
+             "| nested pairs (% of possible) |",
              "|---|---|---|---|---|---|"]
     if summary_level_indices is None:
         summary_level_indices = list(pairs_by_level)
@@ -815,10 +816,18 @@ def _summary_markdown(pairs_by_level: dict[int, pd.DataFrame],
         n_iso = stats.get("n_isolated", 0)
         iso_cell = (f"{n_iso} ({n_iso / n_terms:.0%})"
                     if n_terms else "—")
+        # pair counts as a share of all possible term pairs at this level
+        possible = n_terms * (n_terms - 1) // 2
+        def _of_possible(k):
+            if not possible:
+                return str(k)
+            frac = k / possible
+            return f"{k} ({frac:.0%})" if frac >= 0.095 else f"{k} ({frac:.1%})"
+        n_nested = int(pairs.nested.sum()) if not pairs.empty else 0
         excluded = "" if idx in summary_level_indices else " *(counts only)*"
         lines.append(f"| {name}{excluded} | {n_terms} | {thin_cell} | "
-                     f"{iso_cell} | {len(pairs)} | "
-                     f"{int(pairs.nested.sum()) if not pairs.empty else 0} |")
+                     f"{iso_cell} | {_of_possible(len(pairs))} | "
+                     f"{_of_possible(n_nested)} |")
     skipped = [levels[i]["name"] for i in pairs_by_level
                if i not in summary_level_indices]
     if skipped:
