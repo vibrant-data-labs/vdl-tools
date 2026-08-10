@@ -88,6 +88,22 @@ class Match(BaseModel):
     )
 
 
+# Shared Field for the refusal-rationale slot on match-set response
+# classes. Kept as a module-level constant so project-specific response
+# classes (e.g. the One Earth variants) attach the identical contract.
+# Under strict-mode structured output the field is always emitted; the
+# description confines real content to the empty-matches case.
+NO_MATCH_REASON_FIELD = Field(
+    default="",
+    description=(
+        "Only when `matches` is empty: one or two sentences explaining "
+        "why none of the candidates fit — what the entity actually does "
+        "and why that falls outside every candidate's definition. When "
+        "`matches` is non-empty, return an empty string."
+    ),
+)
+
+
 class MatchesResponse(BaseModel):
     """Default match-set response.
 
@@ -97,9 +113,15 @@ class MatchesResponse(BaseModel):
     say *emit every plausible candidate with low confidence; let downstream
     threshold filter* — that selection rule is what tells the model to
     score weak matches instead of dropping them.
+
+    ``no_match_reason`` captures the model's own refusal rationale when it
+    returns ``matches: []``; the walk persists it on the entity's NoMatch
+    row when the refusal happens at the top level (see
+    ``classify_entities``).
     """
 
     matches: list[Match] = []
+    no_match_reason: str = NO_MATCH_REASON_FIELD
 
 
 class ScopeDecision(BaseModel):
