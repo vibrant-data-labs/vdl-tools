@@ -313,6 +313,18 @@ def overlap_pairs(per_row: pd.DataFrame, levels: list[dict], level_idx: int, *,
             base_rate=ln / n_entities,  # P(large) = containment expected by chance
         ))
     pairs = pd.DataFrame(rows)
+    # terms that overlap with NO other term at this level — they appear in
+    # no pair row, so the summary must carry them explicitly. Sorted by size
+    # descending: a LARGE isolated term is genuinely distinctive; a tiny one
+    # is just too thin to overlap.
+    paired_ids = (set(pairs.small_id) | set(pairs.large_id)
+                  if not pairs.empty else set())
+    size_of = dict(zip(ids, (int(v) for v in n)))
+    iso = terms[~terms.term_id.isin(paired_ids)]
+    term_stats["isolated"] = sorted(
+        [(lbl, size_of[tid]) for tid, lbl in zip(iso.term_id, iso.label)],
+        key=lambda t: (-t[1], t[0]))
+    term_stats["n_isolated"] = len(term_stats["isolated"])
     pairs.attrs["term_stats"] = term_stats
     if pairs.empty:
         return pairs
@@ -775,8 +787,8 @@ def _summary_markdown(pairs_by_level: dict[int, pd.DataFrame],
              "## Levels",
              "",
              "| level | terms in use | terms with ≤3 entities "
-             "| co-occurring pairs | nested pairs |",
-             "|---|---|---|---|---|"]
+             "| terms with no overlap | co-occurring pairs | nested pairs |",
+             "|---|---|---|---|---|---|"]
     if summary_level_indices is None:
         summary_level_indices = list(pairs_by_level)
     def _thin(stats):
@@ -800,9 +812,12 @@ def _summary_markdown(pairs_by_level: dict[int, pd.DataFrame],
                             len(set(pairs.small_id) | set(pairs.large_id))
                             if not pairs.empty else 0)
         thin_cell, _ = _thin(stats)
+        n_iso = stats.get("n_isolated", 0)
+        iso_cell = (f"{n_iso} ({n_iso / n_terms:.0%})"
+                    if n_terms else "—")
         excluded = "" if idx in summary_level_indices else " *(counts only)*"
         lines.append(f"| {name}{excluded} | {n_terms} | {thin_cell} | "
-                     f"{len(pairs)} | "
+                     f"{iso_cell} | {len(pairs)} | "
                      f"{int(pairs.nested.sum()) if not pairs.empty else 0} |")
     skipped = [levels[i]["name"] for i in pairs_by_level
                if i not in summary_level_indices]
@@ -831,9 +846,22 @@ def _summary_markdown(pairs_by_level: dict[int, pd.DataFrame],
         name = levels[idx]["name"]
         lines += ["", f"## {name} level "
                       f"({len(nested)} nested of {len(pairs)} pairs)"]
-        _, thin_note = _thin(pairs.attrs.get("term_stats", {}))
+        stats = pairs.attrs.get("term_stats", {})
+        _, thin_note = _thin(stats)
         if thin_note:
             lines += ["", f"*{thin_note}*"]
+        iso = stats.get("isolated", [])
+        if iso:
+            MAX_LISTED = 15
+            listed = ", ".join(f"{lbl} (n={sz})"
+                               for lbl, sz in iso[:MAX_LISTED])
+            more = (f", + {len(iso) - MAX_LISTED} more"
+                    if len(iso) > MAX_LISTED else "")
+            lines += ["", f"*{len(iso)} of {stats['n_terms']} terms "
+                          f"({len(iso) / stats['n_terms']:.0%}) share no "
+                          f"entity with any other {name} — either genuinely "
+                          f"distinctive or too thin to overlap: "
+                          f"{listed}{more}.*"]
         if idx == 0:
             # no parent at the top level -> no same/cross split
             lines += ["", ""] + _pair_lines(
