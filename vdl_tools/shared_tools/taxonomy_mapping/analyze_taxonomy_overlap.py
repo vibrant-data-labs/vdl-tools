@@ -285,6 +285,15 @@ def overlap_pairs(per_row: pd.DataFrame, levels: list[dict], level_idx: int, *,
     ids = list(m.columns)
     n_entities = len(m)
 
+    # per-term size distribution over ALL terms in use at this level (the
+    # pair table alone can't provide this — terms with no co-occurring
+    # partner never appear in it). Carried on the frame via .attrs for the
+    # summary report.
+    term_stats = {"n_terms": int(len(n)),
+                  "n_size1": int((n == 1).sum()),
+                  "n_size2": int((n == 2).sum()),
+                  "n_size3": int((n == 3).sum())}
+
     # iterate only the nonzero upper-triangle cells (thousands, not millions,
     # at Activity scale)
     iu, ju = np.nonzero(np.triu(co, 1))
@@ -304,6 +313,7 @@ def overlap_pairs(per_row: pd.DataFrame, levels: list[dict], level_idx: int, *,
             base_rate=ln / n_entities,  # P(large) = containment expected by chance
         ))
     pairs = pd.DataFrame(rows)
+    pairs.attrs["term_stats"] = term_stats
     if pairs.empty:
         return pairs
     pairs["lift_over_chance"] = pairs.containment / pairs.base_rate
@@ -387,8 +397,10 @@ def overlap_pairs(per_row: pd.DataFrame, levels: list[dict], level_idx: int, *,
                            + " expected by chance ("
                            + pairs.lift_over_chance.map("{:.1f}".format)
                            + "× over)")
-    return (pairs.sort_values("containment", ascending=False)
-            .reset_index(drop=True))
+    out = (pairs.sort_values("containment", ascending=False)
+           .reset_index(drop=True))
+    out.attrs["term_stats"] = term_stats
+    return out
 
 
 def compute_overlap(per_row: pd.DataFrame, levels: list[dict], *,
@@ -762,16 +774,35 @@ def _summary_markdown(pairs_by_level: dict[int, pd.DataFrame],
              "",
              "## Levels",
              "",
-             "| level | terms in use | co-occurring pairs | nested pairs |",
-             "|---|---|---|---|"]
+             "| level | terms in use | terms with ≤3 entities "
+             "| co-occurring pairs | nested pairs |",
+             "|---|---|---|---|---|"]
     if summary_level_indices is None:
         summary_level_indices = list(pairs_by_level)
+    def _thin(stats):
+        if not stats or not stats.get("n_terms"):
+            return "—", ""
+        le3 = stats["n_size1"] + stats["n_size2"] + stats["n_size3"]
+        frac = le3 / stats["n_terms"]
+        if le3 == 0:
+            return f"0 (0%)", ""
+        return (f"{le3} ({frac:.0%})",
+                f"{frac:.0%} of the {stats['n_terms']} terms in use are "
+                f"matched to 3 or fewer entities "
+                f"(n=1: {stats['n_size1']}, n=2: {stats['n_size2']}, "
+                f"n=3: {stats['n_size3']}) — containment for those terms "
+                f"rests on very thin evidence.")
+
     for idx, pairs in pairs_by_level.items():
         name = levels[idx]["name"]
-        n_terms = (len(set(pairs.small_id) | set(pairs.large_id))
-                   if not pairs.empty else 0)
+        stats = pairs.attrs.get("term_stats", {})
+        n_terms = stats.get("n_terms",
+                            len(set(pairs.small_id) | set(pairs.large_id))
+                            if not pairs.empty else 0)
+        thin_cell, _ = _thin(stats)
         excluded = "" if idx in summary_level_indices else " *(counts only)*"
-        lines.append(f"| {name}{excluded} | {n_terms} | {len(pairs)} | "
+        lines.append(f"| {name}{excluded} | {n_terms} | {thin_cell} | "
+                     f"{len(pairs)} | "
                      f"{int(pairs.nested.sum()) if not pairs.empty else 0} |")
     skipped = [levels[i]["name"] for i in pairs_by_level
                if i not in summary_level_indices]
@@ -800,6 +831,9 @@ def _summary_markdown(pairs_by_level: dict[int, pd.DataFrame],
         name = levels[idx]["name"]
         lines += ["", f"## {name} level "
                       f"({len(nested)} nested of {len(pairs)} pairs)"]
+        _, thin_note = _thin(pairs.attrs.get("term_stats", {}))
+        if thin_note:
+            lines += ["", f"*{thin_note}*"]
         if idx == 0:
             # no parent at the top level -> no same/cross split
             lines += ["", ""] + _pair_lines(
