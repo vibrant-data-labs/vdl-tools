@@ -23,6 +23,7 @@ vdl_tools/shared_tools/taxonomy_mapping/
 ├── hierarchical_taxonomy_mapping.py     # classifier engine
 ├── hierarchical_taxonomy_judge.py       # judge engine
 ├── analyze_judge_results.py             # judge-results analyzer (Tier 1)
+├── analyze_taxonomy_overlap.py          # term overlap / nesting analyzer
 ├── oe_hierarchical_taxonomy_mapping.py  # OE-specific classifier wiring
 └── …                                    # other domain-agnostic helpers
 ```
@@ -48,6 +49,38 @@ Sub-Pillar breakdowns, top bad/weak nodes by level, failure-reason
 clustering, alignment verdicts, and NoMatch entity samples. The
 **cheap inner-iteration tool** — runs in milliseconds against
 already-judged data, no API spend.
+
+**`analyze_taxonomy_overlap.py`** — term overlap / nesting analyzer,
+for evaluating a taxonomy's design against how entities actually
+mapped. Reads the engine's PER-ROW output plus the same level spec
+the walk used, and computes for every co-occurring term pair at each
+level: Jaccard (symmetric overlap), containment (share of the
+smaller term's entities also carrying the larger — the nesting
+Jaccard misses), lift over chance, and the structural ceiling the
+parent-gated walk imposes on cross-parent containment. High
+containment between siblings flags redundancy candidates; across
+branches it flags real-world co-practice. Term identity is the full
+ancestor path (several taxonomies reuse names under different
+parents), and every artifact — interactive scatter + dumbbell charts
+(html/png), pair-table xlsx, one-page summary (md/html) — names the
+exact taxonomy and mapping files it was computed from. No LLM calls;
+importable without OpenAI/DB config. Typical driver:
+
+```python
+import vdl_tools.shared_tools.taxonomy_mapping.analyze_taxonomy_overlap as ato
+levels = ato.normalize_levels(MY_LEVELS)          # the walk's level spec
+per_row = pd.read_excel(MAPPING_FILE)             # engine per-row output
+tables = ato.load_definitions(TAXONOMY_FILE, levels)
+pairs = ato.compute_overlap(per_row, levels, taxonomy_tables=tables)
+prov = ato.make_provenance(MAPPING_FILE, TAXONOMY_FILE, per_row)
+ato.write_overlap_report(pairs, levels, REPORT_DIR, prov,
+                         xlsx_path=PAIRS_XLSX, file_prefix="mytax_")
+```
+
+Caveat when reading results: overlap at level 0 depends on whether
+the mapping prompt allows multi-membership there (LoC's prompt makes
+pillars near-exclusive, so low top-level overlap is a design
+artifact, not a finding).
 
 ## Per-project drivers (live in each project, not here)
 
