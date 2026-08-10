@@ -523,9 +523,11 @@ def nesting_scatter(pairs: pd.DataFrame, level_name: str, group_name: str,
     shown = pairs.copy()
     n_all = len(shown)
     if len(shown) > max_pairs:
-        shown = shown.nlargest(max_pairs, "containment")
+        # rank by shared entities, not containment — pure-containment ranking
+        # floods the cap with n=1 pairs (100% containment on one entity)
+        shown = shown.nlargest(max_pairs, "both")
         print(f"  note [{level_name}]: scatter shows top {max_pairs} of "
-              f"{n_all} pairs by containment")
+              f"{n_all} pairs by shared entities")
     CROSS = f"Cross-{group_name} pair"
     if group_is_self:
         shown["dot_col"] = shown.group_small
@@ -613,9 +615,13 @@ def nesting_dumbbell(pairs: pd.DataFrame, level_name: str, group_name: str,
         return None
     n_nested = len(top)
     if len(top) > max_rows:
-        top = top.nlargest(max_rows, "containment")
+        # rank by shared entities, not containment — pure-containment ranking
+        # floods the cap with n=1 pairs (100% containment on one entity);
+        # rows are still DISPLAYED sorted by containment
+        top = (top.nlargest(max_rows, "both")
+               .sort_values("containment", ascending=False))
         print(f"  note [{level_name}]: dumbbell shows top {max_rows} of "
-              f"{n_nested} nested pairs")
+              f"{n_nested} nested pairs by shared entities")
     top["pair"] = top.small + "   ⊂   " + top.large
     order = top["pair"].tolist()   # already sorted by containment desc
 
@@ -683,8 +689,8 @@ def nesting_dumbbell(pairs: pd.DataFrame, level_name: str, group_name: str,
         x="containment:Q", y=y_enc,
         text=alt.Text("containment:Q", format=".0%"))
 
-    shown_note = (f"top {len(top)} of {n_nested} pairs over "
-                  f"{nested_min:.0%} contained"
+    shown_note = (f"top {len(top)} of {n_nested} nested pairs "
+                  f"by shared entities"
                   if len(top) < n_nested else
                   f"all {n_nested} pairs over {nested_min:.0%} contained")
     return (link + chance + dot_marks + lab).properties(
@@ -763,11 +769,12 @@ def _summary_markdown(pairs_by_level: dict[int, pd.DataFrame],
         ignore_index=True) if pairs_by_level else pd.DataFrame()
 
     def _section(title, frame, note):
-        out = ["", f"## {title}", "", note, ""]
+        out = ["", f"## {title}", "",
+               note + f" Top {min(top_n, len(frame))} by shared entities.", ""]
         if frame.empty:
             out.append("*(none)*")
             return out
-        for r in frame.nlargest(top_n, "containment").itertuples():
+        for r in frame.nlargest(top_n, "both").itertuples():
             out.append(f"- **{r.fwd_txt}** — {r.chance_txt}; reverse: "
                        f"{r.rev_txt}  *[{r.level}]*")
         return out
