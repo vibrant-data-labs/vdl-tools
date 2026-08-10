@@ -171,7 +171,10 @@ Output schema
        "mode_of_operation", "evidence", "reason", "confidence"]
 
 One row per (entity, leaf) pair. Entities the walk never produced a leaf
-for still appear with all level columns null.
+for still appear with all level columns null; when the model refused at
+the entity's first level and the response schema carries a
+``no_match_reason`` (the default does), that row's ``reason`` holds the
+model's own explanation of why nothing fit.
 
 ``collapse_to_one_row_per_uid`` collapses that frame to one row per
 ``id_col`` value with ``repr()``-encoded list cells per level.
@@ -835,6 +838,11 @@ def classify_entities(
 
     active = initial_branches
     leaves: list[dict[str, Any]] = []
+    # Model refusal rationale per entity, captured when the walk dies at
+    # its first level (the branch still carries empty_leaf) and the
+    # response schema has a non-empty ``no_match_reason``. Persisted on
+    # the entity's all-null fallback row below.
+    no_match_reason_by_entity: dict[Any, str] = {}
 
     for lvl in levels:
         level_idx = lvl["idx"]
@@ -915,6 +923,20 @@ def classify_entities(
                     if not matches:
                         if branch["leaf"] is not empty_leaf:
                             leaves.append(branch)
+                        elif not parsed.matches:
+                            # Refusal at the entity's first level: no leaf
+                            # exists to carry the model's explanation, so
+                            # stash it for the fallback row. Gated on the
+                            # RAW matches being empty — when _clean_matches
+                            # filtered real matches away (bad indices,
+                            # confidence threshold) the model did not
+                            # refuse and its no_match_reason is not the
+                            # story of this row.
+                            refusal = (getattr(parsed, "no_match_reason", "")
+                                       or "").strip()
+                            if refusal:
+                                no_match_reason_by_entity[
+                                    branch["entity_id"]] = refusal
                         continue
 
                     branch_leaves: list[dict[str, Any]] = []
@@ -994,12 +1016,16 @@ def classify_entities(
         seen_entity_ids.add(b["entity_id"])
 
     # Entities the walk never produced a leaf for still get a null
-    # taxonomy row so the caller can join on id.
+    # taxonomy row so the caller can join on id. ``reason`` carries the
+    # model's own refusal rationale when it returned an empty match list
+    # at the entity's first level — the one piece of walk output a
+    # NoMatch row has.
     for entity_id, base in base_by_entity_id.items():
         if entity_id in seen_entity_ids:
             continue
         empty = {c: None for c in out_cols}
         empty.update(empty_leaf)
+        empty["reason"] = no_match_reason_by_entity.get(entity_id)
         if emit_per_level:
             for lvl in levels:
                 oc = lvl["output_col"]

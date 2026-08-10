@@ -60,6 +60,9 @@ from vdl_tools.shared_tools.taxonomy_mapping.hierarchical_taxonomy_mapping impor
 )
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 from vdl_tools.shared_tools.json_cache import write_json
+from vdl_tools.shared_tools.taxonomy_mapping.taxonomy_mapping_cache import (
+    NO_MATCH_REASON_FIELD,
+)
 from vdl_tools.shared_tools.tools.logger import logger
 
 
@@ -223,6 +226,7 @@ class OneEarthMatchesResponse(BaseModel):
     own."""
 
     matches: list[OneEarthMatch] = []
+    no_match_reason: str = NO_MATCH_REASON_FIELD
 
 
 class OneEarthMatchWithConfidence(OneEarthMatch):
@@ -246,6 +250,7 @@ class OneEarthMatchesWithConfidenceResponse(BaseModel):
     it is uncertain; emit it with a low confidence value instead."""
 
     matches: list[OneEarthMatchWithConfidence] = []
+    no_match_reason: str = NO_MATCH_REASON_FIELD
 
 
 class OneEarthResearchMatch(BaseModel):
@@ -264,6 +269,7 @@ class OneEarthResearchMatchesResponse(BaseModel):
     passing climate vocabulary in a broader-impacts statement."""
 
     matches: list[OneEarthResearchMatch] = []
+    no_match_reason: str = NO_MATCH_REASON_FIELD
 
 
 def oneearth_match_schema(
@@ -1130,7 +1136,10 @@ def map_to_oneearth(
         ``id_col``, ``name_col``, ``text_col``, all the entity's other
         columns, then ``Pillar`` / ``Sub-Pillar`` / ``Solution`` /
         ``Sub-Term``, ``deepest_match``, ``leaf_definition``,
-        ``mode_of_operation``, ``evidence``, ``reason``.
+        ``mode_of_operation``, ``evidence``, ``reason``. Entities the
+        walk refused at Pillar get an all-null level row whose
+        ``reason`` carries the model's own explanation of why no pillar
+        fit (the schemas' ``no_match_reason``).
 
         ``collapsed_df`` has one row per id, with each level rendered as
         a repr-encoded list of unique values per entity, plus the
