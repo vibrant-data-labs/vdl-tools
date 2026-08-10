@@ -68,14 +68,17 @@ importable without OpenAI/DB config. Typical driver:
 
 ```python
 import vdl_tools.shared_tools.taxonomy_mapping.analyze_taxonomy_overlap as ato
-levels = ato.normalize_levels(MY_LEVELS)          # the walk's level spec
-per_row = pd.read_excel(MAPPING_FILE)             # engine per-row output
-tables = ato.load_definitions(TAXONOMY_FILE, levels)
-pairs = ato.compute_overlap(per_row, levels, taxonomy_tables=tables)
-prov = ato.make_provenance(MAPPING_FILE, TAXONOMY_FILE, per_row)
-ato.write_overlap_report(pairs, levels, REPORT_DIR, prov,
-                         xlsx_path=PAIRS_XLSX, file_prefix="mytax_")
+ato.run_overlap_analysis(MAPPING_FILE, TAXONOMY_FILE, MY_LEVELS,   # the walk's level spec
+                         REPORT_DIR, xlsx_path=PAIRS_XLSX,
+                         file_prefix="mytax_")
 ```
+
+That one call reads the per-row mapping, loads definitions, computes all
+levels, writes charts + xlsx + summary (all provenance-stamped), and prints
+a console digest. Optional knobs: `level_indices` (which levels),
+`color_level` (which ancestor colors the charts), `summary_level_indices`
+(which levels get summary detail), `taxonomy_tables` (custom-loaded
+definitions), `group_colors` (fixed palette).
 
 Caveat when reading results: overlap at level 0 depends on whether
 the mapping prompt allows multi-membership there (LoC's prompt makes

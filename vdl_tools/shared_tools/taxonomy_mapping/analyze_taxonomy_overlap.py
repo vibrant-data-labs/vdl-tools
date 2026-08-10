@@ -44,17 +44,17 @@ taxonomies reuse names under different parents (e.g. 112 of 1,032 Drawdown
 Activity names), and merging those would corrupt every metric. Display
 labels stay bare names, qualified with "(parent)" only where names collide.
 
-Typical use (a project driver, runnable from PyCharm):
+Typical use (a project driver, runnable from PyCharm) is ONE call:
 
     import vdl_tools.shared_tools.taxonomy_mapping.analyze_taxonomy_overlap as ato
 
-    levels = ato.normalize_levels(MY_LEVELS)
-    per_row = pd.read_excel(MAPPING_FILE)
-    tables = ato.load_definitions(TAXONOMY_FILE, levels)
-    pairs = ato.compute_overlap(per_row, levels, taxonomy_tables=tables)
-    prov = ato.make_provenance(MAPPING_FILE, TAXONOMY_FILE, per_row)
-    ato.write_overlap_report(pairs, levels, REPORT_DIR, prov,
-                             xlsx_path=PAIRS_XLSX, file_prefix="mytax_")
+    ato.run_overlap_analysis(MAPPING_FILE, TAXONOMY_FILE, MY_LEVELS,
+                             REPORT_DIR, xlsx_path=PAIRS_XLSX,
+                             file_prefix="mytax_")
+
+(the individual steps — compute_overlap, make_provenance,
+write_overlap_report — remain public for callers that need to intervene,
+e.g. custom taxonomy loading is just taxonomy_tables=my_tables)
 
 Outputs per analyzed level: an interactive containment-vs-Jaccard scatter
 and a nesting dumbbell (html + png), one xlsx of full pair tables (with a
@@ -313,6 +313,7 @@ def overlap_pairs(per_row: pd.DataFrame, levels: list[dict], level_idx: int, *,
             base_rate=ln / n_entities,  # P(large) = containment expected by chance
         ))
     pairs = pd.DataFrame(rows)
+    pairs.attrs["color_level"] = color_level   # write_overlap_report derives
     # terms that overlap with NO other term at this level — they appear in
     # no pair row, so the summary must carry them explicitly. Sorted by size
     # descending: a LARGE isolated term is genuinely distinctive; a tiny one
@@ -412,6 +413,7 @@ def overlap_pairs(per_row: pd.DataFrame, levels: list[dict], level_idx: int, *,
     out = (pairs.sort_values("containment", ascending=False)
            .reset_index(drop=True))
     out.attrs["term_stats"] = term_stats
+    out.attrs["color_level"] = color_level
     return out
 
 
@@ -947,6 +949,75 @@ def _save_chart(chart: alt.LayerChart, stem: Path, png: bool) -> list[Path]:
     return paths
 
 
+def run_overlap_analysis(mapping_file: Path, taxonomy_file: Path,
+                         levels: list[dict], report_dir: Path, *,
+                         xlsx_path: Path | None = None,
+                         file_prefix: str = "", id_col: str = "uid",
+                         nested_min: float = DEFAULT_NESTED_MIN,
+                         per_row: pd.DataFrame | None = None,
+                         taxonomy_tables: dict[int, pd.DataFrame] | None = None,
+                         level_indices: list[int] | None = None,
+                         color_level: dict[int, int] | None = None,
+                         summary_level_indices: list[int] | None = None,
+                         group_colors: dict[str, str] | None = None,
+                         xlsx_columns: list[str] | None = None,
+                         xlsx_rename: dict[str, str] | None = None,
+                         max_dumbbell_rows: int = DEFAULT_MAX_DUMBBELL_ROWS,
+                         max_scatter_pairs: int = DEFAULT_MAX_SCATTER_PAIRS,
+                         png: bool = True) -> dict[int, pd.DataFrame]:
+    """The whole analysis in one call — what a project driver runs.
+
+    Reads the per-row mapping xlsx (or takes ``per_row``), loads definitions
+    from the taxonomy workbook (or takes pre-loaded ``taxonomy_tables`` for
+    taxonomies needing a custom loader), computes overlap for every level
+    (or ``level_indices``), writes charts + xlsx + summary with provenance,
+    prints a console summary, and returns the pair tables.
+
+    A minimal driver is therefore just paths + one call:
+
+        ato.run_overlap_analysis(MAPPING_FILE, TAXONOMY_FILE, MY_LEVELS,
+                                 REPORT_DIR, xlsx_path=PAIRS_XLSX,
+                                 file_prefix="mytax_")
+    """
+    levels = normalize_levels(levels)
+    if per_row is None:
+        print(f"reading {Path(mapping_file).name} ...")
+        per_row = pd.read_excel(mapping_file)
+    if taxonomy_tables is None:
+        taxonomy_tables = load_definitions(taxonomy_file, levels)
+    print(f"definitions from {Path(taxonomy_file).name}")
+
+    pairs = compute_overlap(per_row, levels, id_col=id_col,
+                            nested_min=nested_min,
+                            taxonomy_tables=taxonomy_tables,
+                            level_indices=level_indices,
+                            color_level=color_level)
+    provenance = make_provenance(mapping_file, taxonomy_file, per_row, id_col)
+    written = write_overlap_report(
+        pairs, levels, report_dir, provenance, xlsx_path=xlsx_path,
+        file_prefix=file_prefix, nested_min=nested_min,
+        group_colors=group_colors, xlsx_columns=xlsx_columns,
+        xlsx_rename=xlsx_rename,
+        summary_level_indices=summary_level_indices,
+        max_dumbbell_rows=max_dumbbell_rows,
+        max_scatter_pairs=max_scatter_pairs, png=png)
+    for w in written:
+        print(f"  wrote {w}")
+
+    for idx, p in pairs.items():
+        name = levels[idx]["name"]
+        print(f"\n{name}: {len(p)} co-occurring pairs, "
+              f"{int(p.nested.sum()) if not p.empty else 0} nested "
+              f"(containment >= {nested_min:.0%})")
+        if p.empty:
+            continue
+        show = p[p.nested].nlargest(8, "both")[
+            ["small", "large", "n_small", "n_large", "both",
+             "containment", "jaccard", "lift_over_chance"]]
+        print(show.to_string(index=False, float_format="%.2f"))
+    return pairs
+
+
 def write_overlap_report(pairs_by_level: dict[int, pd.DataFrame],
                          levels: list[dict], report_dir: Path,
                          provenance: dict, *,
@@ -986,9 +1057,11 @@ def write_overlap_report(pairs_by_level: dict[int, pd.DataFrame],
             print(f"  [{levels[idx]['name']}] no co-occurring pairs — skipped")
             continue
         level_name = levels[idx]["name"]
-        is_self = (group_is_self or {}).get(idx, idx == 0)
-        gname = (group_names or {}).get(
-            idx, level_name if is_self else levels[max(idx - 1, 0)]["name"])
+        # the coloring-group level rides on the frame from compute_overlap,
+        # so group naming needs no separate (and desyncable) configuration
+        g = pairs.attrs.get("color_level", max(idx - 1, 0))
+        is_self = (group_is_self or {}).get(idx, g == idx)
+        gname = (group_names or {}).get(idx, levels[g]["name"])
         colors = group_colors or assign_group_colors(pairs)
 
         stem = report_dir / f"{file_prefix}{level_name.lower()}_nesting"
