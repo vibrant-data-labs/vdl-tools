@@ -732,10 +732,18 @@ def make_provenance(mapping_file: Path, taxonomy_file: Path,
 
 def _summary_markdown(pairs_by_level: dict[int, pd.DataFrame],
                       levels: list[dict], provenance: dict,
-                      nested_min: float, top_n: int = 15) -> str:
-    """One skimmable page: provenance, per-level counts, top nested pairs
-    split into same-parent (redundancy candidates) and cross-parent
-    (co-practice), and how to read the numbers."""
+                      nested_min: float, top_n: int = 10,
+                      summary_level_indices: list[int] | None = None) -> str:
+    """One skimmable page: provenance, per-level counts, then ONE SECTION PER
+    LEVEL with its top nested pairs split into same-parent (redundancy
+    candidates) and cross-parent (co-practice), and how to read the numbers.
+
+    Per-level sections keep a deep level with thousands of near-duplicate
+    pairs (Drawdown Activities, OE Sub-Terms) from drowning out the levels
+    where redundancy is more actionable. summary_level_indices restricts
+    which levels get a detail section at all (the counts table always shows
+    every analyzed level, with a note for the ones excluded).
+    """
     lines = [f"# Taxonomy overlap / nesting summary",
              "",
              "## Provenance",
@@ -756,42 +764,63 @@ def _summary_markdown(pairs_by_level: dict[int, pd.DataFrame],
              "",
              "| level | terms in use | co-occurring pairs | nested pairs |",
              "|---|---|---|---|"]
+    if summary_level_indices is None:
+        summary_level_indices = list(pairs_by_level)
     for idx, pairs in pairs_by_level.items():
         name = levels[idx]["name"]
         n_terms = (len(set(pairs.small_id) | set(pairs.large_id))
                    if not pairs.empty else 0)
-        lines.append(f"| {name} | {n_terms} | {len(pairs)} | "
+        excluded = "" if idx in summary_level_indices else " *(counts only)*"
+        lines.append(f"| {name}{excluded} | {n_terms} | {len(pairs)} | "
                      f"{int(pairs.nested.sum()) if not pairs.empty else 0} |")
+    skipped = [levels[i]["name"] for i in pairs_by_level
+               if i not in summary_level_indices]
+    if skipped:
+        lines += ["", f"*Detail sections below omit "
+                      f"{', '.join(skipped)} (deep levels with expected "
+                      f"redundancy) — their full pair tables are in the "
+                      f"xlsx and their charts alongside this report.*"]
 
-    all_nested = pd.concat(
-        [p[p.nested].assign(level=levels[i]["name"])
-         for i, p in pairs_by_level.items() if not p.empty],
-        ignore_index=True) if pairs_by_level else pd.DataFrame()
-
-    def _section(title, frame, note):
-        out = ["", f"## {title}", "",
-               note + f" Top {min(top_n, len(frame))} by shared entities.", ""]
+    def _pair_lines(frame, note):
+        out = [note + f" Top {min(top_n, len(frame))} by shared entities.", ""]
         if frame.empty:
-            out.append("*(none)*")
-            return out
+            return [note, "", "*(none)*"]
         for r in frame.nlargest(top_n, "both").itertuples():
             out.append(f"- **{r.fwd_txt}** — {r.chance_txt}; reverse: "
-                       f"{r.rev_txt}  *[{r.level}]*")
+                       f"{r.rev_txt}")
         return out
 
-    if not all_nested.empty:
-        same = all_nested[all_nested.kind.str.startswith("Same")]
-        cross = all_nested[all_nested.kind.str.startswith("Different")]
-        lines += _section(
-            "Redundancy candidates (nested under the SAME parent)", same,
-            "Sibling terms that mostly share entities — candidates for "
-            "merging or sharpening definitions.")
-        lines += _section(
-            "Co-practice (nested across DIFFERENT parents)", cross,
-            "Terms in different branches whose entities coincide — how "
-            "organizations actually bundle work. Read cross-parent "
-            "containment against its structural cap (see below); lift is "
-            "the reliable cross-parent signal.")
+    # one section per level, so a deep level with thousands of nested pairs
+    # cannot drown out the shallower, more actionable ones
+    for idx in summary_level_indices:
+        pairs = pairs_by_level.get(idx)
+        if pairs is None or pairs.empty:
+            continue
+        nested = pairs[pairs.nested]
+        name = levels[idx]["name"]
+        lines += ["", f"## {name} level "
+                      f"({len(nested)} nested of {len(pairs)} pairs)"]
+        if idx == 0:
+            # no parent at the top level -> no same/cross split
+            lines += ["", ""] + _pair_lines(
+                nested,
+                "Top-level terms whose entity sets nest. How meaningful this "
+                "is depends on whether the prompt allows multi-membership "
+                "at the top level.")
+            continue
+        same = nested[nested.kind.str.startswith("Same")]
+        cross = nested[nested.kind.str.startswith("Different")]
+        parent_name = levels[idx - 1]["name"]
+        lines += ["", f"### Redundancy candidates (same {parent_name})", ""]
+        lines += _pair_lines(
+            same, "Sibling terms that mostly share entities — candidates "
+                  "for merging or sharpening definitions.")
+        lines += ["", f"### Co-practice (across {parent_name}s)", ""]
+        lines += _pair_lines(
+            cross, "Terms in different branches whose entities coincide — "
+                   "how organizations actually bundle work. Read against "
+                   "the structural cap; lift is the reliable cross-parent "
+                   "signal.")
 
     lines += [
         "",
@@ -860,6 +889,7 @@ def write_overlap_report(pairs_by_level: dict[int, pd.DataFrame],
                          max_scatter_pairs: int = DEFAULT_MAX_SCATTER_PAIRS,
                          xlsx_columns: list[str] | None = None,
                          xlsx_rename: dict[str, str] | None = None,
+                         summary_level_indices: list[int] | None = None,
                          png: bool = True) -> list[Path]:
     """Write, per analyzed level, the scatter + dumbbell charts (html/png),
     one xlsx of pair tables (provenance sheet first), and one summary report
@@ -870,6 +900,10 @@ def write_overlap_report(pairs_by_level: dict[int, pd.DataFrame],
     where group_is_self). group_colors: fixed group->hex override; default
     is the automatic conflict-aware assignment per level.
     xlsx_columns / xlsx_rename let a driver keep a legacy sheet schema.
+    summary_level_indices: which levels get detail sections in the summary
+    report (default all analyzed) — use it to keep a deep level with
+    expected wholesale redundancy (e.g. 1,000+ Activities) from dominating;
+    charts and xlsx sheets are unaffected.
     """
     levels = normalize_levels(levels)
     report_dir = Path(report_dir)
@@ -913,7 +947,8 @@ def write_overlap_report(pairs_by_level: dict[int, pd.DataFrame],
                 out.to_excel(xl, sheet_name=sheet, index=False)
         written.append(xlsx_path)
 
-    md = _summary_markdown(pairs_by_level, levels, provenance, nested_min)
+    md = _summary_markdown(pairs_by_level, levels, provenance, nested_min,
+                           summary_level_indices=summary_level_indices)
     md_path = report_dir / f"{file_prefix}taxonomy_overlap_summary.md"
     md_path.write_text(md)
     written.append(md_path)
