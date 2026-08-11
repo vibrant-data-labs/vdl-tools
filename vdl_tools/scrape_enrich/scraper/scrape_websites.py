@@ -104,9 +104,14 @@ def ensure_url_scheme(url: str) -> str:
     """
     if not url:
         return url
-    if not url.startswith(('http://', 'https://')):
+    # Scheme check must be case-insensitive: 990-filing websites arrive as
+    # HTTPS://WWW.EXAMPLE.ORG and a case-sensitive check double-prefixes
+    # them (https://HTTPS://...). Normalize the scheme to lowercase too.
+    lowered = url.lower()
+    if not lowered.startswith(('http://', 'https://')):
         return f'https://{url}'
-    return url
+    scheme_len = lowered.index('://') + 3
+    return url[:scheme_len].lower() + url[scheme_len:]
 
 
 def _parsed_row_is_retryable(num_errors, max_errors):
