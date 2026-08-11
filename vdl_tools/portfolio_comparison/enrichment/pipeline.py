@@ -98,6 +98,7 @@ def run_enrich(engagement_root: str | Path) -> pd.DataFrame:
             recovery=recovery,
             taxonomy_model=config.enrichment.get("taxonomy_model"),
             recovery_model=config.enrichment.get("recovery_model"),
+            reasoning_effort=config.enrichment.get("reasoning_effort"),
         )
         matched = taxonomy["one_earth_category"].notna() & (
             taxonomy["one_earth_category"] != "NoMatch"
