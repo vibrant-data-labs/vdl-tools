@@ -82,6 +82,8 @@ def extract_website_name(value: str) -> str:
     https://coolwebsite.com/inner/page/1 -> coolwebsite.com_inner_page_1
     https://anotherwebsite.com?query=my-query -> anotherwebsite.com
     '''
+    if not value:
+        return None
     try:
         if "//" in value:
             website = value.split('//')[1].strip()
