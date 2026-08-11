@@ -1025,7 +1025,8 @@ def map_to_oneearth(
     read_from_cache: bool = True,
     write_to_cache: bool = True,
     filter_by_model: bool = True,
-    llm_api_kwargs: dict | None = {"reasoning": {"effort": "low"}}
+    llm_api_kwargs: dict | None = {"reasoning": {"effort": "low"}},
+    recovery_llm_api_kwargs: dict | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Classify a DataFrame of entities against the One Earth taxonomy.
 
@@ -1244,10 +1245,13 @@ def map_to_oneearth(
                 read_from_cache=read_from_cache,
                 write_to_cache=write_to_cache,
                 filter_by_model=filter_by_model,
-                # Reasoning recovery models (gpt-5.4 etc.) need the pinned
-                # effort; the LLM layer strips `reasoning` for non-reasoning
-                # models, so forwarding unconditionally is safe.
-                llm_api_kwargs=llm_api_kwargs,
+                # The recovery scope pass runs on recovery_model and takes
+                # its OWN api kwargs (recovery_llm_api_kwargs), inheriting
+                # the walk's when unset. The LLM layer strips `reasoning`
+                # for non-reasoning models, so forwarding is always safe.
+                llm_api_kwargs=(recovery_llm_api_kwargs
+                                if recovery_llm_api_kwargs is not None
+                                else llm_api_kwargs),
             )
 
         if walk_recovered:
