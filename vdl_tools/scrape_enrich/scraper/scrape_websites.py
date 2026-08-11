@@ -224,6 +224,62 @@ def process_scraped_content(
     return res
 
 
+def _should_retry_with_browser(scraped_result: dict, processed_rows: list) -> bool:
+    """Whether a scraped page should be retried through the Playwright browser.
+
+    Trigger: the plain HTTP fetch "succeeded" (content present) but text
+    extraction came up empty — the JS-shell class, where a 200 response is just
+    a React/Vue mount-point div plus scripts and all content renders client
+    side. The browser executes JS, so it can produce what HTTP cannot. Pages
+    already fetched via the browser are not retried again.
+    """
+    if scraped_result.get('method') != 'http':
+        return False
+    content = scraped_result.get('content')
+    if not content or not isinstance(content, str):
+        return False
+    # PDFs never extract via this path; a browser won't change that
+    if scraped_result.get('url', '').endswith('.pdf'):
+        return False
+    return all(not (row.get('parsed_html') or '').strip() for row in processed_rows)
+
+
+async def _process_scraped_with_browser_retry(
+    scraper,
+    scraped_result: dict,
+    **process_kwargs,
+):
+    """Process a scraped page, retrying via the browser when extraction is empty.
+
+    Returns (scraped_result, processed_rows). When the retry produces content,
+    scraped_result is the browser-rendered version so downstream consumers
+    (link extraction) also see the rendered DOM; otherwise the original result
+    and rows are returned unchanged.
+    """
+    processed_rows = process_scraped_content(scraped_result, **process_kwargs)
+    if not _should_retry_with_browser(scraped_result, processed_rows):
+        return scraped_result, processed_rows
+
+    url = scraped_result['url']
+    logger.info(
+        "Empty extracted text for %s despite HTTP %s, retrying with browser",
+        url,
+        scraped_result.get('status_code'),
+    )
+    browser_content = await scraper.fetch_browser(url)
+    if not browser_content:
+        logger.warning("Browser retry produced no content for %s", url)
+        return scraped_result, processed_rows
+
+    retried_result = {
+        **scraped_result,
+        'content': browser_content,
+        'method': 'browser',
+        'success': True,
+    }
+    return retried_result, process_scraped_content(retried_result, **process_kwargs)
+
+
 def __combine_texts_parallel(args):
     try:
         index_key, source, data, prompt_str_for_counting = args
@@ -370,8 +426,10 @@ def scrape_websites_psql(
                     internal_links_to_scrape = []
                     for res, (original_url, website_id) in zip(scrape_results, chunk):
 
-                        # Process the main index page
-                        processed_pages = process_scraped_content(
+                        # Process the main index page (with a browser retry when
+                        # a 200 HTTP fetch yields no extractable text)
+                        res, processed_pages = await _process_scraped_with_browser_retry(
+                            scraper,
                             res,
                             cache_id=website_id,
                             data_type=PageType.INDEX,
@@ -414,7 +472,8 @@ def scrape_websites_psql(
 
                         for int_res, (full_url, full_path, root_url, clean_path) in zip(internal_results, internal_links_to_scrape):
 
-                            processed_internal = process_scraped_content(
+                            int_res, processed_internal = await _process_scraped_with_browser_retry(
+                                scraper,
                                 int_res,
                                 cache_id=full_path,
                                 data_type=PageType.PAGE,
