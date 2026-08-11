@@ -18,11 +18,21 @@ GEOCODED_BASENAME = "geocoded"
 LOCATION_PRECEDENCE = ["cb_location", "nzi_location", "gt_location"]
 
 
-def _default_taxonomy_mapper(df, taxonomy_path, results_dir, recovery=False):
+def _default_taxonomy_mapper(df, taxonomy_path, results_dir, recovery=False,
+                             taxonomy_model=None, recovery_model=None):
     from vdl_tools.shared_tools.taxonomy_mapping.oe_hierarchical_taxonomy_mapping import (
         add_one_earth_hierarchical_taxonomy,
     )
 
+    # Model overrides come from engagement.yaml (enrichment.taxonomy_model /
+    # enrichment.recovery_model) — never buried kwargs. NB: the prompt cache
+    # keys on model, so changing taxonomy_model re-bills the whole walk;
+    # changing recovery_model re-bills only the scope checks (cheap).
+    kwargs = {}
+    if taxonomy_model:
+        kwargs["model"] = taxonomy_model
+    if recovery_model:
+        kwargs["recovery_model"] = recovery_model
     return add_one_earth_hierarchical_taxonomy(
         df,
         id_col="customer_row_id",
@@ -38,6 +48,7 @@ def _default_taxonomy_mapper(df, taxonomy_path, results_dir, recovery=False):
         # pillar depth (OSP: recovered 40 of 91).
         recover_unmatched=recovery,
         walk_recovered=recovery,
+        **kwargs,
     )
 
 
@@ -47,13 +58,18 @@ def map_taxonomy(
     taxonomy_path: str | Path,
     mapper=_default_taxonomy_mapper,
     recovery: bool = False,
+    taxonomy_model: str | None = None,
+    recovery_model: str | None = None,
 ) -> pd.DataFrame:
     """Map every row with taxonomy text; write ``taxonomy_mapping.parquet``."""
     ready = summaries[summaries["text_for_taxonomy"].notna()].copy()
-    logger.info("taxonomy: mapping %d of %d rows (recovery=%s)",
-                len(ready), len(summaries), recovery)
+    logger.info("taxonomy: mapping %d of %d rows (recovery=%s, models=%s/%s)",
+                len(ready), len(summaries), recovery,
+                taxonomy_model or "default", recovery_model or "default")
     mapped, _distributed = mapper(ready, taxonomy_path, results_dir,
-                                  recovery=recovery)
+                                  recovery=recovery,
+                                  taxonomy_model=taxonomy_model,
+                                  recovery_model=recovery_model)
 
     tax_cols = [c for c in mapped.columns if c not in summaries.columns]
     out = summaries[["customer_row_id"]].merge(
