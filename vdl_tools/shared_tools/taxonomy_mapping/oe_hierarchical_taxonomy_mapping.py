@@ -1244,6 +1244,10 @@ def map_to_oneearth(
                 read_from_cache=read_from_cache,
                 write_to_cache=write_to_cache,
                 filter_by_model=filter_by_model,
+                # Reasoning recovery models (gpt-5.4 etc.) need the pinned
+                # effort; the LLM layer strips `reasoning` for non-reasoning
+                # models, so forwarding unconditionally is safe.
+                llm_api_kwargs=llm_api_kwargs,
             )
 
         if walk_recovered:
