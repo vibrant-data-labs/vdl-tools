@@ -41,6 +41,14 @@ def main():
     )
     args = parser.parse_args()
     root = Path(args.root).resolve()
+    if not (root / "engagement.yaml").exists():
+        hint = (
+            " — this looks like the TEMPLATE repo; run from your engagement "
+            "repo (e.g. cd ~/dev/vdl/engagement-<customer>)"
+            if (root / "engagement.yaml.example").exists()
+            else " — run from an engagement repo root (or pass --root)"
+        )
+        parser.error(f"no engagement.yaml in {root}{hint}")
 
     if args.stage == "pin-baseline":
         universe = runners.run_pin_baseline(root)
