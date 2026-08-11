@@ -149,11 +149,18 @@ def run_enrich(engagement_root: str | Path) -> pd.DataFrame:
 
     s3_uri = config.enrichment.get("s3_results_uri")
     if s3_uri:
+        publish_paths = [
+            results_dir / f"{ENRICHED_BASENAME}.parquet",
+            results_dir / f"{ENRICHED_BASENAME}.csv",
+            results_dir / "id_mapping_final.parquet",
+            # Long-format taxonomy artifacts: per-(entity, path) funding
+            # fractions (Phase 3 funding-by-category) and the full walk
+            # output with evidence/refusal reasons.
+            results_dir / f"{TAXONOMY_BASENAME}_distributed_funding.json",
+            results_dir / f"{TAXONOMY_BASENAME}_results.json",
+        ]
         published = _publish_to_s3(
-            [results_dir / f"{ENRICHED_BASENAME}.parquet",
-             results_dir / f"{ENRICHED_BASENAME}.csv",
-             results_dir / "id_mapping_final.parquet"],
-            s3_uri,
+            [p for p in publish_paths if p.exists()], s3_uri,
         )
         state.record_artifact(
             "enriched_portfolio_s3",
