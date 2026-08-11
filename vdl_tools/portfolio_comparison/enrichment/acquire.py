@@ -228,9 +228,9 @@ def acquire_records(
     out["_gt_ein"] = out.apply(_gt_ein, axis=1)
     if out["_gt_ein"].notna().any():
         if gt_client is None:
-            from givingtuesday_datamart.client.client import GtDatamartClient
+            from vdl_tools.portfolio_comparison.gt_client import make_gt_client
 
-            gt_client = GtDatamartClient()
+            gt_client = make_gt_client()
         try:
             out = _attach_gt(out, gt_client)
         except Exception as exc:

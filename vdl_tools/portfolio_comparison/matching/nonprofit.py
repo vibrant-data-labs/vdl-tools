@@ -18,9 +18,9 @@ def match_by_ein(rows: pd.DataFrame, gt_client=None) -> dict[str, Candidate]:
     exists in the datamart and retrieves canonical identity fields.
     """
     if gt_client is None:
-        from givingtuesday_datamart.client.client import GtDatamartClient
+        from vdl_tools.portfolio_comparison.gt_client import make_gt_client
 
-        gt_client = GtDatamartClient()
+        gt_client = make_gt_client()
 
     with_ein = {
         row["customer_row_id"]: normalize_ein(row.get("customer_ein"))
@@ -71,9 +71,9 @@ def match_identity(
     from vdl_tools.portfolio_comparison.intake.normalize import normalize_domain
 
     if gt_client is None:
-        from givingtuesday_datamart.client.client import GtDatamartClient
+        from vdl_tools.portfolio_comparison.gt_client import make_gt_client
 
-        gt_client = GtDatamartClient()
+        gt_client = make_gt_client()
     universe_ids = universe_ids or set()
 
     from vdl_tools.shared_tools.tools.logger import logger
