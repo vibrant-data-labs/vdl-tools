@@ -183,9 +183,11 @@ def scrape_and_summarize_websites(
     if not summaries:
         return None
 
+    extracted_to_summary = {extract_website_name(original): summary for original, summary in summaries.items()}
+
     original_to_summaries = {
-        original: summaries[extract_website_name(original)]
-        for original, normalized in original_to_normalized_urls.items() if normalized in summaries
+        original: extracted_to_summary[normalized]
+        for original, normalized in original_to_normalized_urls.items() if normalized in extracted_to_summary
     }
     return original_to_summaries
 
