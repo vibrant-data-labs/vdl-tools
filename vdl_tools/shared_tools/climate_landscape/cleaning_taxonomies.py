@@ -20,7 +20,6 @@ def combine_one_earth_solution_tags(ndf):
             "level0_one_earth_category": "One Earth Pillar",
             "level1_one_earth_category": "One Earth Sub-Pillar",
             "level2_one_earth_category": "One Earth Solution",
-            'all_level0_FalseSolns': 'One Earth False Solutions',
         }
     )
 
@@ -31,33 +30,10 @@ def combine_one_earth_solution_tags(ndf):
     oe_cols = ['One Earth Pillars',
                'One Earth Sub-Pillars',
                'One Earth Solutions',
-               'One Earth False Solutions',
                ]
     ndf['One Earth Tags'] = ndf[oe_cols].apply(_join_cols, axis=1)
     return ndf
 
-def clean_one_earth_levers_of_change(ndf):
-    logger.info('renaming one earth levers of change')
-    # rename and join solution and sub-pillar tags from lists
-    ndf = ndf.rename(
-        columns={
-            "level0_Levers": "One Earth Lever of Change",
-            "all_level0_Levers": 'One Earth Levers of Change',
-        }
-    )
-    return ndf
-
-
-def combine_one_earth_false_solutions(ndf):
-    logger.info('combining one earth false solutions')
-    # rename and join solution and sub-pillar tags from lists
-    ndf = ndf.rename(
-        columns={
-            'all_level0_FalseSolns': 'One Earth False Solutions',
-        }
-    )
-
-    return ndf
 
 def split_theme_for_leaf_node(theme_list):
     cleaned_themes = []
@@ -68,26 +44,6 @@ def split_theme_for_leaf_node(theme_list):
             theme = theme
         cleaned_themes.append(theme)
     return cleaned_themes
-
-
-def combine_one_earth_intersectional_themes(ndf):
-    logger.info('combining one earth intersectional themes')
-    # rename and join solution and sub-pillar tags from lists
-    ndf = ndf.rename(
-        columns={
-            'all_level0_Intersectional': 'One Earth Intersectional Themes',
-            'all_level1_Intersectional': 'One Earth Intersectional Sub-Themes',
-            "level0_Intersectional": "One Earth Intersectional Theme",
-            "level1_Intersectional": "One Earth Intersectional Sub-Theme",
-        }
-    )
-
-    cols = ['One Earth Intersectional Themes', 'One Earth Intersectional Sub-Themes']
-    ndf['One Earth Intersectional Themes Areas'] = ndf[cols].apply(_join_cols, axis=1)
-    ndf['One Earth Intersectional Themes Areas'] = ndf['One Earth Intersectional Themes Areas'].apply(
-        split_theme_for_leaf_node
-    )
-    return ndf
 
 
 # def clean_pillars_and_subpillar_categories(df):
@@ -181,6 +137,4 @@ def clean_cft_oe_taxonomy(ndf):
     ndf = rename_one_earth_crosscutting_tags(ndf)
     # clean and combine all one earth solutions
     ndf = combine_one_earth_solution_tags(ndf)
-    ndf = combine_one_earth_intersectional_themes(ndf)
-    ndf = clean_one_earth_levers_of_change(ndf)
     return ndf

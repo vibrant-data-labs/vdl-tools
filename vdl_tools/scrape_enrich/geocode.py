@@ -305,14 +305,23 @@ def clean_geo(df, summarize_new_geo=False):
     df["State"] = df.apply(
         lambda x: x["state"] if x["country"] == "United States" else "", axis=1
     )  # keep State for US locations
+    # County, on the same US-only rule as State: Google's
+    # administrative_area_level_2 exists outside the US but denotes different
+    # things there (departments, districts), so it is not a "county". Guarded
+    # because a caller whose frame predates the county column would KeyError.
+    if "county" in df.columns:
+        df["County"] = df.apply(
+            lambda x: x["county"] if x["country"] == "United States" else "", axis=1
+        )
     df["Country"] = df["country"]
     # add location City, Country to Geo_Tags in case it was missed
     if "Geo_Tags" in df.columns:
         df.Geo_Tags = df.Geo_Tags + _join_list_no_missing(df, ["city", "state", "country"])
         df["Geo_Tags"] = clean_tag_list(df, "Geo_Tags", replace={"USA": "United States"})
-    df.drop(
-        ["City_Region", "city", "state", "country", "Address"], inplace=True, axis=1
-    )
+    drop_columns = ["City_Region", "city", "state", "country", "Address"]
+    if "county" in df.columns:
+        drop_columns.append("county")
+    df.drop(drop_columns, inplace=True, axis=1)
     # compile new geo place names and save as sep files
     if summarize_new_geo:
         df_newGeo = build_tag_hist_df(df, "new_GeoText", delimiter="|")

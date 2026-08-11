@@ -7,7 +7,7 @@ from more_itertools import chunked
 
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 from vdl_tools.shared_tools.tools.logger import logger
-from vdl_tools.scrape_enrich.scraper.scrape_websites import scrape_websites_psql
+from vdl_tools.scrape_enrich.scraper.scrape_websites import extract_website_name, scrape_websites_psql
 from vdl_tools.shared_tools.tools.text_cleaning import clean_scraped_text
 from vdl_tools.shared_tools.web_summarization.make_page_text import make_group_text
 from vdl_tools.shared_tools.web_summarization.page_choice.constants import PATHS_TO_KEEP
@@ -16,7 +16,6 @@ from vdl_tools.shared_tools.web_summarization.website_summarization_cache_psql i
     GENERIC_ORG_WEBSITE_PROMPT_TEXT,
 )
 from vdl_tools.shared_tools.openai.prompt_response_cache_sql import DEFAULT_MODEL
-
 
 def summarize_scraped_df(
     scraped_df: pd.DataFrame,
@@ -134,6 +133,61 @@ def summarize_website(
         return None
 
     return list(summaries.values())[0]
+
+
+def scrape_and_summarize_websites(
+    urls: list[str],
+    use_combined: bool = True,
+    prompt_str: str = GENERIC_ORG_WEBSITE_PROMPT_TEXT,
+    skip_existing: bool = True,
+    n_per_commit: int = 50,
+    max_workers: int = 5,
+    max_errors: int = 1,
+    single_page_websites: list[str] = [],
+) -> str:
+    """Summarizes a website by scraping it and then running summarization on the scraped content.
+
+    Parameters
+    ----------
+    url : str
+        URL of the website to summarize
+    prompt_str : str
+        Prompt to use for the summarization
+
+    Returns
+    -------
+    str
+        The summarization of the website
+    """
+
+    original_to_normalized_urls = {url: extract_website_name(url) for url in urls}
+
+    chosen_df = scrape_websites_psql(
+        session=None,
+        urls=urls,
+        max_workers=1,
+        summary_prompt=prompt_str,
+        return_combined_res=use_combined,
+        single_page_websites=single_page_websites,
+    )
+
+    summaries = summarize_scraped_df(
+        chosen_df,
+        is_combined=use_combined,
+        prompt_str=prompt_str,
+        skip_existing=skip_existing,
+        n_per_commit=n_per_commit,
+        max_workers=max_workers,
+        max_errors=max_errors,
+    )
+    if not summaries:
+        return None
+
+    original_to_summaries = {
+        original: summaries[extract_website_name(original)]
+        for original, normalized in original_to_normalized_urls.items() if normalized in summaries
+    }
+    return original_to_summaries
 
 
 if __name__ == "__main__":
