@@ -20,7 +20,8 @@ LOCATION_PRECEDENCE = ["cb_location", "nzi_location", "gt_location"]
 
 def _default_taxonomy_mapper(df, taxonomy_path, results_dir, recovery=False,
                              taxonomy_model=None, recovery_model=None,
-                             reasoning_effort=None):
+                             reasoning_effort=None,
+                             recovery_reasoning_effort=None):
     from vdl_tools.shared_tools.taxonomy_mapping.oe_hierarchical_taxonomy_mapping import (
         add_one_earth_hierarchical_taxonomy,
     )
@@ -36,8 +37,14 @@ def _default_taxonomy_mapper(df, taxonomy_path, results_dir, recovery=False,
         kwargs["recovery_model"] = recovery_model
     if reasoning_effort:
         # Pins the walk model's reasoning effort explicitly (the cache key
-        # otherwise records only the kwarg's absence).
+        # otherwise records only the kwarg's absence). Applies to the main
+        # walk AND the re-walk of recovered orgs (both run taxonomy_model).
         kwargs["llm_api_kwargs"] = {"reasoning": {"effort": reasoning_effort}}
+    if recovery_reasoning_effort:
+        # The recovery scope pass (recovery_model) gets its own effort.
+        kwargs["recovery_llm_api_kwargs"] = {
+            "reasoning": {"effort": recovery_reasoning_effort}
+        }
     return add_one_earth_hierarchical_taxonomy(
         df,
         id_col="customer_row_id",
@@ -66,19 +73,23 @@ def map_taxonomy(
     taxonomy_model: str | None = None,
     recovery_model: str | None = None,
     reasoning_effort: str | None = None,
+    recovery_reasoning_effort: str | None = None,
 ) -> pd.DataFrame:
     """Map every row with taxonomy text; write ``taxonomy_mapping.parquet``."""
     ready = summaries[summaries["text_for_taxonomy"].notna()].copy()
     logger.info("taxonomy: mapping %d of %d rows (recovery=%s, models=%s/%s, "
-                "effort=%s)",
+                "efforts=%s/%s)",
                 len(ready), len(summaries), recovery,
                 taxonomy_model or "default", recovery_model or "default",
-                reasoning_effort or "default")
-    mapped, _distributed = mapper(ready, taxonomy_path, results_dir,
-                                  recovery=recovery,
-                                  taxonomy_model=taxonomy_model,
-                                  recovery_model=recovery_model,
-                                  reasoning_effort=reasoning_effort)
+                reasoning_effort or "default",
+                recovery_reasoning_effort or "inherit")
+    mapped, _distributed = mapper(
+        ready, taxonomy_path, results_dir,
+        recovery=recovery,
+        taxonomy_model=taxonomy_model,
+        recovery_model=recovery_model,
+        reasoning_effort=reasoning_effort,
+        recovery_reasoning_effort=recovery_reasoning_effort)
 
     tax_cols = [c for c in mapped.columns if c not in summaries.columns]
     out = summaries[["customer_row_id"]].merge(
