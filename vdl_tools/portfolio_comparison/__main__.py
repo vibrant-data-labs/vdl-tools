@@ -19,7 +19,7 @@ def main():
         "stage",
         choices=["pin-baseline", "intake", "match", "status",
                  "export-customer", "import-customer", "set-id", "finalize",
-                 "enrich", "enrich-acquire", "enrich-scrape", "enrich-summarize"],
+                 "compare", "enrich", "enrich-acquire", "enrich-scrape", "enrich-summarize"],
     )
     parser.add_argument(
         "--root", default=".", help="engagement repo root (default: cwd)"
@@ -90,6 +90,11 @@ def main():
         from vdl_tools.portfolio_comparison.finalize import run_finalize
 
         print(run_finalize(root))
+    elif args.stage == "compare":
+        from vdl_tools.portfolio_comparison.comparison import run_compare
+
+        tables = run_compare(root)
+        print(tables["comparison_pillar"].to_string())
     elif args.stage == "enrich":
         from vdl_tools.portfolio_comparison.enrichment.pipeline import run_enrich
 

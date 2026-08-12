@@ -24,6 +24,8 @@ STAGES = [
     "enrich_summarize",
     "enrich_taxonomy",
     "enrich_geocode",
+    # Phase 3
+    "compare",
 ]
 
 STATE_FILENAME = "pipeline_state.json"
