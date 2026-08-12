@@ -47,6 +47,15 @@ def _ask(row, objective: str = "financials") -> str:
             "Correct? If not, please fill in the columns to the right."
         )
     if objective == "text":
+        if row.get("_enrichment_textless"):
+            # Identity is settled; the full pipeline just found no usable
+            # text (site unscrapable/parked/JS-only, sources description-less).
+            return (
+                "We've identified this organization, but neither its website "
+                "nor our data sources give us usable descriptive text. Please "
+                "paste a 2-3 sentence description of what it does (grant "
+                "application text works great) — or a current working website."
+            )
         sources = str(row.get("text_sources") or "")
         if "website_dead" in sources:
             return (
@@ -74,7 +83,8 @@ def _ask(row, objective: str = "financials") -> str:
 
 
 def build_export_frame(
-    id_mapping: pd.DataFrame, objective: str = "financials"
+    id_mapping: pd.DataFrame, objective: str = "financials",
+    summaries: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     rows = id_mapping[
         id_mapping["status"].isna() | (id_mapping["status"] == "customer_review")
@@ -83,6 +93,23 @@ def build_export_frame(
         # Text objective: only rows with NO usable text source need the
         # customer; everything enrichment-ready proceeds without them.
         rows = rows[~rows["enrichment_ready"].fillna(False).astype(bool)]
+    rows = rows.copy()
+    rows["_enrichment_textless"] = False
+    if objective == "text" and summaries is not None:
+        # Phase-2 truth beats Phase-1 prediction: rows whose FULL pipeline
+        # produced no usable text join the ask even when identity-matched
+        # (matched != has text — e.g. unscrapable site + description-less
+        # source records).
+        textless_ids = set(
+            summaries[summaries["text_for_taxonomy"].isna()]["customer_row_id"]
+        )
+        extra = id_mapping[
+            id_mapping["customer_row_id"].isin(textless_ids)
+            & ~id_mapping["customer_row_id"].isin(rows["customer_row_id"])
+        ].copy()
+        if len(extra):
+            extra["_enrichment_textless"] = True
+            rows = pd.concat([rows, extra], ignore_index=True)
     return pd.DataFrame({
         ID_COL: rows["customer_row_id"],
         "Organization": rows["customer_name"],
@@ -97,7 +124,10 @@ def build_export_frame(
 def export_customer_roundtrip(engagement_root: str | Path) -> Path:
     config = EngagementConfig.from_yaml(Path(engagement_root) / "engagement.yaml")
     results_dir = config.results_dir()
-    frame = build_export_frame(load_id_mapping(results_dir), config.match_objective)
+    summaries_path = results_dir / "org_summaries.parquet"
+    summaries = pd.read_parquet(summaries_path) if summaries_path.exists() else None
+    frame = build_export_frame(load_id_mapping(results_dir),
+                               config.match_objective, summaries=summaries)
 
     out = results_dir / f"customer_review_{config.customer}_{date.today().isoformat()}.xlsx"
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
