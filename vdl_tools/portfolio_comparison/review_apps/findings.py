@@ -5,7 +5,7 @@ Launch from the ENGAGEMENT REPO ROOT (marimo edit to see/modify code):
     PYTHONPATH=<vdl-tools> marimo edit \
         <vdl-tools>/vdl_tools/portfolio_comparison/review_apps/findings.py
 
-Reads the compare-stage artifacts (comparison_*.csv), the enriched
+Interactive altair charts. Reads the compare-stage artifacts (comparison_*.csv), the enriched
 portfolio, and the customer ask. Unmapped-class counts cite
 nomatch_analysis.md (second-reader verified).
 """
@@ -20,8 +20,8 @@ app = marimo.App(width="medium")
 def _():
     from pathlib import Path
 
+    import altair as alt
     import marimo as mo
-    import matplotlib.pyplot as plt
     import pandas as pd
 
     R = Path.cwd() / "data" / "results"
@@ -29,7 +29,7 @@ def _():
     conv = pd.read_csv(R / "comparison_conversion.csv", index_col=0)
     enriched = pd.read_parquet(R / "enriched_portfolio.parquet")
     FOREST, MOSS, GOLD, LIGHT = "#2C5F2D", "#97BC62", "#D9A21B", "#D5DFD2"
-    return FOREST, GOLD, LIGHT, MOSS, R, conv, enriched, mo, pd, pillar, plt
+    return FOREST, GOLD, LIGHT, MOSS, R, alt, conv, enriched, mo, pd, pillar
 
 
 @app.cell
@@ -46,100 +46,120 @@ taxonomy-mapped · {int(enriched['Latitude'].notna().sum())} geocoded
 
 
 @app.cell
-def _(FOREST, GOLD, MOSS, mo, pillar, plt):
-    _fig, _ax = plt.subplots(figsize=(9, 4.2))
-    _x = range(len(pillar))
-    _w = 0.27
-    for _i, (_col, _color, _label) in enumerate([
-        ("ecosystem_pct", MOSS, "US climate ecosystem"),
-        ("portfolio_pct", GOLD, "OSP full deal flow"),
-        ("invested_pct", FOREST, "OSP invested only"),
-    ]):
-        _bars = _ax.bar([p + (_i - 1) * _w for p in _x], pillar[_col],
-                        _w, color=_color, label=_label)
-        _ax.bar_label(_bars, fmt="%.0f", fontsize=8, color="#555")
-    _ax.set_xticks(list(_x),
-                   [c.replace(" ", "\n") for c in pillar.index], fontsize=9)
-    _ax.set_ylabel("% of orgs with a pillar")
-    _ax.legend(frameon=False, fontsize=9)
-    _ax.spines[["top", "right"]].set_visible(False)
-    _ax.set_title("The invested book mirrors the ecosystem; deal flow doesn't",
-                  fontsize=12, loc="left", color=FOREST, fontweight="bold")
+def _(FOREST, GOLD, MOSS, alt, mo, pillar):
+    _long = pillar.reset_index().melt(
+        id_vars="category",
+        value_vars=["ecosystem_pct", "portfolio_pct", "invested_pct"],
+        var_name="series", value_name="pct")
+    _names = {"ecosystem_pct": "US climate ecosystem",
+              "portfolio_pct": "OSP full deal flow",
+              "invested_pct": "OSP invested only"}
+    _long["series"] = _long["series"].map(_names)
+    pillar_chart = mo.ui.altair_chart(
+        alt.Chart(_long).mark_bar().encode(
+            x=alt.X("series:N", title=None, axis=None,
+                    sort=list(_names.values())),
+            y=alt.Y("pct:Q", title="% of orgs with a pillar"),
+            color=alt.Color("series:N", title=None,
+                            scale=alt.Scale(domain=list(_names.values()),
+                                            range=[MOSS, GOLD, FOREST]),
+                            legend=alt.Legend(orient="bottom")),
+            column=alt.Column("category:N", title=None,
+                              sort=alt.SortField("pct", "descending"),
+                              header=alt.Header(labelFontSize=11)),
+            tooltip=["category", "series", "pct"],
+        ).properties(width=110, height=300,
+                     title="The invested book mirrors the ecosystem; deal flow doesn't"))
     mo.vstack([
         mo.md("## Where OSP sits in the landscape"),
-        _fig,
+        pillar_chart,
         mo.md("*Invested holdings track the landscape's shape (Nature "
               "Conservation leads). Deal flow runs 21 points light on Nature "
               "Conservation and heavy on Energy Transition.*"),
     ])
     return
 
-
 @app.cell
-def _(FOREST, LIGHT, conv, mo, plt):
-    _c = conv.sort_values("conversion_rate")
-    _fig, _ax = plt.subplots(figsize=(9, 3.6))
-    _ax.barh(_c.index, _c["n_invested"], color=FOREST, label="Invested")
-    _ax.barh(_c.index, _c["n_passed"], left=_c["n_invested"], color=LIGHT,
-             label="Passed")
-    for _i, (_pillar, _row) in enumerate(_c.iterrows()):
-        _ax.text(_row["n_invested"] + _row["n_passed"] + 1.5, _i,
-                 f"{_row['conversion_rate']:.0%}", va="center", fontsize=10,
-                 color=FOREST, fontweight="bold")
-    _ax.set_xlabel("deals with a taxonomy match")
-    _ax.legend(frameon=False, fontsize=9, loc="lower right")
-    _ax.spines[["top", "right"]].set_visible(False)
-    _ax.set_title("OSP passes on energy, converts on nature "
-                  "(label = conversion rate)", fontsize=12, loc="left",
-                  color=FOREST, fontweight="bold")
+def _(FOREST, LIGHT, alt, conv, mo):
+    _long = conv.reset_index().melt(
+        id_vars=["pillar", "conversion_rate"],
+        value_vars=["n_invested", "n_passed"],
+        var_name="outcome", value_name="n")
+    _long["outcome"] = _long["outcome"].map(
+        {"n_invested": "Invested", "n_passed": "Passed"})
+    _order = conv.sort_values("conversion_rate", ascending=False).index.tolist()
+    _bars = alt.Chart(_long).mark_bar().encode(
+        y=alt.Y("pillar:N", sort=_order, title=None),
+        x=alt.X("n:Q", title="deals with a taxonomy match"),
+        color=alt.Color("outcome:N", title=None,
+                        scale=alt.Scale(domain=["Invested", "Passed"],
+                                        range=[FOREST, LIGHT]),
+                        legend=alt.Legend(orient="bottom")),
+        order=alt.Order("outcome:N"),
+        tooltip=["pillar", "outcome", "n", "conversion_rate"],
+    )
+    _totals = conv.reset_index()
+    _totals["total"] = _totals["n_invested"] + _totals["n_passed"]
+    _labels = alt.Chart(_totals).mark_text(
+        align="left", dx=6, color=FOREST, fontWeight="bold").encode(
+        y=alt.Y("pillar:N", sort=_order),
+        x="total:Q",
+        text=alt.Text("conversion_rate:Q", format=".0%"),
+    )
+    conv_chart = mo.ui.altair_chart(
+        (_bars + _labels).properties(
+            width=620, height=260,
+            title="OSP passes on energy, converts on nature (label = conversion rate)"))
     mo.vstack([
         mo.md("## Deals seen vs deals done"),
-        _fig,
-        mo.md("*A nature deal in OSP's pipeline is 3.4× likelier to be funded "
+        conv_chart,
+        mo.md("*A nature deal in OSP's pipeline is 3.4\u00d7 likelier to be funded "
               "than an energy deal (50% vs 15% conversion).*"),
     ])
     return
 
-
 @app.cell
-def _(FOREST, GOLD, LIGHT, MOSS, R, enriched, mo, pd, plt):
-    # Unmapped decomposition. The 46 = current customer ask (textless rows);
-    # class splits for the 68 with-text rows come from the second-reader-
+def _(FOREST, GOLD, LIGHT, MOSS, R, alt, enriched, mo, pd):
+    # Unmapped decomposition. The textless count = current customer ask rows;
+    # class splits for the with-text rows come from the second-reader-
     # verified nomatch_analysis.md (52 out-of-scope / 7 vague / 9 recoverable).
     _no_pillar = enriched[enriched["level0_one_earth_category"].isna()]
     _ask = pd.read_excel(sorted(R.glob("customer_review_*.xlsx"))[-1])
     _n_ask = len(set(_ask["ID (do not edit)"]) & set(_no_pillar["customer_row_id"]))
-    _classes = {
-        f"No usable text — below the data radar ({_n_ask})": (_n_ask, GOLD),
-        "Verified outside climate scope (52)": (52, MOSS),
-        "Text too vague to map (7)": (7, LIGHT),
-        "Recoverable via mapping improvements (9)": (9, FOREST),
-    }
-    _fig, _ax = plt.subplots(figsize=(7.5, 3.8))
-    _ax.pie([v for v, _ in _classes.values()], labels=list(_classes),
-            colors=[c for _, c in _classes.values()],
-            wedgeprops=dict(width=0.42), textprops=dict(fontsize=9),
-            autopct=lambda p: f"{p:.0f}%", pctdistance=0.79)
-    _ax.set_title(f"{len(_no_pillar)} orgs without a pillar — mostly signal, "
-                  "not failure", fontsize=12, loc="left", color=FOREST,
-                  fontweight="bold")
+    _df = pd.DataFrame({
+        "why": [f"No usable text - below the data radar ({_n_ask})",
+                "Verified outside climate scope (52)",
+                "Text too vague to map (7)",
+                "Recoverable via mapping improvements (9)"],
+        "n": [_n_ask, 52, 7, 9],
+        "color": [GOLD, MOSS, LIGHT, FOREST],
+    })
+    donut_chart = mo.ui.altair_chart(
+        alt.Chart(_df).mark_arc(innerRadius=70).encode(
+            theta="n:Q",
+            color=alt.Color("why:N", title=None,
+                            scale=alt.Scale(domain=_df["why"].tolist(),
+                                            range=_df["color"].tolist()),
+                            legend=alt.Legend(orient="right", labelLimit=320)),
+            tooltip=["why", "n"],
+        ).properties(width=340, height=300,
+                     title=f"{len(_no_pillar)} orgs without a pillar - mostly signal, not failure"))
     mo.vstack([
         mo.md("## What didn't map, and why"),
-        _fig,
+        donut_chart,
         mo.md(f"""
-- **{_n_ask} have no text anywhere** — fiscally sponsored projects,
+- **{_n_ask} have no text anywhere** - fiscally sponsored projects,
   Indigenous-led and international orgs that never file US tax forms under
   their own names, plus dead/unreadable sites. *The {len(_ask)}-row customer
   ask covers these.*
-- **52 are verifiably not climate** (reviewed against pillar definitions) —
+- **52 are verifiably not climate** (reviewed against pillar definitions) -
   36 of them passed deals: a finding about OSP's deal sources, not an error.
-- **9 expose the taxonomy's blind spots** — adaptation & resilience, water
+- **9 expose the taxonomy's blind spots** - adaptation & resilience, water
   supply, Indigenous biocultural stewardship: candidate One Earth amendments.
   Full per-org evidence: `data/results/nomatch_analysis.md`.
 """),
     ])
     return
-
 
 @app.cell
 def _(mo):
