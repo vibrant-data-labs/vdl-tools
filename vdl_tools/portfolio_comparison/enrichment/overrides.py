@@ -30,19 +30,22 @@ def apply_taxonomy_overrides(out: pd.DataFrame, results_dir: str | Path) -> pd.D
         mask = out["customer_row_id"] == entry["customer_row_id"]
         if not mask.any():
             continue
+        idxs = out.index[mask]
         deepest = None
         for i, col in enumerate(LEVEL_COLS):
             value = entry.get(f"level{i}")
-            out.loc[mask, col] = value if value else pd.NA
-            if col.replace("level", "all_level") in out.columns:
-                out.loc[mask, col.replace("level", "all_level")] = (
-                    [[value]] if value else [[]]
-                )
+            out.loc[idxs, col] = value if value else pd.NA
+            all_col = col.replace("level", "all_level")
+            if all_col in out.columns:
+                # List-valued cells need per-cell .at — .loc with a mask
+                # reads a nested list as a 2D array and length-checks it.
+                for ix in idxs:
+                    out.at[ix, all_col] = [value] if value else []
             if value:
                 deepest = value
-        out.loc[mask, "one_earth_category"] = deepest
+        out.loc[idxs, "one_earth_category"] = deepest
         if "cat_level_one_earth_category" in out.columns:
-            out.loc[mask, "cat_level_one_earth_category"] = entry.get("cat_level")
+            out.loc[idxs, "cat_level_one_earth_category"] = entry.get("cat_level")
         n += 1
     logger.info("taxonomy overrides: applied %d of %d entries (%s)",
                 n, len(overrides), path.name)
