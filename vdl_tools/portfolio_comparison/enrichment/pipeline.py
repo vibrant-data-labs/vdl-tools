@@ -110,6 +110,11 @@ def run_enrich(engagement_root: str | Path) -> pd.DataFrame:
             n_rows=len(taxonomy),
             n_matched=int(matched.sum()),
             recovery=recovery,
+            taxonomy_model=config.enrichment.get("taxonomy_model") or "default",
+            recovery_model=config.enrichment.get("recovery_model") or "default",
+            reasoning_effort=config.enrichment.get("reasoning_effort") or "default",
+            recovery_reasoning_effort=config.enrichment.get(
+                "recovery_reasoning_effort") or "inherit",
             taxonomy_path=str(taxonomy_path),
             artifact_sha256=_sha(results_dir / f"{TAXONOMY_BASENAME}.parquet"),
             seconds=int(time.time() - t0),
