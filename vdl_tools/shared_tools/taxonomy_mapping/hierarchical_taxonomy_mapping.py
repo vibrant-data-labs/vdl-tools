@@ -174,7 +174,9 @@ One row per (entity, leaf) pair. Entities the walk never produced a leaf
 for still appear with all level columns null.
 
 ``collapse_to_one_row_per_uid`` collapses that frame to one row per
-``id_col`` value with ``repr()``-encoded list cells per level.
+``id_col`` value with real ``list`` cells per level — parquet carries
+those natively. Use ``flatten_list_columns`` on a copy at the last
+moment when writing to a format that cannot hold a list (xlsx, csv).
 """
 
 from __future__ import annotations
@@ -1052,11 +1054,18 @@ def collapse_to_one_row_per_uid(
 ) -> pd.DataFrame:
     """Collapse a per-row classification DataFrame to one row per id_col.
 
-    Each level's per-row column (``output_col``) becomes a list of the
-    unique non-empty values seen for that id, rendered with ``repr()`` so
-    cells round-trip via ``ast.literal_eval``. The collapsed column uses
-    the level's ``name`` as its header (so e.g. Drawdown's per-row
+    Each level's per-row column (``output_col``) becomes a real ``list``
+    of the unique non-empty values seen for that id. The collapsed column
+    uses the level's ``name`` as its header (so e.g. Drawdown's per-row
     ``Cluster`` column becomes the collapsed ``SectorCluster`` column).
+
+    The cells are lists, not strings: parquet carries them natively (see
+    ``parquet_cache``, which JSON-encodes list columns and restores them
+    on read), so consumers can do ``"X" in row[level]`` without parsing.
+    Formats that cannot hold a list — xlsx, csv — are a WRITE-TIME
+    concern: call ``flatten_list_columns`` on a copy immediately before
+    writing, and leave this frame alone.
+
     The deepest non-empty level's ``name`` is reported in
     ``deepest_match``; ids with all level lists empty get
     ``deepest_match == "NoMatch"``.
@@ -1086,7 +1095,7 @@ def collapse_to_one_row_per_uid(
             src = lvl["output_col"]
             collapsed_col = lvl["name"]
             values = _dedup_preserve(group[src].tolist()) if src in group else []
-            row[collapsed_col] = repr(values)
+            row[collapsed_col] = values
             if values:
                 deepest_name = lvl["name"]
         row["deepest_match"] = deepest_name if deepest_name else "NoMatch"
@@ -1095,7 +1104,7 @@ def collapse_to_one_row_per_uid(
             _dedup_preserve(group["mode_of_operation"].tolist())
             if "mode_of_operation" in group else []
         )
-        row["mode_of_operation"] = repr(modes)
+        row["mode_of_operation"] = modes
         rows.append(row)
 
     out_cols = (
@@ -1105,6 +1114,45 @@ def collapse_to_one_row_per_uid(
         + ["deepest_match", "mode_of_operation"]
     )
     return pd.DataFrame(rows, columns=out_cols)
+
+
+def flatten_list_columns(
+    df: pd.DataFrame,
+    sep: str = ", ",
+    columns: list[str] | None = None,
+) -> pd.DataFrame:
+    """Return a COPY with list cells rendered as ``sep``-joined text.
+
+    The write-time adapter for formats that cannot hold a list — xlsx and
+    csv. Parquet needs none of this (``parquet_cache`` carries list
+    columns natively), so call this only on the way out to a flat format,
+    never on the frame the pipeline keeps working with::
+
+        collapsed_df.to_parquet(...)                    # real lists
+        flatten_list_columns(collapsed_df).to_excel(...)  # "a, b"
+
+    Empty lists become ``None`` so a spreadsheet shows a blank cell
+    rather than ``[]``. ``columns`` restricts the conversion; the default
+    (None) converts every column that holds a list or tuple anywhere, so
+    it stays correct as levels are added or renamed. Non-list columns are
+    passed through untouched, and the caller's frame is never mutated.
+    """
+    out = df.copy()
+    if columns is None:
+        columns = [
+            c for c in out.columns
+            if out[c].map(lambda v: isinstance(v, (list, tuple))).any()
+        ]
+    for col in columns:
+        if col not in out.columns:
+            continue
+        out[col] = out[col].map(
+            lambda v: (
+                (sep.join(str(x).strip() for x in v if str(x).strip()) or None)
+                if isinstance(v, (list, tuple)) else v
+            )
+        )
+    return out
 
 
 # ---------------------------------------------------------------------------
