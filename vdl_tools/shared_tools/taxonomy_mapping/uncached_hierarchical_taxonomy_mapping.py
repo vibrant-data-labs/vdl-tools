@@ -124,7 +124,9 @@ One row per (entity, leaf) pair. Entities with no level-0 match still
 appear with all level columns null.
 
 ``collapse_to_one_row_per_uid`` collapses that frame to one row per
-``id_col`` value with ``repr()``-encoded list cells per level.
+``id_col`` value with real ``list`` cells per level — parquet carries
+those natively. Use ``flatten_list_columns`` on a copy at the last
+moment when writing to a format that cannot hold a list (xlsx, csv).
 """
 
 from __future__ import annotations
@@ -972,11 +974,16 @@ def collapse_to_one_row_per_uid(
 ) -> pd.DataFrame:
     """Collapse a per-row classification DataFrame to one row per id_col.
 
-    Each level's per-row column (``output_col``) becomes a list of the
-    unique non-empty values seen for that id, rendered with ``repr()`` so
-    cells round-trip via ``ast.literal_eval``. The collapsed column uses
-    the level's ``name`` as its header (so e.g. Drawdown's per-row
+    Each level's per-row column (``output_col``) becomes a real ``list``
+    of the unique non-empty values seen for that id. The collapsed column
+    uses the level's ``name`` as its header (so e.g. Drawdown's per-row
     ``Cluster`` column becomes the collapsed ``SectorCluster`` column).
+
+    The cells are lists, not strings: parquet carries them natively (see
+    ``parquet_cache``). Flattening for xlsx / csv is a write-time concern
+    — use ``hierarchical_taxonomy_mapping.flatten_list_columns`` on a
+    copy immediately before writing.
+
     The deepest non-empty level's ``name`` is reported in
     ``deepest_match``; ids with all level lists empty get
     ``deepest_match == "NoMatch"``.
@@ -1006,7 +1013,7 @@ def collapse_to_one_row_per_uid(
             src = lvl["output_col"]
             collapsed_col = lvl["name"]
             values = _dedup_preserve(group[src].tolist()) if src in group else []
-            row[collapsed_col] = repr(values)
+            row[collapsed_col] = values
             if values:
                 deepest_name = lvl["name"]
         row["deepest_match"] = deepest_name if deepest_name else "NoMatch"
@@ -1015,7 +1022,7 @@ def collapse_to_one_row_per_uid(
             _dedup_preserve(group["mode_of_operation"].tolist())
             if "mode_of_operation" in group else []
         )
-        row["mode_of_operation"] = repr(modes)
+        row["mode_of_operation"] = modes
         rows.append(row)
 
     out_cols = (
