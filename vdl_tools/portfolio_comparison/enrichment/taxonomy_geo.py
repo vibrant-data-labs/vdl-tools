@@ -95,6 +95,11 @@ def map_taxonomy(
     out = summaries[["customer_row_id"]].merge(
         mapped[["customer_row_id"] + tax_cols], on="customer_row_id", how="left",
     )
+    from vdl_tools.portfolio_comparison.enrichment.overrides import (
+        apply_taxonomy_overrides,
+    )
+
+    out = apply_taxonomy_overrides(out, results_dir)
     out = out.astype(object).where(pd.notna(out), pd.NA)
     results_dir = Path(results_dir)
     out.to_parquet(results_dir / f"{TAXONOMY_BASENAME}.parquet", index=False)
