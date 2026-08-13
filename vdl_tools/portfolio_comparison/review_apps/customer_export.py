@@ -157,15 +157,43 @@ def build_export_frame(
             extra["_enrichment_textless"] = True
             extra["_sponsor_note"] = extra["customer_row_id"].map(sponsor_notes or {})
             rows = pd.concat([rows, extra], ignore_index=True)
+    import re as _re
+
+    def _own_ein(r):
+        for v in (r.get("customer_ein"), r.get("matched_id")):
+            if pd.notna(v) and _re.fullmatch(r"\d{2}-\d{7}", str(v)):
+                return str(v)
+        return None
+
+    def _category(r):
+        # Three classes (Zein, 2026-08-13) — prose lives in the email, the
+        # sheet carries a short label + a ProPublica link where relevant.
+        if (pd.notna(r.get("status")) and r["status"] == "customer_review"
+                and pd.notna(r.get("matched_name"))):
+            return f"Confirm best guess: {r['matched_name']} ({r['matched_url']})"
+        if pd.notna(r.get("_sponsor_note")):
+            return "Fiscal sponsor info only"
+        if _own_ein(r):
+            return "EIN not in IRS data (see ProPublica link)"
+        if r["entity_type"] == "for_profit":
+            return "Website thin or unfindable"
+        return "No identifiers provided"
+
+    def _propublica(r):
+        ein = _own_ein(r)
+        return (f"https://projects.propublica.org/nonprofits/organizations/"
+                f"{ein.replace('-', '')}") if ein else ""
+
     return pd.DataFrame({
         ID_COL: rows["customer_row_id"],
         "Organization": rows["customer_name"],
         "Website (as provided)": rows["customer_url"],
         "EIN (as provided)": rows["customer_ein"],
         "Type": rows["entity_type"].map({"for_profit": "Company", "nonprofit": "Nonprofit"}),
+        "Category": rows.apply(_category, axis=1),
         "Fiscal sponsor on file (FYI)": rows["customer_row_id"].map(
             sponsor_notes or {}).fillna(""),
-        "What we need": rows.apply(_ask, axis=1, objective=objective),
+        "ProPublica link": rows.apply(_propublica, axis=1),
         **{col: "" for col in RESPONSE_COLUMNS},
     })
 

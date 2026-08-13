@@ -30,9 +30,9 @@ def test_export_selects_unresolved_and_customer_review_rows():
     frame = build_export_frame(m)
     assert list(frame["ID (do not edit)"]) == ["r1", "r2"]
     assert all(col in frame.columns for col in RESPONSE_COLUMNS)
-    asks = list(frame["What we need"])
-    assert "couldn't find" in asks[0]
-    assert "best guess: Maybe Organization" in asks[1]
+    cats = list(frame["Category"])
+    assert cats[0] in ("No identifiers provided", "Website thin or unfindable")
+    assert "best guess: Maybe Organization" in cats[1]
 
 
 class FakeCB:
@@ -101,7 +101,7 @@ def test_text_mode_export_only_asks_for_textless_rows():
     m = assess_readiness(m, "text")
     frame = build_export_frame(m, objective="text")
     assert list(frame["ID (do not edit)"]) == ["r2"]
-    assert "paste a 2-3 sentence description" in frame.iloc[0]["What we need"]
+    assert frame.iloc[0]["Category"] == "Website thin or unfindable"
 
 
 def test_annotate_sources_by_id_shape():
