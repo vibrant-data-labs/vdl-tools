@@ -1262,7 +1262,14 @@ def write_report(summaries, comparisons, out_dir: pl.Path, baseline: str, judge_
             if model == baseline:
                 continue
             c = grp["cost_usd"].mean() * 1000
-            print(f"  {model:<34} {'free' if c <= 0 else f'{base_cost / c:>5.1f}x cheaper'}")
+            label = (
+                "free"
+                if c <= 0
+                else f"{base_cost / c:>5.1f}x cheaper"
+                if c < base_cost
+                else f"{c / base_cost:>5.1f}x more expensive"
+            )
+            print(f"  {model:<34} {label}")
 
     # Severity distribution rather than a single unfaithful rate: a fabricated
     # date and a safe inference are both "unfaithful" but not the same risk.
