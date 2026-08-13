@@ -65,21 +65,30 @@ _REAL_OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 # openai_api_utils builds a module-level OpenAI client at import time and raises
 # without a key -- and make_page_text imports it transitively. Candidate models
 # all run through Vercel and never touch that client, so a placeholder is enough
-# to get through the import.
-os.environ.setdefault("OPENAI_API_KEY", "unused-by-this-benchmark")
+# to get through the import. Avoid leaking a fake key into the broader process.
+_HAD_OPENAI_KEY = "OPENAI_API_KEY" in os.environ
+if not _HAD_OPENAI_KEY:
+    os.environ["OPENAI_API_KEY"] = "unused-by-this-benchmark"
+try:
+    from vdl_tools.shared_tools.web_summarization.make_page_text import make_group_text
+finally:
+    if not _HAD_OPENAI_KEY:
+        os.environ.pop("OPENAI_API_KEY", None)
 
-from vdl_tools.shared_tools.openai.openai_api_utils import contains_i_am
+
+def contains_i_am(x: str) -> bool:
+    x = (x or "").lower()
+    return "i am" in x or "i'm" in x
+
 from vdl_tools.shared_tools.tools.config_utils import get_configuration
 from vdl_tools.shared_tools.tools.logger import logger
 from vdl_tools.shared_tools.tools.text_cleaning import (
     check_for_repeating_sequences,
     clean_scraped_text,
 )
-from vdl_tools.shared_tools.web_summarization.make_page_text import make_group_text
 from vdl_tools.shared_tools.web_summarization.website_summarization_cache_psql import (
     GENERIC_ORG_WEBSITE_PROMPT_TEXT,
 )
-
 BASE_URL = "https://ai-gateway.vercel.sh/v1"
 
 # Everything routes through Vercel -- including the baseline -- so latency
