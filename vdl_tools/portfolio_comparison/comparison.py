@@ -91,15 +91,40 @@ def run_compare(engagement_root: str | Path) -> dict[str, pd.DataFrame]:
     port = port.drop_duplicates(subset="matched_id")
     with_pillar = port[port["level0_one_earth_category"].notna()]
 
-    tables = {
-        PILLAR_BASENAME: _share_table(
-            eco["_lvl0"].dropna(), with_pillar, "level0_one_earth_category"),
-        SUBPILLAR_BASENAME: _share_table(
-            eco["_lvl1"].dropna(),
-            with_pillar[with_pillar["level1_one_earth_category"].notna()],
-            "level1_one_earth_category"),
+    def _conversion(port_df):
+        c = port_df.groupby("level0_one_earth_category")["disposition"].agg(
+            n_invested=lambda s: int((s == "invested").sum()),
+            n_passed=lambda s: int((s == "passed").sum()),
+        )
+        c["conversion_rate"] = (
+            (c["n_invested"] / (c["n_invested"] + c["n_passed"]))
+            .astype(float).round(3)
+            if len(c) else pd.Series(dtype=float)
+        )
+        c.index.name = "pillar"
+        return c.sort_values("conversion_rate", ascending=False)
+
+    # Three segments (Zein's spec): blended, then for-profit-only, then
+    # nonprofit-only — each pairing the matching side of the ecosystem
+    # ("Org Type") with the matching side of the portfolio (entity_type).
+    segments = {
+        "": (eco, with_pillar),
+        "_forprofit": (eco[eco["_org_type"] == "For Profit"],
+                       with_pillar[with_pillar["entity_type"] == "for_profit"]),
+        "_nonprofit": (eco[eco["_org_type"] == "Non Profit"],
+                       with_pillar[with_pillar["entity_type"] == "nonprofit"]),
     }
-    # Ecosystem split by org type (baseline "Org Type": For/Non Profit).
+    tables = {}
+    for suffix, (eco_seg, port_seg) in segments.items():
+        tables[PILLAR_BASENAME + suffix] = _share_table(
+            eco_seg["_lvl0"].dropna(), port_seg, "level0_one_earth_category")
+        tables[SUBPILLAR_BASENAME + suffix] = _share_table(
+            eco_seg["_lvl1"].dropna(),
+            port_seg[port_seg["level1_one_earth_category"].notna()],
+            "level1_one_earth_category")
+        tables[CONVERSION_BASENAME + suffix] = _conversion(port_seg)
+    # The blended tables also carry the ecosystem org-type split columns
+    # (used by the blended chart's 4-series view).
     for label, key in (("forprofit", "For Profit"), ("nonprofit", "Non Profit")):
         for name, lvl in ((PILLAR_BASENAME, "_lvl0"), (SUBPILLAR_BASENAME, "_lvl1")):
             _s = eco.loc[eco["_org_type"] == key, lvl].dropna()
@@ -107,16 +132,6 @@ def run_compare(engagement_root: str | Path) -> dict[str, pd.DataFrame]:
                 _s.value_counts(normalize=True) * 100).round(1)
             tables[name][f"n_eco_{label}"] = _s.value_counts()
             tables[name] = tables[name].fillna(0)
-
-    conv = with_pillar.groupby("level0_one_earth_category")["disposition"].agg(
-        n_invested=lambda s: int((s == "invested").sum()),
-        n_passed=lambda s: int((s == "passed").sum()),
-    )
-    conv["conversion_rate"] = (
-        conv["n_invested"] / (conv["n_invested"] + conv["n_passed"])
-    ).round(3)
-    conv.index.name = "pillar"
-    tables[CONVERSION_BASENAME] = conv.sort_values("conversion_rate", ascending=False)
 
     for name, df in tables.items():
         df.to_csv(results_dir / f"{name}.csv")

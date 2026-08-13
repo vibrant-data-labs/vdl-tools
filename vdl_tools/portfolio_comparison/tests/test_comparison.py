@@ -23,7 +23,7 @@ def engagement(tmp_path):
     (results / "baseline").mkdir(parents=True)
     # Ecosystem: 4 orgs — 2 Energy (repr-list encoded), 2 Nature.
     eco = pd.DataFrame([
-        {"uid": f"u{i}",
+        {"uid": f"u{i}", "Org Type": "For Profit",
          "level0_one_earth_category": lvl0, "level1_one_earth_category": lvl1}
         for i, (lvl0, lvl1) in enumerate([
             ("['Energy Transition']", "['Renewable Power']"),
@@ -37,16 +37,16 @@ def engagement(tmp_path):
     # Portfolio: 3 orgs (one duplicated matched_id) — 2 Energy (1 inv, 1 pass),
     # 1 Nature (inv).
     port = pd.DataFrame([
-        {"customer_row_id": "r1", "matched_id": "m1", "disposition": "invested",
+        {"customer_row_id": "r1", "entity_type": "for_profit", "matched_id": "m1", "disposition": "invested",
          "level0_one_earth_category": "Energy Transition",
          "level1_one_earth_category": "Renewable Power"},
-        {"customer_row_id": "r1b", "matched_id": "m1", "disposition": "invested",
+        {"customer_row_id": "r1b", "entity_type": "for_profit", "matched_id": "m1", "disposition": "invested",
          "level0_one_earth_category": "Energy Transition",
          "level1_one_earth_category": "Renewable Power"},
-        {"customer_row_id": "r2", "matched_id": "m2", "disposition": "passed",
+        {"customer_row_id": "r2", "entity_type": "for_profit", "matched_id": "m2", "disposition": "passed",
          "level0_one_earth_category": "Energy Transition",
          "level1_one_earth_category": "Energy Efficiency"},
-        {"customer_row_id": "r3", "matched_id": "m3", "disposition": "invested",
+        {"customer_row_id": "r3", "entity_type": "for_profit", "matched_id": "m3", "disposition": "invested",
          "level0_one_earth_category": "Nature Conservation",
          "level1_one_earth_category": "Land Conservation"},
     ])
@@ -75,3 +75,7 @@ def test_compare_shares_tilt_and_conversion(engagement):
     state = json.loads((engagement / "pipeline_state.json").read_text())
     assert state["stages"]["compare"]["n_portfolio_with_pillar"] == 3
     assert (engagement / "data/results/comparison_pillar.csv").exists()
+    # Segment outputs exist; FP segment matches blended here (all-FP fixture).
+    fp = tables["comparison_pillar_forprofit"]
+    assert fp.at["Energy Transition", "portfolio_pct"] == 66.7
+    assert (engagement / "data/results/comparison_conversion_nonprofit.csv").exists()

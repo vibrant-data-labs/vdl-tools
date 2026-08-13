@@ -26,10 +26,15 @@ def _():
 
     R = Path.cwd() / "data" / "results"
     pillar = pd.read_csv(R / "comparison_pillar.csv", index_col=0)
+    pillar_fp = pd.read_csv(R / "comparison_pillar_forprofit.csv", index_col=0)
+    pillar_np = pd.read_csv(R / "comparison_pillar_nonprofit.csv", index_col=0)
     conv = pd.read_csv(R / "comparison_conversion.csv", index_col=0)
+    conv_fp = pd.read_csv(R / "comparison_conversion_forprofit.csv", index_col=0)
+    conv_np = pd.read_csv(R / "comparison_conversion_nonprofit.csv", index_col=0)
     enriched = pd.read_parquet(R / "enriched_portfolio.parquet")
     FOREST, MOSS, GOLD, LIGHT = "#2C5F2D", "#97BC62", "#D9A21B", "#D5DFD2"
-    return FOREST, GOLD, LIGHT, MOSS, R, alt, conv, enriched, mo, pd, pillar
+    return (FOREST, GOLD, LIGHT, MOSS, R, alt, conv, conv_fp, conv_np,
+            enriched, mo, pd, pillar, pillar_fp, pillar_np)
 
 
 @app.cell
@@ -46,80 +51,95 @@ taxonomy-mapped · {int(enriched['Latitude'].notna().sum())} geocoded
 
 
 @app.cell
-def _(FOREST, GOLD, MOSS, alt, mo, pillar):  # noqa: color scale incl. slate
-    _long = pillar.reset_index().melt(
-        id_vars="category",
-        value_vars=["eco_forprofit_pct", "eco_nonprofit_pct",
-                    "portfolio_pct", "invested_pct"],
-        var_name="series", value_name="pct")
-    _names = {"eco_forprofit_pct": "Ecosystem: for-profits",
-              "eco_nonprofit_pct": "Ecosystem: nonprofits",
-              "portfolio_pct": "OSP full deal flow",
-              "invested_pct": "OSP invested only"}
-    _long["series"] = _long["series"].map(_names)
-    pillar_chart = mo.ui.altair_chart(
-        alt.Chart(_long).mark_bar().encode(
-            x=alt.X("series:N", title=None, axis=None,
-                    sort=list(_names.values())),
-            y=alt.Y("pct:Q", title="% of orgs with a pillar"),
-            color=alt.Color("series:N", title=None,
-                            scale=alt.Scale(domain=list(_names.values()),
-                                            range=[MOSS, "#50808E", GOLD, FOREST]),
-                            legend=alt.Legend(orient="bottom")),
-            column=alt.Column("category:N", title=None,
-                              sort=alt.SortField("pct", "descending"),
-                              header=alt.Header(labelFontSize=11)),
-            tooltip=["category", "series", "pct"],
-        ).properties(width=110, height=300,
-                     title="For-profit and nonprofit climate have opposite shapes"))
+def _(FOREST, GOLD, MOSS, alt, mo, pillar, pillar_fp, pillar_np):
+    def pillar_chart(df, series, colors, title):
+        """Grouped bars per pillar; series = {csv_column: display name}."""
+        _long = df.reset_index().melt(
+            id_vars="category", value_vars=list(series),
+            var_name="series", value_name="pct")
+        _long["series"] = _long["series"].map(series)
+        return mo.ui.altair_chart(
+            alt.Chart(_long).mark_bar().encode(
+                x=alt.X("series:N", title=None, axis=None,
+                        sort=list(series.values())),
+                y=alt.Y("pct:Q", title="% of orgs with a pillar"),
+                color=alt.Color("series:N", title=None,
+                                scale=alt.Scale(domain=list(series.values()),
+                                                range=colors),
+                                legend=alt.Legend(orient="bottom")),
+                column=alt.Column("category:N", title=None,
+                                  header=alt.Header(labelFontSize=11)),
+                tooltip=["category", "series", "pct"],
+            ).properties(width=110, height=260, title=title))
+
+    SLATE = "#50808E"
     mo.vstack([
         mo.md("## Where OSP sits in the landscape"),
-        pillar_chart,
+        pillar_chart(pillar, {
+            "eco_forprofit_pct": "Ecosystem: for-profits",
+            "eco_nonprofit_pct": "Ecosystem: nonprofits",
+            "portfolio_pct": "OSP full deal flow",
+            "invested_pct": "OSP invested only",
+        }, [MOSS, SLATE, GOLD, FOREST],
+            "Blended: for-profit and nonprofit climate have opposite shapes"),
+        pillar_chart(pillar_fp, {
+            "ecosystem_pct": "Ecosystem for-profits",
+            "portfolio_pct": "OSP companies: deal flow",
+            "invested_pct": "OSP companies: invested",
+        }, [MOSS, GOLD, FOREST],
+            "For-profits only: OSP runs energy-light vs the investable universe"),
+        pillar_chart(pillar_np, {
+            "ecosystem_pct": "Ecosystem nonprofits",
+            "portfolio_pct": "OSP grants: deal flow",
+            "invested_pct": "OSP grants: invested",
+        }, [SLATE, GOLD, FOREST],
+            "Nonprofits only: OSP grants vs the nonprofit landscape"),
         mo.md("*The blended ecosystem hides a split: for-profit climate is "
               "energy-dominated (63.5% Energy Transition) while nonprofit "
-              "climate is nature-dominated (63.2% Nature Conservation). Read "
-              "OSP's companies against the for-profit bars and its grants "
-              "against the nonprofit bars — against the investable universe, "
-              "OSP's deal flow is actually energy-LIGHT (38.9% vs 63.5%).*"),
+              "climate is nature-dominated (63.2% Nature Conservation). The "
+              "segment charts pair each side of OSP with its own universe.*"),
     ])
     return
 
 @app.cell
-def _(FOREST, LIGHT, alt, conv, mo):
-    _long = conv.reset_index().melt(
-        id_vars=["pillar", "conversion_rate"],
-        value_vars=["n_invested", "n_passed"],
-        var_name="outcome", value_name="n")
-    _long["outcome"] = _long["outcome"].map(
-        {"n_invested": "Invested", "n_passed": "Passed"})
-    _order = conv.sort_values("conversion_rate", ascending=False).index.tolist()
-    _bars = alt.Chart(_long).mark_bar().encode(
-        y=alt.Y("pillar:N", sort=_order, title=None),
-        x=alt.X("n:Q", title="deals with a taxonomy match"),
-        color=alt.Color("outcome:N", title=None,
-                        scale=alt.Scale(domain=["Invested", "Passed"],
-                                        range=[FOREST, LIGHT]),
-                        legend=alt.Legend(orient="bottom")),
-        order=alt.Order("outcome:N"),
-        tooltip=["pillar", "outcome", "n", "conversion_rate"],
-    )
-    _totals = conv.reset_index()
-    _totals["total"] = _totals["n_invested"] + _totals["n_passed"]
-    _labels = alt.Chart(_totals).mark_text(
-        align="left", dx=6, color=FOREST, fontWeight="bold").encode(
-        y=alt.Y("pillar:N", sort=_order),
-        x="total:Q",
-        text=alt.Text("conversion_rate:Q", format=".0%"),
-    )
-    conv_chart = mo.ui.altair_chart(
-        (_bars + _labels).properties(
-            width=620, height=260,
-            title="OSP passes on energy, converts on nature (label = conversion rate)"))
+def _(FOREST, LIGHT, alt, conv, conv_fp, conv_np, mo):
+    def conv_chart(df, title):
+        """Stacked invested/passed bars with conversion-rate labels."""
+        _long = df.reset_index().melt(
+            id_vars=["pillar", "conversion_rate"],
+            value_vars=["n_invested", "n_passed"],
+            var_name="outcome", value_name="n")
+        _long["outcome"] = _long["outcome"].map(
+            {"n_invested": "Invested", "n_passed": "Passed"})
+        _order = df.sort_values("conversion_rate",
+                                ascending=False).index.tolist()
+        _bars = alt.Chart(_long).mark_bar().encode(
+            y=alt.Y("pillar:N", sort=_order, title=None),
+            x=alt.X("n:Q", title="deals with a taxonomy match"),
+            color=alt.Color("outcome:N", title=None,
+                            scale=alt.Scale(domain=["Invested", "Passed"],
+                                            range=[FOREST, LIGHT]),
+                            legend=alt.Legend(orient="bottom")),
+            order=alt.Order("outcome:N"),
+            tooltip=["pillar", "outcome", "n", "conversion_rate"],
+        )
+        _totals = df.reset_index()
+        _totals["total"] = _totals["n_invested"] + _totals["n_passed"]
+        _labels = alt.Chart(_totals).mark_text(
+            align="left", dx=6, color=FOREST, fontWeight="bold").encode(
+            y=alt.Y("pillar:N", sort=_order), x="total:Q",
+            text=alt.Text("conversion_rate:Q", format=".0%"),
+        )
+        return mo.ui.altair_chart(
+            (_bars + _labels).properties(width=620, height=200, title=title))
+
     mo.vstack([
         mo.md("## Deals seen vs deals done"),
-        conv_chart,
-        mo.md("*A nature deal in OSP's pipeline is 3.4\u00d7 likelier to be funded "
-              "than an energy deal (50% vs 15% conversion).*"),
+        conv_chart(conv, "Blended: OSP passes on energy, converts on nature"),
+        conv_chart(conv_fp, "Companies only"),
+        conv_chart(conv_np, "Nonprofit grants only"),
+        mo.md("*Labels = conversion rate. Blended: a nature deal is 3.4\u00d7 "
+              "likelier to be funded than an energy deal (50% vs 15%).*"),
     ])
     return
 
