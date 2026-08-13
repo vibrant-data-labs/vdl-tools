@@ -47,6 +47,14 @@ def _ask(row, objective: str = "financials") -> str:
             "Correct? If not, please fill in the columns to the right."
         )
     if objective == "text":
+        if row.get("_sponsor_note"):
+            return (
+                "The EIN/website we have belongs to this project's fiscal "
+                "sponsor (see FYI column), which can't tell us what the "
+                "project itself does. Please paste a 2-3 sentence description "
+                "of the project's own work (grant application text works "
+                "great) — or its own website if one exists."
+            )
         if row.get("_enrichment_textless"):
             # Identity is settled; the full pipeline just found no usable
             # text (site unscrapable/parked/JS-only, sources description-less).
@@ -82,9 +90,46 @@ def _ask(row, objective: str = "financials") -> str:
     return base + "Please confirm its website and legal name."
 
 
+def _sponsor_context(config, results_dir) -> dict[str, str]:
+    """customer_row_id -> 'Fiscal sponsor on file' note, from source columns
+    like 'Fiscal Sponsor Name/EIN/Website'. The sponsor's identifiers are
+    context, not identity (intake blanks them for matching) — but the sheet
+    should acknowledge what the customer already gave us."""
+    import json as _json
+
+    from vdl_tools.portfolio_comparison.intake import profile_inputs as pi
+    from vdl_tools.portfolio_comparison.run import _read_customer_file
+
+    profile_path = Path(results_dir) / "intake_profile.json"
+    if not profile_path.exists():
+        return {}
+    notes: dict[str, str] = {}
+    for profile in _json.loads(profile_path.read_text())["files"]:
+        label = profile["file"]
+        inverse = {v: k for k, v in profile["column_mapping"].items()
+                   if v != "passthrough"}
+        df = _read_customer_file(config.input_path(label))
+        sponsor_cols = [c for c in df.columns
+                        if isinstance(c, str) and "fiscal sponsor" in c.lower()]
+        if not sponsor_cols:
+            continue
+        name_col, url_col = inverse["name"], inverse.get("url")
+        for i, (_, row) in enumerate(df.iterrows()):
+            parts = [f"{c.replace('Fiscal Sponsor ', '')}: {row[c]}"
+                     for c in sponsor_cols
+                     if pd.notna(row[c]) and str(row[c]).strip()]
+            if not parts:
+                continue
+            rid = pi.make_row_id(label, row[name_col],
+                                 (row[url_col] if url_col else "") or "", i)
+            notes[rid] = "Fiscal sponsor — " + "; ".join(parts)
+    return notes
+
+
 def build_export_frame(
     id_mapping: pd.DataFrame, objective: str = "financials",
     summaries: pd.DataFrame | None = None,
+    sponsor_notes: dict[str, str] | None = None,
 ) -> pd.DataFrame:
     rows = id_mapping[
         id_mapping["status"].isna() | (id_mapping["status"] == "customer_review")
@@ -95,6 +140,7 @@ def build_export_frame(
         rows = rows[~rows["enrichment_ready"].fillna(False).astype(bool)]
     rows = rows.copy()
     rows["_enrichment_textless"] = False
+    rows["_sponsor_note"] = rows["customer_row_id"].map(sponsor_notes or {})
     if objective == "text" and summaries is not None:
         # Phase-2 truth beats Phase-1 prediction: rows whose FULL pipeline
         # produced no usable text join the ask even when identity-matched
@@ -109,6 +155,7 @@ def build_export_frame(
         ].copy()
         if len(extra):
             extra["_enrichment_textless"] = True
+            extra["_sponsor_note"] = extra["customer_row_id"].map(sponsor_notes or {})
             rows = pd.concat([rows, extra], ignore_index=True)
     return pd.DataFrame({
         ID_COL: rows["customer_row_id"],
@@ -116,6 +163,8 @@ def build_export_frame(
         "Website (as provided)": rows["customer_url"],
         "EIN (as provided)": rows["customer_ein"],
         "Type": rows["entity_type"].map({"for_profit": "Company", "nonprofit": "Nonprofit"}),
+        "Fiscal sponsor on file (FYI)": rows["customer_row_id"].map(
+            sponsor_notes or {}).fillna(""),
         "What we need": rows.apply(_ask, axis=1, objective=objective),
         **{col: "" for col in RESPONSE_COLUMNS},
     })
@@ -127,7 +176,8 @@ def export_customer_roundtrip(engagement_root: str | Path) -> Path:
     summaries_path = results_dir / "org_summaries.parquet"
     summaries = pd.read_parquet(summaries_path) if summaries_path.exists() else None
     frame = build_export_frame(load_id_mapping(results_dir),
-                               config.match_objective, summaries=summaries)
+                               config.match_objective, summaries=summaries,
+                               sponsor_notes=_sponsor_context(config, results_dir))
 
     out = results_dir / f"customer_review_{config.customer}_{date.today().isoformat()}.xlsx"
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
