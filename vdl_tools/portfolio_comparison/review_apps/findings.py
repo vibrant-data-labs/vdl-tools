@@ -46,12 +46,14 @@ taxonomy-mapped · {int(enriched['Latitude'].notna().sum())} geocoded
 
 
 @app.cell
-def _(FOREST, GOLD, MOSS, alt, mo, pillar):
+def _(FOREST, GOLD, MOSS, alt, mo, pillar):  # noqa: color scale incl. slate
     _long = pillar.reset_index().melt(
         id_vars="category",
-        value_vars=["ecosystem_pct", "portfolio_pct", "invested_pct"],
+        value_vars=["eco_forprofit_pct", "eco_nonprofit_pct",
+                    "portfolio_pct", "invested_pct"],
         var_name="series", value_name="pct")
-    _names = {"ecosystem_pct": "US climate ecosystem",
+    _names = {"eco_forprofit_pct": "Ecosystem: for-profits",
+              "eco_nonprofit_pct": "Ecosystem: nonprofits",
               "portfolio_pct": "OSP full deal flow",
               "invested_pct": "OSP invested only"}
     _long["series"] = _long["series"].map(_names)
@@ -62,20 +64,23 @@ def _(FOREST, GOLD, MOSS, alt, mo, pillar):
             y=alt.Y("pct:Q", title="% of orgs with a pillar"),
             color=alt.Color("series:N", title=None,
                             scale=alt.Scale(domain=list(_names.values()),
-                                            range=[MOSS, GOLD, FOREST]),
+                                            range=[MOSS, "#50808E", GOLD, FOREST]),
                             legend=alt.Legend(orient="bottom")),
             column=alt.Column("category:N", title=None,
                               sort=alt.SortField("pct", "descending"),
                               header=alt.Header(labelFontSize=11)),
             tooltip=["category", "series", "pct"],
         ).properties(width=110, height=300,
-                     title="The invested book mirrors the ecosystem; deal flow doesn't"))
+                     title="For-profit and nonprofit climate have opposite shapes"))
     mo.vstack([
         mo.md("## Where OSP sits in the landscape"),
         pillar_chart,
-        mo.md("*Invested holdings track the landscape's shape (Nature "
-              "Conservation leads). Deal flow runs 21 points light on Nature "
-              "Conservation and heavy on Energy Transition.*"),
+        mo.md("*The blended ecosystem hides a split: for-profit climate is "
+              "energy-dominated (63.5% Energy Transition) while nonprofit "
+              "climate is nature-dominated (63.2% Nature Conservation). Read "
+              "OSP's companies against the for-profit bars and its grants "
+              "against the nonprofit bars — against the investable universe, "
+              "OSP's deal flow is actually energy-LIGHT (38.9% vs 63.5%).*"),
     ])
     return
 
@@ -165,8 +170,10 @@ def _(FOREST, GOLD, LIGHT, MOSS, R, alt, enriched, mo, pd):
 def _(mo):
     mo.md("""
 ## Key findings
-1. **OSP's invested book mirrors the climate ecosystem's shape; its deal flow
-   doesn't** — energy-heavy, nature-light.
+1. **For-profit and nonprofit climate are opposite worlds** — companies are
+   63.5% Energy Transition, nonprofits 63.2% Nature Conservation. Against the
+   investable (for-profit) universe, OSP's deal flow is energy-light and
+   nature-heavy — the reverse of the blended-ecosystem read.
 2. **Conversion tells the strategy**: 50% on nature vs 15% on energy — a
    nature-conviction investor swimming in energy deal flow.
 3. **46 portfolio orgs are invisible to standard data infrastructure** —

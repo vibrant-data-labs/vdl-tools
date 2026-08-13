@@ -57,6 +57,8 @@ def load_ecosystem(results_dir: str | Path) -> pd.DataFrame:
     for depth in (0, 1):
         col = next(c for c in eco.columns if f"level{depth}" in c.lower())
         eco[f"_lvl{depth}"] = eco[col].map(_primary)
+    type_col = next((c for c in eco.columns if c.lower() == "org type"), None)
+    eco["_org_type"] = eco[type_col] if type_col else "No Data"
     return eco
 
 
@@ -97,6 +99,14 @@ def run_compare(engagement_root: str | Path) -> dict[str, pd.DataFrame]:
             with_pillar[with_pillar["level1_one_earth_category"].notna()],
             "level1_one_earth_category"),
     }
+    # Ecosystem split by org type (baseline "Org Type": For/Non Profit).
+    for label, key in (("forprofit", "For Profit"), ("nonprofit", "Non Profit")):
+        for name, lvl in ((PILLAR_BASENAME, "_lvl0"), (SUBPILLAR_BASENAME, "_lvl1")):
+            _s = eco.loc[eco["_org_type"] == key, lvl].dropna()
+            tables[name][f"eco_{label}_pct"] = (
+                _s.value_counts(normalize=True) * 100).round(1)
+            tables[name][f"n_eco_{label}"] = _s.value_counts()
+            tables[name] = tables[name].fillna(0)
 
     conv = with_pillar.groupby("level0_one_earth_category")["disposition"].agg(
         n_invested=lambda s: int((s == "invested").sum()),
