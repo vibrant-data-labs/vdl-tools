@@ -144,46 +144,28 @@ def _(FOREST, LIGHT, alt, conv, conv_fp, conv_np, mo):
     return
 
 @app.cell
-def _(FOREST, GOLD, LIGHT, MOSS, R, alt, enriched, mo, pd):
-    # Unmapped decomposition. The textless count = current customer ask rows;
-    # class splits for the with-text rows come from the second-reader-
-    # verified nomatch_analysis.md (52 out-of-scope / 7 vague / 9 recoverable).
+def _(R, enriched, mo, pd):
+    # What didn't map — adjudicated numbers (see nomatch_analysis.md; the
+    # review pool is exhausted: 7 corrections applied, 11 proposals rejected).
     _no_pillar = enriched[enriched["level0_one_earth_category"].isna()]
     _ask = pd.read_excel(sorted(R.glob("customer_review_*.xlsx"))[-1])
     _n_ask = len(set(_ask["ID (do not edit)"]) & set(_no_pillar["customer_row_id"]))
-    _df = pd.DataFrame({
-        "why": [f"No usable text - below the data radar ({_n_ask})",
-                "Verified outside climate scope (52)",
-                "Text too vague to map (7)",
-                "Recoverable via mapping improvements (9)"],
-        "n": [_n_ask, 52, 7, 9],
-        "color": [GOLD, MOSS, LIGHT, FOREST],
-    })
-    donut_chart = mo.ui.altair_chart(
-        alt.Chart(_df).mark_arc(innerRadius=70).encode(
-            theta="n:Q",
-            color=alt.Color("why:N", title=None,
-                            scale=alt.Scale(domain=_df["why"].tolist(),
-                                            range=_df["color"].tolist()),
-                            legend=alt.Legend(orient="right", labelLimit=320)),
-            tooltip=["why", "n"],
-        ).properties(width=340, height=300,
-                     title=f"{len(_no_pillar)} orgs without a pillar - mostly signal, not failure"))
-    mo.vstack([
-        mo.md("## What didn't map, and why"),
-        donut_chart,
-        mo.md(f"""
-- **{_n_ask} have no text anywhere** - fiscally sponsored projects,
+    _n_text = int(_no_pillar["text_for_taxonomy"].notna().sum())
+    mo.md(f"""
+## What didn't map, and why — {len(_no_pillar)} orgs, mostly signal
+
+- **{_n_ask} have no usable text** — fiscally sponsored projects,
   Indigenous-led and international orgs that never file US tax forms under
   their own names, plus dead/unreadable sites. *The {len(_ask)}-row customer
   ask covers these.*
-- **52 are verifiably not climate** (reviewed against pillar definitions) -
-  36 of them passed deals: a finding about OSP's deal sources, not an error.
-- **9 expose the taxonomy's blind spots** - adaptation & resilience, water
-  supply, Indigenous biocultural stewardship: candidate One Earth amendments.
-  Full per-org evidence: `data/results/nomatch_analysis.md`.
-"""),
-    ])
+- **Of the {_n_text} with text: 52 are verifiably not climate** (reviewed
+  against pillar definitions) — 36 of them passed deals: a finding about
+  OSP's deal sources, not an error.
+- **7 are too vague to map**; the rest were reviewed and rejected, or await
+  One Earth taxonomy amendments (adaptation & resilience, water supply,
+  Indigenous biocultural stewardship). Every corrected placement lives in
+  `taxonomy_overrides.json`; full evidence in `data/results/nomatch_analysis.md`.
+""")
     return
 
 @app.cell
