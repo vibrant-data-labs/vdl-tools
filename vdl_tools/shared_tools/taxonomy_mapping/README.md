@@ -641,6 +641,31 @@ Optional knobs (all have sensible defaults):
 | `nested_min=0.60` | containment threshold for "nested" | 0.60 |
 | `taxonomy_tables=...` | pre-loaded definition tables, for taxonomies needing a custom loader (e.g. OE's synthesized Sub-Terms) | loaded from `TAXONOMY_FILE` |
 | `group_colors={...}` | fixed group→hex palette | automatic assignment |
+| `per_row=df` + `subset_label="..."` | analyze one entity cohort (see below) | whole mapping file |
+
+### Analyzing one cohort at a time
+
+To compare how a taxonomy behaves for different kinds of entity (for-profit
+vs nonprofit, one region at a time), call `run_overlap_analysis` once per
+cohort with a pre-filtered `per_row`, its own `file_prefix`, and a
+`subset_label`. The label leads every chart title and the summary heading,
+so two cohorts' charts are never confusable once they leave the folder.
+
+```python
+for label, prefix, keep in [("For-profit only", "fp_", df.kind == "For Profit"),
+                            ("Nonprofit only",  "np_", df.kind == "Non Profit")]:
+    ato.run_overlap_analysis(MAPPING_FILE, TAXONOMY_FILE, MY_LEVELS, REPORT_DIR,
+                             per_row=df[keep], file_prefix=prefix,
+                             subset_label=label)
+```
+
+Everything is recomputed **within** the cohort — term sizes, prevalence,
+lift, and the structural ceiling all use the cohort as the denominator. That
+is what makes each cohort's numbers internally valid, and it also means they
+are not comparable to a full-pool run: the same pair shows a different lift
+in each. Check cohort sizes before reading anything into the result — a
+small cohort leaves most terms too thin (n≤3) to support a containment
+claim, which is what the summary's "terms with ≤3 entities" column is for.
 
 ### What you get
 

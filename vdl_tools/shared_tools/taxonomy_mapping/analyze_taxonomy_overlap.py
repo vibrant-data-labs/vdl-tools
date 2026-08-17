@@ -533,11 +533,22 @@ def _provenance_line(provenance: dict) -> str:
             f"mapping: {provenance['mapping_file']}")
 
 
+def _titled(base: str, subset_label: str | None) -> str:
+    """Put the cohort label in FRONT of a chart/report title.
+
+    When a driver runs the same analysis over several entity subsets
+    (for-profit vs nonprofit, one region at a time), the titles would
+    otherwise be identical and the charts only distinguishable by filename.
+    """
+    return f"{subset_label} · {base}" if subset_label else base
+
+
 def nesting_scatter(pairs: pd.DataFrame, level_name: str, group_name: str,
                     group_colors: dict[str, str], provenance: dict, *,
                     nested_min: float = DEFAULT_NESTED_MIN,
                     group_is_self: bool = False,
-                    max_pairs: int = DEFAULT_MAX_SCATTER_PAIRS) -> alt.LayerChart:
+                    max_pairs: int = DEFAULT_MAX_SCATTER_PAIRS,
+                    subset_label: str | None = None) -> alt.LayerChart:
     """Containment vs Jaccard, one dot per co-occurring pair; the shaded box
     marks the nested region.
 
@@ -545,6 +556,9 @@ def nesting_scatter(pairs: pd.DataFrame, level_name: str, group_name: str,
     a pair spanning two groups is grey (the tooltip names both). With
     group_is_self (level 0), every dot takes its smaller term's color.
     Dot area = entities in the smaller term.
+
+    subset_label names the entity cohort in the title when the analysis
+    covers a subset (e.g. "For-profit entities only").
     """
     shown = pairs.copy()
     n_all = len(shown)
@@ -617,7 +631,8 @@ def nesting_scatter(pairs: pd.DataFrame, level_name: str, group_name: str,
     return (band + diag + pts + notes).properties(
         width=520, height=460,
         title=alt.TitleParams(
-            f"{level_name} nesting — containment vs Jaccard",
+            _titled(f"{level_name} nesting — containment vs Jaccard",
+                    subset_label),
             subtitle=[subtitle_main, _provenance_line(provenance)],
             fontSize=13.5, subtitleFontSize=10.5, anchor="start"),
     )
@@ -626,7 +641,8 @@ def nesting_scatter(pairs: pd.DataFrame, level_name: str, group_name: str,
 def nesting_dumbbell(pairs: pd.DataFrame, level_name: str, group_name: str,
                      group_colors: dict[str, str], provenance: dict, *,
                      nested_min: float = DEFAULT_NESTED_MIN,
-                     max_rows: int = DEFAULT_MAX_DUMBBELL_ROWS) -> alt.LayerChart | None:
+                     max_rows: int = DEFAULT_MAX_DUMBBELL_ROWS,
+                     subset_label: str | None = None) -> alt.LayerChart | None:
     """Every nested pair as a row, sorted by containment (strongest first).
 
       filled dot = the SMALLER term: share of it also carrying the larger
@@ -635,6 +651,9 @@ def nesting_dumbbell(pairs: pd.DataFrame, level_name: str, group_name: str,
 
     Dot color = that term's group, area = its entity count. Returns None when
     no pair clears nested_min.
+
+    subset_label names the entity cohort in the title when the analysis
+    covers a subset (e.g. "For-profit entities only").
     """
     top = pairs[pairs.nested].copy()
     if top.empty:
@@ -724,7 +743,7 @@ def nesting_dumbbell(pairs: pd.DataFrame, level_name: str, group_name: str,
         # the largest dot still fits a row without spilling
         width=320, height=max(120, 21 * len(top)),
         title=alt.TitleParams(
-            f"{level_name} nesting — {shown_note}",
+            _titled(f"{level_name} nesting — {shown_note}", subset_label),
             subtitle=["filled dot = the SMALLER term;  hollow dot = the "
                       "LARGER term;  grey tick = chance.  Dot color = that "
                       f"term's {group_name}, area = its entity count;  sorted "
@@ -759,7 +778,8 @@ def make_provenance(mapping_file: Path, taxonomy_file: Path,
 def _summary_markdown(pairs_by_level: dict[int, pd.DataFrame],
                       levels: list[dict], provenance: dict,
                       nested_min: float, top_n: int = 10,
-                      summary_level_indices: list[int] | None = None) -> str:
+                      summary_level_indices: list[int] | None = None,
+                      subset_label: str | None = None) -> str:
     """One skimmable page: provenance, per-level counts, then ONE SECTION PER
     LEVEL with its top nested pairs split into same-parent (redundancy
     candidates) and cross-parent (co-practice), and how to read the numbers.
@@ -770,7 +790,7 @@ def _summary_markdown(pairs_by_level: dict[int, pd.DataFrame],
     which levels get a detail section at all (the counts table always shows
     every analyzed level, with a note for the ones excluded).
     """
-    lines = [f"# Taxonomy overlap / nesting summary",
+    lines = ["# " + _titled("Taxonomy overlap / nesting summary", subset_label),
              "",
              "## Provenance",
              "",
@@ -778,7 +798,15 @@ def _summary_markdown(pairs_by_level: dict[int, pd.DataFrame],
              f"- **Mapping file:** `{provenance['mapping_file']}` "
              f"(modified {provenance['mapping_mtime']})",
              f"- **Entities:** {provenance['n_entities']:,} "
-             f"({provenance['n_rows']:,} mapping rows)",
+             f"({provenance['n_rows']:,} mapping rows)",]
+    # every metric below is computed WITHIN the subset — prevalence, lift and
+    # the structural ceiling all use the subset as the denominator, so the
+    # numbers are not comparable to a run over the full entity pool
+    if subset_label:
+        lines.append(f"- **Entity subset:** {subset_label} — every count, "
+                     f"base rate, lift and ceiling below is computed within "
+                     f"this subset only")
+    lines += [
              f"- **Nested threshold:** containment ≥ {nested_min:.0%}",
              f"- **Analysis date:** {provenance['analysis_date']}",
              "",
@@ -959,6 +987,7 @@ def run_overlap_analysis(mapping_file: Path, taxonomy_file: Path,
                          level_indices: list[int] | None = None,
                          color_level: dict[int, int] | None = None,
                          summary_level_indices: list[int] | None = None,
+                         subset_label: str | None = None,
                          group_colors: dict[str, str] | None = None,
                          xlsx_columns: list[str] | None = None,
                          xlsx_rename: dict[str, str] | None = None,
@@ -978,8 +1007,17 @@ def run_overlap_analysis(mapping_file: Path, taxonomy_file: Path,
         ato.run_overlap_analysis(MAPPING_FILE, TAXONOMY_FILE, MY_LEVELS,
                                  REPORT_DIR, xlsx_path=PAIRS_XLSX,
                                  file_prefix="mytax_")
+
+    To analyze one entity cohort at a time, call it once per cohort with a
+    pre-filtered ``per_row``, a distinct ``file_prefix``, and a
+    ``subset_label`` that names the cohort in every title. Everything —
+    prevalence, lift, the structural ceiling — is then computed WITHIN that
+    cohort, so its numbers stand alone and are not comparable to a full-pool
+    run.
     """
     levels = normalize_levels(levels)
+    if subset_label:   # so a driver looping over cohorts reads cleanly
+        print(f"\n=== {subset_label} ===")
     if per_row is None:
         print(f"reading {Path(mapping_file).name} ...")
         per_row = pd.read_excel(mapping_file)
@@ -999,6 +1037,7 @@ def run_overlap_analysis(mapping_file: Path, taxonomy_file: Path,
         group_colors=group_colors, xlsx_columns=xlsx_columns,
         xlsx_rename=xlsx_rename,
         summary_level_indices=summary_level_indices,
+        subset_label=subset_label,
         max_dumbbell_rows=max_dumbbell_rows,
         max_scatter_pairs=max_scatter_pairs, png=png)
     for w in written:
@@ -1032,6 +1071,7 @@ def write_overlap_report(pairs_by_level: dict[int, pd.DataFrame],
                          xlsx_columns: list[str] | None = None,
                          xlsx_rename: dict[str, str] | None = None,
                          summary_level_indices: list[int] | None = None,
+                         subset_label: str | None = None,
                          png: bool = True) -> list[Path]:
     """Write, per analyzed level, the scatter + dumbbell charts (html/png),
     one xlsx of pair tables (provenance sheet first), and one summary report
@@ -1046,6 +1086,9 @@ def write_overlap_report(pairs_by_level: dict[int, pd.DataFrame],
     report (default all analyzed) — use it to keep a deep level with
     expected wholesale redundancy (e.g. 1,000+ Activities) from dominating;
     charts and xlsx sheets are unaffected.
+    subset_label: name of the entity cohort this run covers (e.g. "For-profit
+    entities only"); it leads every chart title and the summary heading, and
+    is recorded on the xlsx provenance sheet.
     """
     levels = normalize_levels(levels)
     report_dir = Path(report_dir)
@@ -1067,11 +1110,13 @@ def write_overlap_report(pairs_by_level: dict[int, pd.DataFrame],
         stem = report_dir / f"{file_prefix}{level_name.lower()}_nesting"
         scatter = nesting_scatter(pairs, level_name, gname, colors, provenance,
                                   nested_min=nested_min, group_is_self=is_self,
-                                  max_pairs=max_scatter_pairs)
+                                  max_pairs=max_scatter_pairs,
+                                  subset_label=subset_label)
         written += _save_chart(scatter, Path(str(stem) + "_scatter"), png)
         dumbbell = nesting_dumbbell(pairs, level_name, gname, colors,
                                     provenance, nested_min=nested_min,
-                                    max_rows=max_dumbbell_rows)
+                                    max_rows=max_dumbbell_rows,
+                                    subset_label=subset_label)
         if dumbbell is not None:
             written += _save_chart(dumbbell, Path(str(stem) + "_dumbbell"), png)
 
@@ -1080,7 +1125,9 @@ def write_overlap_report(pairs_by_level: dict[int, pd.DataFrame],
         xlsx_path.parent.mkdir(parents=True, exist_ok=True)
         with pd.ExcelWriter(xlsx_path) as xl:
             prov_df = pd.DataFrame(list(provenance.items()) +
-                                   [("nested_min", nested_min)],
+                                   [("nested_min", nested_min)] +
+                                   ([("entity_subset", subset_label)]
+                                    if subset_label else []),
                                    columns=["key", "value"])
             prov_df.to_excel(xl, sheet_name="provenance", index=False)
             for idx, pairs in pairs_by_level.items():
@@ -1092,7 +1139,8 @@ def write_overlap_report(pairs_by_level: dict[int, pd.DataFrame],
         written.append(xlsx_path)
 
     md = _summary_markdown(pairs_by_level, levels, provenance, nested_min,
-                           summary_level_indices=summary_level_indices)
+                           summary_level_indices=summary_level_indices,
+                           subset_label=subset_label)
     md_path = report_dir / f"{file_prefix}taxonomy_overlap_summary.md"
     md_path.write_text(md)
     written.append(md_path)
