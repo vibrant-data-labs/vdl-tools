@@ -13,6 +13,7 @@ This README covers:
 3. [The end-to-end iteration workflow](#iteration-workflow) — including the [two levers](#two-levers-prompt-edits-vs-taxonomy-definition-edits)
 4. [Lessons learned about prompt and taxonomy iteration](#lessons-learned)
 5. [Adding a new taxonomy](#adding-a-new-taxonomy)
+6. [Evaluating a taxonomy for redundancy & nesting](#evaluating-a-taxonomy-for-redundancy--nesting-overlap-analysis)
 
 ---
 
@@ -23,6 +24,7 @@ vdl_tools/shared_tools/taxonomy_mapping/
 ├── hierarchical_taxonomy_mapping.py     # classifier engine
 ├── hierarchical_taxonomy_judge.py       # judge engine
 ├── analyze_judge_results.py             # judge-results analyzer (Tier 1)
+├── analyze_taxonomy_overlap.py          # term overlap / nesting analyzer
 ├── oe_hierarchical_taxonomy_mapping.py  # OE-specific classifier wiring
 └── …                                    # other domain-agnostic helpers
 ```
@@ -48,6 +50,13 @@ Sub-Pillar breakdowns, top bad/weak nodes by level, failure-reason
 clustering, alignment verdicts, and NoMatch entity samples. The
 **cheap inner-iteration tool** — runs in milliseconds against
 already-judged data, no API spend.
+
+**`analyze_taxonomy_overlap.py`** — term overlap / nesting analyzer,
+for evaluating a taxonomy's DESIGN against how entities actually
+mapped: which term pairs share most of their entities (same-parent =
+redundancy candidates, cross-branch = co-practice). No LLM calls;
+one-call driver; full guide in
+[Evaluating a taxonomy for redundancy & nesting](#evaluating-a-taxonomy-for-redundancy--nesting-overlap-analysis).
 
 ## Per-project drivers (live in each project, not here)
 
@@ -570,6 +579,114 @@ if __name__ == "__main__":
 
 The `analyze_judge_results.py` tool works on any project's output
 without configuration — just point it at the judge's scored xlsx.
+
+---
+
+## Evaluating a taxonomy for redundancy & nesting (overlap analysis)
+
+`analyze_taxonomy_overlap.py` answers a design question the judge cannot:
+**do the taxonomy's terms actually mean different things in practice?**
+It looks at which entities got mapped to which terms and finds pairs of
+terms whose entity sets largely coincide. Two readings:
+
+- **Same-parent overlap = redundancy candidates.** If 78% of the
+  organizations in *Conservation Easements* are also in *Land Trusts*
+  (siblings under one parent), the two terms may be one concept wearing
+  two names — merge them or sharpen the definitions.
+- **Cross-branch overlap = co-practice.** If two terms in different
+  branches share most of their entities, that's how organizations bundle
+  work in the real world — useful signal, not a taxonomy flaw.
+
+No LLM calls, no API spend, runs in seconds (~40s for the largest level
+tried: 1,232 terms / 21,558 pairs). Importable without OpenAI/DB config.
+
+### What you need
+
+1. **A per-row mapping output** from the classifier engine (the
+   `..._full_....xlsx` file with one row per entity-path — NOT the
+   `_collapsed` file).
+2. **The taxonomy workbook** the walk used (for term definitions in
+   tooltips and the summary).
+3. **The same level spec** the walk used (the `MY_LEVELS` list of dicts
+   your run driver already defines). Tip: paste a copy into the analysis
+   driver rather than importing the mapping library — that import pulls
+   the OpenAI config and fails on machines without it.
+
+### How to run it for any taxonomy
+
+Copy an existing driver (`oneearth/taxonomy_mapping/analyze_oe_cooccurrence.py`
+or `drawdown/taxonomy_mapping/analyze_drawdown_cooccurrence.py`), change
+the paths, and hit Run in PyCharm. The whole thing is one call:
+
+```python
+import vdl_tools.shared_tools.taxonomy_mapping.analyze_taxonomy_overlap as ato
+
+ato.run_overlap_analysis(
+    MAPPING_FILE,      # per-row classifier output (xlsx)
+    TAXONOMY_FILE,     # the taxonomy workbook (definitions)
+    MY_LEVELS,         # the walk's level spec, verbatim
+    REPORT_DIR,        # where charts + summary land (data/reports/...)
+    xlsx_path=PAIRS_XLSX,          # full pair tables (local_data/...)
+    file_prefix="mytax_",          # so several taxonomies can share a dir
+)
+```
+
+Optional knobs (all have sensible defaults):
+
+| knob | what it does | default |
+|---|---|---|
+| `level_indices=[1, 2]` | which levels to analyze | every level with ≥2 terms |
+| `color_level={2: 1, 3: 1}` | which ANCESTOR level colors the chart dots (pick one with ≤ ~11 values) | immediate parent |
+| `summary_level_indices=[0, 1, 2]` | which levels get detail sections in the summary — leave deep levels (1,000+ terms) out; they stay in the counts table as "(counts only)" | all analyzed |
+| `nested_min=0.60` | containment threshold for "nested" | 0.60 |
+| `taxonomy_tables=...` | pre-loaded definition tables, for taxonomies needing a custom loader (e.g. OE's synthesized Sub-Terms) | loaded from `TAXONOMY_FILE` |
+| `group_colors={...}` | fixed group→hex palette | automatic assignment |
+
+### What you get
+
+Per analyzed level, in `REPORT_DIR`:
+
+- `{prefix}{level}_nesting_scatter.html/.png` — containment vs Jaccard for
+  every co-occurring pair; the shaded box is the nested region; dot area =
+  entity count of the smaller term. Hover any dot for the full stats and
+  both definitions; click a legend entry to highlight.
+- `{prefix}{level}_nesting_dumbbell.html/.png` — one row per nested pair,
+  strongest first. Filled dot = smaller term, hollow = larger, grey tick =
+  chance.
+- `{prefix}taxonomy_overlap_summary.md/.html` — **read this first**: per
+  level, the top redundancy candidates and co-practice pairs, plus how
+  many terms are thin (≤3 entities) or share no entity with any other term.
+- One xlsx of full pair tables (`xlsx_path`), provenance sheet first.
+
+Every artifact names the exact taxonomy + mapping files it read — the
+mapping output doesn't record which taxonomy produced it, so confirm the
+mapping run postdates the taxonomy file.
+
+### How to read the numbers
+
+| metric | meaning | use it for |
+|---|---|---|
+| **containment** | share of the SMALLER term's entities also carrying the larger | nesting — "A is basically inside B" |
+| **jaccard** | shared / union | near-equal twins; under-ranks size-mismatched pairs |
+| **lift** | containment ÷ larger term's base rate | "how much more than chance"; the only metric safe to compare across branches |
+| **ceiling** | max containment the parent-gated walk permits | context for cross-parent pairs — they CAN'T reach 100% by construction |
+
+Caveats the tool bakes into its outputs, worth knowing anyway: term
+identity is the full ancestor path (same-named terms under different
+parents are never merged — labels get a "(parent)" suffix when names
+collide); rows are paths, so entity–term membership is deduplicated before
+counting; big levels truncate charts to the top pairs by shared entities
+(always announced, never silent); a term matched to 1–3 entities can hit
+100% containment on no real evidence — the summary counts these per level;
+and **top-level overlap depends on the prompt** (a near-exclusive pillar
+prompt makes low level-0 overlap a design artifact, not a finding).
+
+Existing drivers to crib from: LoC
+(`oneearth/taxonomy_mapping/analyze_loc_cooccurrence.py`, includes a fixed
+hand-solved palette and legacy xlsx column names), One Earth
+(`.../analyze_oe_cooccurrence.py`, custom taxonomy loader), Drawdown
+(`drawdown/taxonomy_mapping/analyze_drawdown_cooccurrence.py`, the
+minimal template).
 
 ---
 
