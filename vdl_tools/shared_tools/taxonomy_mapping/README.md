@@ -671,13 +671,15 @@ claim, which is what the summary's "terms with ≤3 entities" column is for.
 
 Per analyzed level, in `REPORT_DIR`:
 
-- `{prefix}{level}_nesting_scatter.html/.png` — containment vs Jaccard for
+- `{prefix}{level}_nesting_scatter.html` — containment vs Jaccard for
   every co-occurring pair; the shaded box is the nested region; dot area =
   entity count of the smaller term. Hover any dot for the full stats and
   both definitions; click a legend entry to highlight.
-- `{prefix}{level}_nesting_dumbbell.html/.png` — one row per nested pair,
+- `{prefix}{level}_nesting_dumbbell.html` — one row per nested pair,
   strongest first. Filled dot = smaller term, hollow = larger, grey tick =
   chance.
+- Charts are html-only by default; pass `png=True` to also render a .png
+  of each (requires `vl_convert`).
 - `{prefix}taxonomy_overlap_summary.md/.html` — **read this first**: per
   level, the top redundancy candidates and co-practice pairs, plus how
   many terms are thin (≤3 entities) or share no entity with any other term.

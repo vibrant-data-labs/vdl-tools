@@ -57,7 +57,8 @@ write_overlap_report — remain public for callers that need to intervene,
 e.g. custom taxonomy loading is just taxonomy_tables=my_tables)
 
 Outputs per analyzed level: an interactive containment-vs-Jaccard scatter
-and a nesting dumbbell (html + png), one xlsx of full pair tables (with a
+and a nesting dumbbell (html; pass png=True for .png copies rendered via
+vl_convert), one xlsx of full pair tables (with a
 provenance sheet), and one skimmable summary report (md + html). Every
 artifact names the exact taxonomy and mapping files it was computed from —
 the mapping file itself does not record which taxonomy version produced it,
@@ -993,7 +994,7 @@ def run_overlap_analysis(mapping_file: Path, taxonomy_file: Path,
                          xlsx_rename: dict[str, str] | None = None,
                          max_dumbbell_rows: int = DEFAULT_MAX_DUMBBELL_ROWS,
                          max_scatter_pairs: int = DEFAULT_MAX_SCATTER_PAIRS,
-                         png: bool = True) -> dict[int, pd.DataFrame]:
+                         png: bool = False) -> dict[int, pd.DataFrame]:
     """The whole analysis in one call — what a project driver runs.
 
     Reads the per-row mapping xlsx (or takes ``per_row``), loads definitions
@@ -1072,10 +1073,11 @@ def write_overlap_report(pairs_by_level: dict[int, pd.DataFrame],
                          xlsx_rename: dict[str, str] | None = None,
                          summary_level_indices: list[int] | None = None,
                          subset_label: str | None = None,
-                         png: bool = True) -> list[Path]:
-    """Write, per analyzed level, the scatter + dumbbell charts (html/png),
-    one xlsx of pair tables (provenance sheet first), and one summary report
-    (md + html). Returns the written paths.
+                         png: bool = False) -> list[Path]:
+    """Write, per analyzed level, the scatter + dumbbell charts (html only
+    by default; png=True adds .png copies), one xlsx of pair tables
+    (provenance sheet first), and one summary report (md + html). Returns
+    the written paths.
 
     group_names: {level_idx: display name of the coloring group level}
     (defaults to the immediate parent level's name; the level's own name
