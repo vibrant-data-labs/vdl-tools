@@ -1,4 +1,30 @@
 MODEL_DATA = {
+    # GPT-5.6 family. Pricing note: prompts over 272K input tokens are billed
+    # at 2x input / 1.5x output for the WHOLE request, and cache writes at
+    # 1.25x the uncached input rate — neither is expressible in the flat
+    # per-token fields below, so cost estimates for very long prompts will
+    # read low. See https://developers.openai.com/api/docs/models/gpt-5.6-luna
+    "gpt-5.6-sol": {
+        "model_name": "gpt-5.6-sol",
+        "max_context_window": 1_050_000,
+        "max_output_tokens": 128_000,
+        "input_cost_per_token": 5.00 / 1_000_000,
+        "output_cost_per_token": 30.00 / 1_000_000,
+    },
+    "gpt-5.6-terra": {
+        "model_name": "gpt-5.6-terra",
+        "max_context_window": 1_050_000,
+        "max_output_tokens": 128_000,
+        "input_cost_per_token": 2.00 / 1_000_000,
+        "output_cost_per_token": 12.00 / 1_000_000,
+    },
+    "gpt-5.6-luna": {
+        "model_name": "gpt-5.6-luna",
+        "max_context_window": 1_050_000,
+        "max_output_tokens": 128_000,
+        "input_cost_per_token": 0.20 / 1_000_000,
+        "output_cost_per_token": 1.20 / 1_000_000,
+    },
     "gpt-5-mini": {
         "model_name": "gpt-5-mini",
         "max_context_window": 400_000,
