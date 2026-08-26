@@ -619,7 +619,7 @@ def attach_solution_property_columns(
 # descend its subtree. Reuses the generic library functions
 # `recover_unmatched` and `classify_entities(seed_col=...)`.
 
-def build_drawdown_scope_prompt() -> str:
+def build_drawdown_scope_prompt(tables: dict[int, pd.DataFrame] | None = None) -> str:
     """Drawdown-specific scope prompt for the empties recovery (the override).
 
     Reuses the classifier's domain intro + cross-sector routing so the recovery
@@ -627,15 +627,28 @@ def build_drawdown_scope_prompt() -> str:
     the "improved" override; passing scope_prompt=None to recover_unmatched
     falls back to the generic build_default_scope_prompt (bare sector
     definitions).
+
+    The structured-output schema the recovery enforces is ``ScopeDecision``,
+    whose recovered-node field is named ``category`` — the JSON instruction
+    must use that name, and ``cats.get`` exact-matches the returned value
+    against the Sector names, so pass ``tables`` to enumerate them (without
+    the list the model can only reliably produce the two sectors the
+    cross-sector rule happens to spell out).
     """
+    sector_list = ""
+    if tables is not None:
+        names = ", ".join(str(s) for s in tables[0]["Sector"].dropna().unique())
+        sector_list = f"The Sectors are: {names}.\n\n"
     return (
         DRAWDOWN_DOMAIN_INTRO + "\n\n"
         + DRAWDOWN_RULE_OVERRIDES["cross_sector"] + "\n\n"
+        + sector_list
         + "Decide whether the organization's OWN work is in scope for any Sector of the "
         "Drawdown climate-mitigation taxonomy (an implicit mitigation mechanism is "
         "acceptable; an incidental co-benefit of otherwise out-of-scope work is not). "
-        "Return JSON: {\"in_scope\": true|false, \"sector\": \"<exact Sector name or "
-        "null>\", \"reason\": \"<one sentence>\"}."
+        "Return JSON: {\"in_scope\": true|false, \"category\": \"<exact Sector name "
+        "from the list above, or null if not in scope>\", \"reason\": "
+        "\"<one sentence>\"}."
     )
 
 
@@ -765,7 +778,8 @@ def classify_entities_extended(
                 per_row_df, session=session, model=recovery_model,
                 id_col=id_col, name_col=name_col, text_col=text_col,
                 levels=DRAWDOWN_LEVELS, tables=tables,
-                scope_prompt=build_drawdown_scope_prompt() if use_override_scope else None,
+                scope_prompt=build_drawdown_scope_prompt(tables) if use_override_scope else None,
+                filter_by_model=True,
                 max_workers=max_workers, llm_api_kwargs=llm_api_kwargs,
                 read_from_cache=read_from_cache, write_to_cache=write_to_cache,
             )
@@ -782,6 +796,31 @@ def classify_entities_extended(
             )
 
     return per_row_df
+
+
+def _seed_recovered_sectors_for_funding(per_row_df: pd.DataFrame) -> pd.DataFrame:
+    """Funding-only view of ``per_row_df`` with recovered sectors filled in.
+
+    With ``recover_unmatched=True`` and ``walk_recovered=False``, an in-scope
+    recovery leaves its sector in ``recovered_Sector`` while the level columns
+    stay empty, so ``distribute_funding_from_matches`` would drop the entity
+    and its funding would silently vanish from the sector totals. Returns a
+    copy with ``Sector`` seeded from ``recovered_Sector`` for those rows so
+    they enter funding at sector depth. The caller's frame is untouched —
+    the per-row results keep walk evidence and recovery guesses separate.
+    (Mirror of the OE module's ``_seed_recovered_pillars_for_funding``.)
+    """
+    top_col = DRAWDOWN_LEVELS[0]["output_col"]
+    recovered_col = f"recovered_{top_col}"
+    if recovered_col not in per_row_df.columns:
+        return per_row_df
+    out = per_row_df.copy()
+    sector = out[top_col]
+    # Same emptiness test as recover_unmatched's own unmatched-id scan.
+    empty = sector.isna() | sector.astype(str).str.strip().isin(["", "None", "nan"])
+    mask = out["recovered_in_scope"].eq(True) & out[recovered_col].notna() & empty
+    out.loc[mask, top_col] = out.loc[mask, recovered_col]
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -842,10 +881,11 @@ def add_drawdown_hierarchical_taxonomy(
         When set, the distributed-funding frame is written here as JSON
         (local or ``s3://``).
     recover_unmatched, walk_recovered
-        The extended recovery stages, both on by default. Note the
-        funding frame is built from walked matches only, so leave
-        ``walk_recovered=True`` whenever ``recover_unmatched=True`` or
-        recovered-but-unwalked entities will be absent from it.
+        The extended recovery stages, both on by default. With
+        ``recover_unmatched=True`` and ``walk_recovered=False``, the
+        funding frame is rebuilt from a sector-seeded view so recovered
+        entities still enter funding at sector depth (the mapping columns
+        keep walk evidence only).
     attach_property_cols
         When True (default), also attach the solution property list
         columns (``drawdown_solution_category`` /
@@ -867,6 +907,20 @@ def add_drawdown_hierarchical_taxonomy(
     # "Sector" column that would shadow the taxonomy's Sector level.
     entities = df[[id_col, name_col, text_col]].copy()
 
+    # The origin driver's entity loaders dropped description-less rows;
+    # enforce the same precondition here so blank-text rows don't pay walk +
+    # recovery LLM calls (the engine would embed a literal 'nan' as the
+    # description). Skipped rows simply get no mapping columns, like any
+    # unmatched org.
+    text = entities[text_col]
+    blank = text.isna() | (text.astype(str).str.strip() == "")
+    if blank.any():
+        logger.warning(
+            "Skipping %d of %d entities with empty %r text; they get no "
+            "Drawdown mapping", int(blank.sum()), len(entities), text_col,
+        )
+        entities = entities[~blank]
+
     per_row_df = classify_entities_extended(
         tables,
         entities,
@@ -887,9 +941,14 @@ def add_drawdown_hierarchical_taxonomy(
 
     per_row_df = attach_solution_properties(per_row_df, tables)
 
-    original_columns = set(df.columns)
     if results_path:
-        new_columns = list(per_row_df.columns.difference(original_columns))
+        # Persist every walk output column. Compute the set against the slim
+        # entities frame, NOT the caller's df — a name collision (the CFT
+        # meta's Crunchbase "Sector" column) would silently drop that
+        # classification column from the artifact.
+        new_columns = list(per_row_df.columns.difference([id_col, name_col, text_col]))
+        if not str(results_path).startswith("s3://"):
+            Path(results_path).parent.mkdir(parents=True, exist_ok=True)
         per_row_df[[id_col, name_col, text_col] + new_columns].to_json(
             results_path, orient="records"
         )
@@ -905,6 +964,19 @@ def add_drawdown_hierarchical_taxonomy(
         per_row_mapping_df=per_row_df,
         max_distr_funding_level=max_distr_funding_level,
     )
+
+    if recover_unmatched and not walk_recovered:
+        # Without the re-walk, recovered in-scope entities have empty level
+        # columns and would be dropped from the funding frame; rebuild it from
+        # a sector-seeded view so their dollars land at sector depth (the
+        # mapping columns above keep walk evidence only, matching OE).
+        distributed_funding_df = _htm.distribute_funding_from_matches(
+            _seed_recovered_sectors_for_funding(per_row_df),
+            DRAWDOWN_LEVELS,
+            id_col,
+            name_col,
+            max_level=max_distr_funding_level,
+        )
 
     if distributed_funding_df is not None and distributed_funding_results_path:
         if not str(distributed_funding_results_path).startswith("s3://"):
