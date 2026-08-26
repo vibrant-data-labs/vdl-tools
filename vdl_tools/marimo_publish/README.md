@@ -14,13 +14,17 @@ the repo you are currently working in, so the copy in this repo only fires when
 you are working inside `vdl-tools` — which is not where you publish notebooks
 from. Copy it to wherever you need it:
 
+From a `vdl-tools` checkout (the skill is not part of the installed Python
+package, so copy it from the repo, not from site-packages):
+
 ```bash
 # For one project repo:
-cp -r "$(python -c 'import vdl_tools,pathlib;print(pathlib.Path(vdl_tools.__file__).parent.parent)')/.claude/skills/publish-marimo-app" \
-      /path/to/your-project/.claude/skills/
+cp -r .claude/skills/publish-marimo-app /path/to/your-project/.claude/skills/
+```
 
+```bash
 # Or for every repo you work in (per-user, not version controlled):
-cp -r .../.claude/skills/publish-marimo-app ~/.claude/skills/
+cp -r .claude/skills/publish-marimo-app ~/.claude/skills/
 ```
 
 The copy in this repo is the canonical one — change it here, then re-copy.
