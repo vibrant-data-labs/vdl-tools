@@ -18,6 +18,7 @@ from vdl_tools.shared_tools.tools.logger import logger
 from vdl_tools.scrape_enrich.netzero_insights.filters import (
     Sorting, MainFilter,
 )
+from vdl_tools.scrape_enrich.netzero_insights import api_v2
 from vdl_tools.shared_tools.json_cache import read_json, write_json, target_exists
 
 from vdl_tools.shared_tools.database_cache.database_models import (
@@ -32,16 +33,38 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
+# Legacy ("[OLD]" in NZI's docs) API. Supported by NZI until 2027-02-28.
 PROD_BASE_URL = "https://api.netzeroinsights.com"
 SANDBOX_BASE_URL = "https://20.108.20.67"
 
+# Current API. See api_v2 for the endpoint/filter/response differences.
+PROD_BASE_URL_V2 = api_v2.PROD_BASE_URL_V2
+SANDBOX_BASE_URL_V2 = api_v2.STAGE_BASE_URL_V2
+
+# Default API version for new clients. Still "v1" because the legacy API is
+# supported until 2027-02-28 and the v2 response mapping has not yet been
+# checked against live credentials — see README before flipping this.
+DEFAULT_API_VERSION = os.environ.get("NZI_API_VERSION", "v1")
+
 RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+# v1 expired *session cookies* could surface as either 401 or 403, so both
+# triggered a re-login. v2 documents 403 as "insufficient access level" — a
+# permissions error that re-authenticating cannot fix — so only 401 means
+# "token expired" there.
 AUTH_STATUS_CODES = frozenset({401, 403})
+AUTH_STATUS_CODES_V2 = frozenset({401})
 
 DEFAULT_SEARCH_CHECKPOINT_DIR = os.environ.get(
     "NZI_SEARCH_CHECKPOINT_DIR",
     os.path.expanduser("~/.cache/vdl-tools/nzi_search"),
 )
+
+
+def _normalize_deal_list(payload):
+    """Normalise `GET /deals/company/{id}`, which returns a bare list."""
+    if isinstance(payload, list):
+        return [api_v2.normalize_deal(deal) for deal in payload]
+    return payload
 
 
 class SearchCheckpoint:
@@ -120,49 +143,113 @@ class NetZeroAPI:
         read_from_cache: bool = True,
         write_to_cache: bool = True,
         max_concurrent_requests: int = 10,
+        api_version: str = None,
     ):
         """Initialize the API client with credentials.
 
         Args:
-            username: NetZero Insights API username
+            username: NetZero Insights API username (the account email — v2
+                sends it as the ``email`` login parameter)
             password: NetZero Insights API password
-            use_sandbox: Whether to use the sandbox environment
+            use_sandbox: Whether to use the sandbox/staging environment
             max_concurrent_requests: Cap on simultaneous requests per detail
                 batch. Note that stages fetched in parallel (e.g. startup
                 details + funding rounds) each get their own cap, so peak
                 concurrency against the API can be a small multiple of this.
+            api_version: ``"v1"`` for the legacy cookie-authenticated API
+                (default, supported by NZI until 2027-02-28) or ``"v2"`` for
+                the current bearer-token API.
         """
-        logger.info(f"Initializing NetZero API client with {'sandbox' if use_sandbox else 'production'} environment")
+        api_version = (api_version or DEFAULT_API_VERSION).lower()
+        if api_version not in ("v1", "v2"):
+            raise ValueError(f"api_version must be 'v1' or 'v2', got {api_version!r}")
+        self.api_version = api_version
+        self.is_v2 = api_version == "v2"
+
+        logger.info(
+            "Initializing NetZero API client (%s, %s environment)",
+            api_version, "sandbox" if use_sandbox else "production",
+        )
         self.username = username
         self.password = password
         self.session = requests.Session()
-        self.base_url = SANDBOX_BASE_URL if use_sandbox else PROD_BASE_URL
+        if self.is_v2:
+            self.base_url = SANDBOX_BASE_URL_V2 if use_sandbox else PROD_BASE_URL_V2
+        else:
+            self.base_url = SANDBOX_BASE_URL if use_sandbox else PROD_BASE_URL
+        self.endpoints = api_v2.ENDPOINTS_V2 if self.is_v2 else api_v2.ENDPOINTS_V1
+        self.auth_status_codes = AUTH_STATUS_CODES_V2 if self.is_v2 else AUTH_STATUS_CODES
         self.read_from_cache = read_from_cache
         self.write_to_cache = write_to_cache
         self.use_sandbox = use_sandbox
         self.max_concurrent_requests = max_concurrent_requests
-        # The production ssl certifcate seems to expired too
-        self.verify_ssl = not use_sandbox
-        # self.verify_ssl = False
+        # The v1 sandbox is a bare IP with an expired certificate. The v2
+        # environments are both proper hosts, so certificates are always
+        # verified there.
+        self.verify_ssl = self.is_v2 or not use_sandbox
 
+        self._access_token = None
         self._auth_lock = threading.Lock()
         self._auth_generation = 0
         self._authenticate()
 
-    def _authenticate(self) -> None:
-        """Authenticate with the API and store the session cookie."""
-        logger.info("Authenticating with NetZero API")
+    @staticmethod
+    def _extract_access_token(response: requests.Response) -> Optional[str]:
+        """Pull the v2 JWT out of a login response.
+
+        NZI's docs show the token in the response headers (that is what the
+        ``-v`` flag in their curl example is for), but the JSON body carries it
+        too on some deployments, so both are checked.
+        """
+        for header in ("access_token", "Access-Token", "Authorization", "authorization"):
+            value = response.headers.get(header)
+            if value:
+                return value.replace("Bearer ", "").strip()
         try:
-            response = self.session.post(
-                f"{self.base_url}/security/formLogin",
-                data={
-                    "username": self.username,
-                    "password": self.password
-                },
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                verify=self.verify_ssl,
-            )
-            response.raise_for_status()
+            body = response.json()
+        except ValueError:
+            return None
+        if isinstance(body, dict):
+            for key in ("access_token", "accessToken", "token"):
+                if body.get(key):
+                    return str(body[key])
+        return None
+
+    def _auth_headers(self) -> Dict:
+        """Bearer header for v2; v1 authenticates with the session cookie."""
+        if self.is_v2 and self._access_token:
+            return {"Authorization": f"Bearer {self._access_token}"}
+        return {}
+
+    def _authenticate(self) -> None:
+        """Authenticate with the API, storing a bearer token (v2) or cookie (v1)."""
+        logger.info("Authenticating with NetZero API (%s)", self.api_version)
+        try:
+            if self.is_v2:
+                # v2 takes credentials as query params, not a form body.
+                response = self.session.post(
+                    f"{self.base_url}/{self.endpoints['login']}",
+                    params={"email": self.username, "password": self.password},
+                    verify=self.verify_ssl,
+                )
+                response.raise_for_status()
+                token = self._extract_access_token(response)
+                if not token:
+                    raise RuntimeError(
+                        "NZI v2 login returned no access_token in headers or body"
+                    )
+                self._access_token = token
+            else:
+                response = self.session.post(
+                    f"{self.base_url}/{self.endpoints['login']}",
+                    data={
+                        "username": self.username,
+                        "password": self.password
+                    },
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    verify=self.verify_ssl,
+                )
+                response.raise_for_status()
             logger.info("Successfully authenticated with NetZero API")
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to authenticate with NetZero API: {str(e)}")
@@ -172,8 +259,17 @@ class NetZeroAPI:
         """Logout from the API session."""
         logger.info("Logging out from NetZero API")
         try:
-            response = self.session.get(f"{self.base_url}/security/logout", verify=self.verify_ssl)
+            url = f"{self.base_url}/{self.endpoints['logout']}"
+            if self.is_v2:
+                # v2's docs give the path as GET /auth/logout in prose but POST
+                # in the curl example; POST is what their example actually runs.
+                response = self.session.post(
+                    url, headers=self._auth_headers(), verify=self.verify_ssl,
+                )
+            else:
+                response = self.session.get(url, verify=self.verify_ssl)
             response.raise_for_status()
+            self._access_token = None
             logger.info("Successfully logged out from NetZero API")
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to logout from NetZero API: {str(e)}")
@@ -205,15 +301,23 @@ class NetZeroAPI:
         jitter. A 401/403 triggers a single re-authentication (the session
         cookie expires on long runs) before retrying.
         """
-        url = os.path.join(self.base_url, endpoint)
+        # Not os.path.join: an endpoint with a leading slash would make it
+        # discard the base URL entirely.
+        url = f"{self.base_url.rstrip('/')}/{endpoint.lstrip('/')}"
         reauthed = False
         response = None
         attempt = 0
         while attempt < max_retries:
             auth_generation = self._auth_generation
+            request_kwargs = dict(kwargs)
+            auth_headers = self._auth_headers()
+            if auth_headers:
+                request_kwargs["headers"] = {
+                    **(request_kwargs.get("headers") or {}), **auth_headers,
+                }
             try:
                 response = self.session.request(
-                    method, url, verify=self.verify_ssl, **kwargs,
+                    method, url, verify=self.verify_ssl, **request_kwargs,
                 )
             except requests.exceptions.RequestException as e:
                 if attempt == max_retries - 1:
@@ -225,7 +329,7 @@ class NetZeroAPI:
                 attempt += 1
                 continue
 
-            if response.status_code in AUTH_STATUS_CODES and not reauthed:
+            if response.status_code in self.auth_status_codes and not reauthed:
                 logger.warning(f"HTTP {response.status_code} from {endpoint} — re-authenticating")
                 self._reauthenticate(auth_generation)
                 reauthed = True
@@ -261,10 +365,13 @@ class NetZeroAPI:
         self,
         endpoint: str,
         payload: Dict,
-        headers: Dict = None
+        headers: Dict = None,
+        params: Dict = None,
     ) -> Dict:
         """Post a resource to the API."""
-        return self._request_with_retries("POST", endpoint, json=payload, headers=headers)
+        return self._request_with_retries(
+            "POST", endpoint, json=payload, headers=headers, params=params,
+        )
 
     def _resolve_cache_params(
         self,
@@ -279,7 +386,7 @@ class NetZeroAPI:
 
     def _search_entities(
         self,
-        endpoint: str,
+        operation: str,
         filter: Optional[MainFilter] = None,
         sorting: Optional[Sorting] = None,
         limit: Optional[int] = None,
@@ -294,7 +401,9 @@ class NetZeroAPI:
         """Base method for searching entities.
 
         Args:
-            endpoint: The API endpoint to call (e.g., 'companies', 'fundingRounds', 'investors')
+            operation: Logical search operation — 'search_companies',
+                'search_deals' or 'search_investors'. Resolved to a concrete
+                path through the version's endpoint map.
             filter: Filter criteria for the entities
             sorting: Sorting criteria. Strongly recommended when checkpointing
                 or fetching pages concurrently — without a stable order the API
@@ -318,27 +427,57 @@ class NetZeroAPI:
                 - count: Number of results in this response
                 - results: List of matching entities
         """
+        endpoint = self.endpoints[operation]
         logger.info(f"Fetching {endpoint} with offset={offset}")
 
         filter = filter or MainFilter()
-        payload = filter.model_dump()
-        if sorting:
-            payload["sorting"] = sorting.model_dump()
-        # limit/offset are set per page request
-        payload.pop("limit", None)
-        payload.pop("offset", None)
+        if self.is_v2:
+            # v2 renames and re-nests the filter, and moves limit/offset and
+            # sorting out of the body into query params.
+            payload = api_v2.to_v2_payload(operation, filter)
+        else:
+            payload = filter.model_dump()
+            if sorting:
+                payload["sorting"] = sorting.model_dump()
+            # limit/offset are set per page request
+            payload.pop("limit", None)
+            payload.pop("offset", None)
+
+        def request_page(page_offset: int, size: int) -> Dict:
+            """Fetch one page, normalising both versions to {count, results}."""
+            if self.is_v2:
+                page_number, remainder = divmod(page_offset, size)
+                if remainder:
+                    raise ValueError(
+                        f"NZI v2 paginates by page number, so offset ({page_offset}) "
+                        f"must be a multiple of page_size ({size})."
+                    )
+                data = self._post(
+                    endpoint=endpoint,
+                    payload=payload,
+                    headers={"Content-Type": "application/json"},
+                    params=api_v2.to_v2_query_params(page_number, size, sorting),
+                )
+                return {
+                    "count": data.get("totalElements", 0),
+                    "results": api_v2.normalize_search_results(
+                        operation, data.get("content") or [],
+                    ),
+                }
+            data = self._post(
+                endpoint=endpoint,
+                payload={**payload, "limit": size, "offset": page_offset},
+                headers={"Content-Type": "application/json"},
+            )
+            return {"count": data.get("count", 0), "results": data.get("results", [])}
 
         if limit is not None and limit <= page_size:
             # Small enough for a single request — no pagination or checkpoint needed
-            data = self._post(
-                endpoint=endpoint,
-                payload={**payload, "limit": limit, "offset": offset},
-                headers={"Content-Type": "application/json"},
-            )
-            results = data.get("results", [])
+            page = request_page(offset, limit)
+            results = page["results"]
             logger.info(f"Successfully fetched {len(results)} `{endpoint}`")
             return {
-                "total_count": data.get("count", 0),
+                "total_count": page["count"],
                 "count": len(results),
                 "results": results,
             }
@@ -352,7 +491,12 @@ class NetZeroAPI:
                     "underlying data changes between runs, resumed pages may "
                     "contain duplicates or miss rows."
                 )
-            checkpoint = SearchCheckpoint(checkpoint_dir, endpoint, payload, page_size)
+            # The API version is part of the key: v1 and v2 return different
+            # field names for the same query, so their pages must never be
+            # resumed against each other.
+            checkpoint = SearchCheckpoint(
+                checkpoint_dir, f"{self.api_version}:{endpoint}", payload, page_size,
+            )
             meta = checkpoint.load_meta(timedelta(days=checkpoint_max_age_days))
             if meta:
                 logger.info(f"Resuming search from checkpoint {checkpoint.base_uri}")
@@ -366,12 +510,7 @@ class NetZeroAPI:
                     return checkpoint.read_page(page_offset)
                 except FileNotFoundError:
                     pass
-            data = self._post(
-                endpoint=endpoint,
-                payload={**payload, "limit": page_size, "offset": page_offset},
-                headers={"Content-Type": "application/json"},
-            )
-            page = {"count": data.get("count", 0), "results": data.get("results", [])}
+            page = request_page(page_offset, page_size)
             if checkpoint:
                 checkpoint.write_page(page_offset, page)
             return page
@@ -449,7 +588,16 @@ class NetZeroAPI:
         }
 
     def get_startup_count(self, main_filter: MainFilter = None) -> int:
-        """Get the total number of startups matching the specified criteria."""
+        """Get the total number of startups matching the specified criteria.
+
+        v1 has a dedicated (undocumented) ``getStartupCount`` endpoint. v2 has
+        none, so the count comes from ``totalElements`` on a one-row search —
+        the same number, for one row of transfer.
+        """
+        if self.is_v2:
+            return self._search_entities(
+                operation="search_companies", filter=main_filter, limit=1,
+            )["total_count"]
         response = self._post(
             endpoint="getStartupCount",
             payload=main_filter.model_dump() if main_filter else {},
@@ -470,7 +618,7 @@ class NetZeroAPI:
     ) -> Dict:
         """Get a list of startups matching the specified criteria."""
         return self._search_entities(
-            endpoint="companies",
+            operation="search_companies",
             filter=main_filter,
             sorting=sorting,
             limit=limit,
@@ -497,7 +645,7 @@ class NetZeroAPI:
     ) -> Dict:
         """Get a list of deals matching the specified criteria."""
         return self._search_entities(
-            endpoint="fundingRounds",
+            operation="search_deals",
             filter=filter,
             sorting=sorting,
             limit=limit,
@@ -523,7 +671,7 @@ class NetZeroAPI:
     ) -> Dict:
         """Get a list of investors matching the specified criteria."""
         return self._search_entities(
-            endpoint="investors",
+            operation="search_investors",
             filter=filter,
             sorting=sorting,
             limit=limit,
@@ -544,7 +692,8 @@ class NetZeroAPI:
         primary_key_field: str = "clientID",
         read_from_cache: bool = None,
         write_to_cache: bool = None,
-        batch_size: int = 20
+        batch_size: int = 20,
+        normalizer=None,
     ) -> List[Dict]:
         """Efficiently fetch multiple entities with caching and async API requests.
 
@@ -555,6 +704,9 @@ class NetZeroAPI:
             read_from_cache: Whether to read from cache
             write_to_cache: Whether to write to cache
             batch_size: Number of entities to commit to database at once
+            normalizer: Applied to each raw response before it is cached, so
+                the DB holds one field vocabulary regardless of API version.
+                Only used on v2 — v1 responses already use the legacy names.
 
         Returns:
             List of Dicts containing the entity details
@@ -580,10 +732,11 @@ class NetZeroAPI:
 
         auth_state = {
             "cookies": self.session.cookies.get_dict(),
+            "headers": self._auth_headers(),
             "generation": self._auth_generation,
         }
-        if not auth_state["cookies"]:
-            logger.warning("No session cookies found — requests may fail auth")
+        if not auth_state["cookies"] and not auth_state["headers"]:
+            logger.warning("No session cookies or bearer token found — requests may fail auth")
         request_timeout = aiohttp.ClientTimeout(total=90)
         max_retries = 3
         semaphore = asyncio.Semaphore(self.max_concurrent_requests)
@@ -601,11 +754,14 @@ class NetZeroAPI:
                         async with session.get(
                             f"{self.base_url}/{endpoint.rstrip('/')}/{id}",
                             cookies=auth_state["cookies"],
-                            headers={"Accept": "application/json, text/plain, */*"},
+                            headers={
+                                "Accept": "application/json, text/plain, */*",
+                                **auth_state["headers"],
+                            },
                             timeout=request_timeout,
                             ssl=self.verify_ssl,
                         ) as response:
-                            if response.status in AUTH_STATUS_CODES and not reauthed:
+                            if response.status in self.auth_status_codes and not reauthed:
                                 # Session cookie likely expired mid-run; refresh
                                 # once (generation-guarded, so concurrent tasks
                                 # trigger a single re-login) and retry
@@ -614,6 +770,7 @@ class NetZeroAPI:
                                     self._reauthenticate, seen_generation
                                 )
                                 auth_state["cookies"] = self.session.cookies.get_dict()
+                                auth_state["headers"] = self._auth_headers()
                                 reauthed = True
                                 continue
                             if response.status in RETRYABLE_STATUS_CODES and attempt < max_retries - 1:
@@ -629,6 +786,8 @@ class NetZeroAPI:
                                 logger.error(f"Failed {endpoint} {id}: HTTP {response.status} | {body!r}")
                                 return id, None
                             data = await response.json()
+                            if normalizer is not None and self.is_v2:
+                                data = normalizer(data)
                             args = {}
                             valid_columns = model_class.__table__.columns.keys()
                             base_cls = model_class.__bases__[0]
@@ -710,10 +869,11 @@ class NetZeroAPI:
         startup_objects = await self._get_details_batch(
             ids=startup_ids,
             primary_key_field="clientID",
-            endpoint="getStartup",
+            endpoint=self.endpoints["company_details"],
             model_class=Startup,
             read_from_cache=read_from_cache,
-            write_to_cache=write_to_cache
+            write_to_cache=write_to_cache,
+            normalizer=api_v2.normalize_company,
         )
         if flatten:
             flat_data = []
@@ -732,11 +892,12 @@ class NetZeroAPI:
         """Get detailed information about multiple investors."""
         investor_objects = await self._get_details_batch(
             ids=investor_ids,
-            endpoint="getInvestor",
+            endpoint=self.endpoints["investor_details"],
             model_class=Investor,
             primary_key_field="investorID",
             read_from_cache=read_from_cache,
-            write_to_cache=write_to_cache
+            write_to_cache=write_to_cache,
+            normalizer=api_v2.normalize_investor,
         )
         if flatten:
             flat_data = []
@@ -755,7 +916,7 @@ class NetZeroAPI:
         deals = await self._get_details_batch(
             ids=company_ids,
             primary_key_field="clientID",
-            endpoint="commercial-deals/connected-entities/company",
+            endpoint=self.endpoints["company_commercial_deals"],
             model_class=CompanyCommercialDeal,
             read_from_cache=read_from_cache,
             write_to_cache=write_to_cache
@@ -780,10 +941,11 @@ class NetZeroAPI:
         company_rounds_objects = await self._get_details_batch(
             ids=company_ids,
             primary_key_field="clientID",
-            endpoint="fundingRound/prints",
+            endpoint=self.endpoints["company_deals"],
             model_class=CompanyFundingRounds,
             read_from_cache=read_from_cache,
-            write_to_cache=write_to_cache
+            write_to_cache=write_to_cache,
+            normalizer=_normalize_deal_list,
         )
         if flatten:
             flat_data = []
@@ -819,6 +981,13 @@ class NetZeroAPI:
         write_to_cache: bool = None,
     ) -> List[Dict]:
         """Get detailed information about multiple funding rounds."""
+        if self.is_v2:
+            # v2 documents no single-deal-by-ID endpoint; deals are reachable
+            # per company (`GET /deals/company/{id}`) or via the deal search.
+            raise NotImplementedError(
+                "NZI v2 has no deal-details-by-ID endpoint. Use "
+                "get_company_funding_rounds(company_ids) or search_deals()."
+            )
         funding_round = await self._get_entity_details(
             id=funding_round_id,
             endpoint="fundingRound",
@@ -829,8 +998,34 @@ class NetZeroAPI:
         )
         return funding_round
 
+    def get_all_taxonomy_items(self) -> List[Dict]:
+        """Get every taxonomy item (``GET /taxonomy/itemDtos``).
+
+        Each item carries both an ``id`` and a separate ``tagID``. That
+        distinction matters for migration: v1's ``taxonomyItems`` filter took
+        item ``id``s, while v2's replacement ``tagIDs`` filter takes ``tagID``s.
+        Use :meth:`get_taxonomy_item_tag_ids` to translate between them.
+        """
+        return self._get(endpoint="taxonomy/itemDtos")
+
+    def get_taxonomy_item_tag_ids(self) -> Dict[int, int]:
+        """Map taxonomy item ``id`` -> ``tagID`` for v1 -> v2 filter translation."""
+        return {
+            item["id"]: item["tagID"]
+            for item in self.get_all_taxonomy_items()
+            if item.get("id") is not None and item.get("tagID") is not None
+        }
+
     def get_taxonomy_children(self, parent_id: int) -> List[Dict]:
-        """Get taxonomy for a specific parent ID."""
+        """Get taxonomy for a specific parent ID.
+
+        NZI documents this as ``GET /taxonomy/graph/{parentID}`` and has not
+        republished the taxonomy endpoints under the v2 host, so v2 clients
+        issue the documented GET. v1 keeps the POST-with-body form that is
+        already in production use here.
+        """
+        if self.is_v2:
+            return self._get(endpoint=f"taxonomy/graph/{parent_id}")
         payload = {
             'onlyVisible': True,
             'onlyAdvancedFilters': False,
