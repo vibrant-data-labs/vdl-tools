@@ -65,7 +65,13 @@ def run(cmd: list[str], secrets: tuple[str, ...] = (), **kw) -> subprocess.Compl
                 part = part.replace(secret, "***REDACTED***")
         shown.append(part)
     print("  $ " + " ".join(shown))
-    return subprocess.run(cmd, check=True, **kw)
+    try:
+        return subprocess.run(cmd, check=True, **kw)
+    except subprocess.CalledProcessError as exc:
+        # CalledProcessError stringifies the whole argv, so letting it propagate
+        # would print secrets into the traceback -- defeating the redaction
+        # above. Fail with the masked command instead.
+        die(f"command failed (exit {exc.returncode}): {' '.join(shown)}")
 
 
 def need(tool: str) -> str:
@@ -349,6 +355,27 @@ def stack_name(app: str) -> str:
     return f"marimo-{app}"
 
 
+def stack_field(app: str, field: str) -> str:
+    aws = need("aws")
+    r = subprocess.run(
+        [
+            aws,
+            "cloudformation",
+            "describe-stacks",
+            "--stack-name",
+            stack_name(app),
+            "--query",
+            f"Stacks[0].{field}",
+            "--output",
+            "text",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    value = r.stdout.strip()
+    return "" if r.returncode or value in ("", "None") else value
+
+
 def stack_output(app: str, key: str) -> str:
     aws = need("aws")
     r = subprocess.run(
@@ -370,6 +397,10 @@ def stack_output(app: str, key: str) -> str:
     return "" if r.returncode or value in ("", "None") else value
 
 
+def stack_status(app: str) -> str:
+    return stack_field(app, "StackStatus")
+
+
 def cmd_provision(args) -> int:
     # Validate before printing or touching AWS, so a bad invocation fails
     # cleanly instead of announcing work it will not do.
@@ -386,6 +417,18 @@ def cmd_provision(args) -> int:
     app = args.app
     bucket = args.bucket or f"vdl-{app}"
     aws = need("aws")
+
+    # CloudFormation refuses concurrent updates, and interrupting the CLI does
+    # not cancel one -- it keeps running server-side. Say so plainly rather than
+    # surfacing a raw ValidationError.
+    status = stack_status(app)
+    if status.endswith("_IN_PROGRESS"):
+        die(
+            f"stack {stack_name(app)} is {status}.\n"
+            "  CloudFormation is still working; stopping the CLI does not cancel it.\n"
+            "  Wait for it to settle, then re-run this command:\n"
+            f"    aws cloudformation wait stack-update-complete --stack-name {stack_name(app)}"
+        )
     print(f"provisioning stack {stack_name(app)!r} (bucket {bucket})")
     print("  CloudFront distributions take 5-15 minutes to propagate.")
     b64 = auth_base64(app)
