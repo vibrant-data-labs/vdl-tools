@@ -23,6 +23,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 TEMPLATE = Path(__file__).parent / "infra.yaml"
@@ -240,6 +241,108 @@ def cmd_export(args) -> int:
 
 
 # ------------------------------------------------------------- provision ----
+
+
+# CloudFront reads certificates only from us-east-1, whatever region the bucket
+# is in, so every ACM call here is pinned to it.
+ACM_REGION = ["--region", "us-east-1"]
+
+
+def aws_json(args: list[str]):
+    """Run a read-only aws command and parse its JSON. Not echoed."""
+    aws = need("aws")
+    r = subprocess.run([aws, *args, "--output", "json"], capture_output=True, text=True)
+    if r.returncode:
+        die(f"aws {' '.join(args)} failed:\n{r.stderr.strip()}")
+    return json.loads(r.stdout) if r.stdout.strip() else None
+
+
+def cert_covers(cert_domain: str, host: str) -> bool:
+    """Does a certificate for cert_domain cover host?
+
+    ACM wildcards match exactly one label, so *.example.org covers
+    app.example.org but not a.b.example.org.
+    """
+    if cert_domain == host:
+        return True
+    if cert_domain.startswith("*."):
+        base = cert_domain[2:]
+        return host.endswith("." + base) and host.count(".") == base.count(".") + 1
+    return False
+
+
+def cmd_domain(args) -> int:
+    host = args.hostname
+    print(f"certificate for {host} (us-east-1)")
+
+    existing = aws_json(["acm", "list-certificates", *ACM_REGION])["CertificateSummaryList"]
+    # An issued wildcard is worth far more than a new request -- it skips DNS
+    # validation entirely. Prefer issued certs, and exact names over wildcards.
+    match = [c for c in existing if cert_covers(c.get("DomainName", ""), host)]
+    match.sort(
+        key=lambda c: (c.get("Status") != "ISSUED", c.get("DomainName", "").startswith("*."))
+    )
+    if match:
+        arn = match[0]["CertificateArn"]
+        print(f"  reusing {match[0]['DomainName']} ({match[0].get('Status')})")
+        print(f"    {arn}")
+    else:
+        arn = aws_json(
+            [
+                "acm",
+                "request-certificate",
+                "--domain-name",
+                host,
+                "--validation-method",
+                "DNS",
+                *ACM_REGION,
+            ]
+        )["CertificateArn"]
+        print(f"  requested {arn}")
+
+    # The validation record is not populated the instant a cert is requested.
+    record, status = None, None
+    for attempt in range(args.wait_seconds // 5 + 1):
+        cert = aws_json(["acm", "describe-certificate", "--certificate-arn", arn, *ACM_REGION])[
+            "Certificate"
+        ]
+        status = cert["Status"]
+        opts = cert.get("DomainValidationOptions") or [{}]
+        record = opts[0].get("ResourceRecord") or record
+        if status == "ISSUED" or (record and not args.wait_seconds):
+            break
+        if attempt == 0 and record:
+            print(f"\n  status: {status} -- add this record at your DNS provider:")
+            print(f"    {record['Type']}  {record['Name']}  ->  {record['Value']}")
+            print("    (Cloudflare: DNS-only, not proxied)")
+        if not args.wait_seconds:
+            break
+        time.sleep(5)
+
+    if status != "ISSUED":
+        if record:
+            print(f"\n  status: {status}")
+            print(f"    {record['Type']}  {record['Name']}  ->  {record['Value']}")
+            print("    (Cloudflare: DNS-only, not proxied)")
+        print(
+            "\n  Add that record, then re-run this command. Certificates issue"
+            " within minutes\n  of the record resolving."
+        )
+        print(
+            f"\n  Or skip ahead once issued:\n"
+            f"    provision {args.app} --domain {host} --cert-arn {arn}"
+        )
+        return 1
+
+    print("  status: ISSUED")
+    if not args.provision:
+        print(f"\n  Attach it with:\n    provision {args.app} --domain {host} --cert-arn {arn}")
+        return 0
+
+    print()
+    return cmd_provision(
+        argparse.Namespace(app=args.app, bucket=args.bucket, domain=host, cert_arn=arn)
+    )
 
 
 def stack_name(app: str) -> str:
@@ -496,6 +599,23 @@ def main(argv=None) -> int:
     d.add_argument("--apply", action="store_true")
     d.add_argument("--prune", action="store_true")
     d.set_defaults(func=cmd_deploy)
+
+    dm = sub.add_parser("domain", help="request/reuse an ACM cert for a custom hostname")
+    dm.add_argument("app")
+    dm.add_argument("--hostname", required=True)
+    dm.add_argument("--bucket", default=None)
+    dm.add_argument(
+        "--wait-seconds",
+        type=int,
+        default=0,
+        help="poll until the certificate issues (0 = report and exit)",
+    )
+    dm.add_argument(
+        "--provision",
+        action="store_true",
+        help="re-provision automatically once the cert is ISSUED",
+    )
+    dm.set_defaults(func=cmd_domain)
 
     b = sub.add_parser("publish", help="export + provision + deploy")
     b.add_argument("notebook")

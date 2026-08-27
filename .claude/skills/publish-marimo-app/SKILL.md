@@ -104,20 +104,24 @@ internal links. Use a real hostname when the app is going to an external
 audience or somewhere people will bookmark it.
 
 A DNS record alone does **not** work — CloudFront rejects any `Host` header it
-has not been told to answer to. Three steps, in order:
-
-1. Request an ACM certificate for the hostname **in us-east-1**. CloudFront
-   reads certificates only from that region, whatever region the bucket is in.
-   Validation is a CNAME you add at the DNS provider.
-2. Re-provision with the alias and certificate:
+has not been told to answer to. Start here:
 
 ```bash
-python -m vdl_tools.marimo_publish provision <app-name> \
-  --domain app.vibrantdatalabs.org \
-  --cert-arn arn:aws:acm:us-east-1:<acct>:certificate/<id>
+python -m vdl_tools.marimo_publish domain <app-name> --hostname app.vibrantdatalabs.org
 ```
 
-3. Add a CNAME from the hostname to the `CnameTarget` the command prints.
+That finds a certificate covering the hostname, or requests one and prints the
+DNS record needed to validate it. It prints the exact `provision` command to run
+next. Add `--provision` to attach it automatically once the certificate is
+`ISSUED`, or `--wait-seconds 300` to poll while validation completes.
+
+**VDL already holds an issued wildcard for `*.vibrantdatalabs.org` in
+us-east-1**, so any single-label subdomain there needs no new certificate and no
+validation record — `domain` reuses it and you go straight to `provision`. A
+hostname on another domain, or a deeper name like `a.b.vibrantdatalabs.org`,
+needs its own certificate.
+
+Finally, CNAME the hostname to the `CnameTarget` that `provision` prints.
 
 **VDL DNS is Cloudflare, not Route53**, so steps 1 and 3 are manual — no AWS
 API can write those records. Set the CNAME to **DNS-only** (grey cloud). A

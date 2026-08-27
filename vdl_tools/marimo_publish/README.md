@@ -120,10 +120,20 @@ Defaults to the assigned `*.cloudfront.net` hostname. For a real hostname, note
 that a DNS record alone does nothing — CloudFront rejects any `Host` header it
 has not been told to answer to.
 
-1. Request an ACM certificate **in us-east-1** (CloudFront reads certificates
-   only from that region) and add the validation record it asks for.
-2. Re-provision with `--domain <host> --cert-arn <arn>`.
-3. CNAME the hostname to the printed `CnameTarget`.
+```bash
+python -m vdl_tools.marimo_publish domain my-app --hostname app.vibrantdatalabs.org
+```
+
+Finds a certificate covering the hostname or requests one, prints the validation
+record if it needs one, and prints the `provision` command to run next.
+`--provision` attaches it automatically once `ISSUED`; `--wait-seconds N` polls
+while validation completes.
+
+VDL already holds an issued wildcard for `*.vibrantdatalabs.org` in us-east-1,
+so single-label subdomains there skip certificate issuance entirely. ACM
+wildcards match one label only: `a.b.vibrantdatalabs.org` would need its own.
+
+Then CNAME the hostname to the `CnameTarget` that `provision` prints.
 
 VDL DNS is Cloudflare, so steps 1 and 3 are manual. Set the record to
 **DNS-only** — a proxied record puts a second CDN in front of this one, with its
