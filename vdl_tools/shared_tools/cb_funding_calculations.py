@@ -1,7 +1,7 @@
 import pandas as pd
 
 PRE_SEED_STAGES = {
-    'angel', 'pre_seed', 'convertible_note'  # , 'non_equity_assistance' #,'product_crowdfunding'
+    'angel', 'pre_seed', 'convertible_note', 'product_crowdfunding'  # , 'non_equity_assistance' #,'product_crowdfunding'
 }  # mention one of these plus 'other'
 OTHER = {'grant', 'debt_financing', 'non_equity_assistance'}
 SEED_STAGES = {'equity_crowdfunding', 'initial_coin_offering', 'seed'}
@@ -36,7 +36,8 @@ EARLY_VENTURE_ROUNDS = {
 }
 LATE_VENTURE_ROUNDS = set(DISCLOSED_STAGES_ORDERED[
                           DISCLOSED_STAGES_ORDERED.index('series_c'):DISCLOSED_STAGES_ORDERED.index('post_ipo_equity')])
-VENTURE_ROUNDS = LATE_VENTURE_ROUNDS | EARLY_VENTURE_ROUNDS | {'seed'}
+# series_unknown counts as a venture round - it's a venture round whose stage wasn't disclosed
+VENTURE_ROUNDS = LATE_VENTURE_ROUNDS | EARLY_VENTURE_ROUNDS | {'seed', 'series_unknown'}
 POST_IPO = set(DISCLOSED_STAGES_ORDERED[DISCLOSED_STAGES_ORDERED.index('post_ipo_equity'):])
 UNDISCLOSED_STAGES = {'undisclosed', 'series_unknown'}
 
@@ -54,6 +55,8 @@ for stage in IPO_STATES:
 for stage in OTHER:
     ROUND_TO_STAGE[stage] = stage
 ROUND_TO_STAGE['private_equity'] = 'private_equity'
+# venture round with undisclosed stage - ~13% of crunchbase rounds, too common to leave unmapped
+ROUND_TO_STAGE['series_unknown'] = 'unknown_venture_stage'
 
 
 def complete_stage_from_type(company_row):
