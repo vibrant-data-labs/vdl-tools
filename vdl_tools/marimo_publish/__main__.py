@@ -108,6 +108,21 @@ def _literal_path_calls(tree: ast.AST) -> list[tuple[int, str, str]]:
     return hits
 
 
+def _app_title(tree: ast.AST) -> str | None:
+    """The app_title passed to marimo.App(), if the notebook sets one."""
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
+        if name != "App":
+            continue
+        for kw in node.keywords:
+            if kw.arg == "app_title" and isinstance(kw.value, ast.Constant):
+                return kw.value.value
+    return None
+
+
 def cmd_audit(args) -> int:
     nb = Path(args.notebook).resolve()
     if not nb.is_file():
@@ -118,10 +133,19 @@ def cmd_audit(args) -> int:
     hardcoded = _literal_path_calls(tree)
     uses_location = "notebook_location" in src
     public_dir = nb.parent / "public"
+    title = _app_title(tree)
 
     print(f"notebook: {nb}")
     print(f"public/ next to notebook: {'yes' if public_dir.is_dir() else 'NO'}")
     print(f"uses mo.notebook_location(): {'yes' if uses_location else 'NO'}")
+    if title:
+        print(f"browser tab title: {title!r}")
+    else:
+        # marimo falls back to the filename, so notebook_v2.py becomes
+        # "notebook v2" in the tab and in link previews.
+        fallback = nb.stem.replace("_", " ").replace("-", " ")
+        print(f"browser tab title: {fallback!r} (from the filename)")
+        print('  Set it explicitly: marimo.App(app_title="...")')
     print()
 
     if hardcoded:

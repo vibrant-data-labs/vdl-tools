@@ -68,6 +68,10 @@ the served URL:
 pd.read_csv(str(mo.notebook_location() / "public" / "data.csv"))
 ```
 
+`audit` also reports the browser tab title, which marimo derives from the
+**filename** unless the notebook sets `app_title` on `marimo.App(...)` — so
+`molab_version.py` ships as "molab version" in the tab and in link previews.
+
 This is invisible locally: the notebook runs fine under `marimo edit` and dies
 in the browser. `audit` AST-walks for it, and also reports the `public/` payload
 size, because Pyodide downloads *and parses* that in the browser on every cold

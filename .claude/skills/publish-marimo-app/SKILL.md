@@ -19,6 +19,14 @@ python -m vdl_tools.marimo_publish audit <notebook.py>
 Exits non-zero when the notebook cannot work in WASM. Read the output before
 touching anything.
 
+It also reports the browser tab title. marimo derives that from the **filename**
+unless the notebook sets one, so `molab_version.py` publishes as "molab version"
+in the tab and in link previews. Fix it in the notebook, not by renaming:
+
+```python
+app = marimo.App(width="medium", app_title="Attention vs Emissions")
+```
+
 ## 2. Gate: rewrite hardcoded data paths
 
 A WASM export puts **only the notebook** in Pyodide's virtual filesystem, so
