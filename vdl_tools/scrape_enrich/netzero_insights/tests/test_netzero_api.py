@@ -95,7 +95,7 @@ def test_search_entities_single_request(netzero_api, mock_session):
     mock_session.request.side_effect = _search_responder(total=2)
 
     result = netzero_api._search_entities(
-        endpoint="companies",
+        operation="search_companies",
         filter=MainFilter(),
         limit=2,
     )
@@ -110,7 +110,7 @@ def test_search_entities_single_request(netzero_api, mock_session):
 def test_search_entities_no_filter(netzero_api, mock_session):
     mock_session.request.side_effect = _search_responder(total=1)
 
-    result = netzero_api._search_entities(endpoint="companies", limit=1)
+    result = netzero_api._search_entities(operation="search_companies", limit=1)
 
     assert result["count"] == 1
 
@@ -120,7 +120,7 @@ def test_search_entities_limit_not_truncated_to_page_multiple(netzero_api, mock_
     mock_session.request.side_effect = _search_responder(total=400)
 
     result = netzero_api._search_entities(
-        endpoint="companies",
+        operation="search_companies",
         filter=MainFilter(),
         limit=250,
         page_size=100,
@@ -136,7 +136,7 @@ def test_search_entities_fetches_all_pages_concurrently(netzero_api, mock_sessio
     mock_session.request.side_effect = _search_responder(total=250)
 
     result = netzero_api._search_entities(
-        endpoint="companies",
+        operation="search_companies",
         filter=MainFilter(),
         limit=None,
         page_size=100,
@@ -155,7 +155,7 @@ def test_search_entities_dedupes_by_unique_key(netzero_api, mock_session):
     mock_session.request.side_effect = _search_responder(total=150, dataset=dataset)
 
     result = netzero_api._search_entities(
-        endpoint="companies",
+        operation="search_companies",
         filter=MainFilter(),
         page_size=100,
         unique_key="clientID",
@@ -173,7 +173,7 @@ def test_retry_on_500(netzero_api, mock_session):
     ]
 
     with patch("vdl_tools.scrape_enrich.netzero_insights.netzero_api.time.sleep"):
-        result = netzero_api._search_entities(endpoint="companies", limit=1)
+        result = netzero_api._search_entities(operation="search_companies", limit=1)
 
     assert result["count"] == 1
     assert mock_session.request.call_count == 2
@@ -187,7 +187,7 @@ def test_reauth_on_401(netzero_api, mock_session):
         _response({"count": 1, "results": [{"clientID": 1}]}),
     ]
 
-    result = netzero_api._search_entities(endpoint="companies", limit=1)
+    result = netzero_api._search_entities(operation="search_companies", limit=1)
 
     assert result["count"] == 1
     # 401 triggered exactly one re-login before the retry succeeded
@@ -200,14 +200,14 @@ def test_persistent_401_raises(netzero_api, mock_session):
     mock_session.request.side_effect = [_response(status=401)] * 5
 
     with pytest.raises(requests.exceptions.HTTPError):
-        netzero_api._search_entities(endpoint="companies", limit=1)
+        netzero_api._search_entities(operation="search_companies", limit=1)
 
 
 class TestSearchCheckpoint:
 
     def _run_search(self, netzero_api, tmp_path, **kwargs):
         return netzero_api._search_entities(
-            endpoint="companies",
+            operation="search_companies",
             filter=MainFilter(),
             sorting=Sorting(field="clientID"),
             page_size=100,
@@ -278,7 +278,7 @@ class TestSearchCheckpoint:
         mock_session.request.reset_mock()
         mock_session.request.side_effect = _search_responder(total=250)
         netzero_api._search_entities(
-            endpoint="companies",
+            operation="search_companies",
             filter=MainFilter(include={"name": "different"}),
             sorting=Sorting(field="clientID"),
             page_size=100,

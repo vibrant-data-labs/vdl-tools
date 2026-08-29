@@ -19,17 +19,30 @@ def get_netzero_api(
     use_sandbox: bool = False,
     read_from_cache: bool = True,
     write_to_cache: bool = True,
+    api_version: str = None,
 ):
+    """Build a configured client.
+
+    ``api_version`` selects the legacy ("v1") or current ("v2") NZI API. It
+    falls back to the ``netzero_insights.api_version`` config key, then to
+    ``NZI_API_VERSION``, then to the module default.
+    """
     if use_sandbox:
         password = config.get("netzero_insights", "password_sandbox")
     else:
         password = config.get("netzero_insights", "password")
+    # `get_configuration()` returns a plain {} when there is no config file, so
+    # don't assume the ConfigParser API is available.
+    if api_version is None and hasattr(config, "has_option"):
+        if config.has_option("netzero_insights", "api_version"):
+            api_version = config.get("netzero_insights", "api_version")
     return NetZeroAPI(
         username=config.get("netzero_insights", "username"),
         password=password,
         use_sandbox=use_sandbox,
         read_from_cache=read_from_cache,
         write_to_cache=write_to_cache,
+        api_version=api_version,
     )
 
 
@@ -49,8 +62,18 @@ def create_search_filter(
     exclude_investors: list[int] = None,
     include_taxonomy_items: list[int] = None,
     exclude_taxonomy_items: list[int] = None,
+    include_tags: list[int] = None,
+    exclude_tags: list[int] = None,
+    tags_mode: str = "OR",
     minimum_commercial_deals: int = None,
 ) -> MainFilter:
+    """Build a :class:`MainFilter` from keyword arguments.
+
+    ``include_taxonomy_items``/``exclude_taxonomy_items`` take taxonomy item
+    IDs and only work on the v1 API. The v2 API replaced that predicate with
+    tag IDs, so pass ``include_tags``/``exclude_tags`` there — translate item
+    IDs to tag IDs with ``NetZeroAPI.get_taxonomy_item_tag_ids()``.
+    """
 
     include_keywords = include_keywords or []
     exclude_keywords = exclude_keywords or []
@@ -82,6 +105,11 @@ def create_search_filter(
         startup_include_filter = startup_include_filter or StartupFilter()
         startup_include_filter.taxonomyItems = include_taxonomy_items
         startup_include_filter.taxonomyItemsMode = "OR"
+
+    if include_tags:
+        startup_include_filter = startup_include_filter or StartupFilter()
+        startup_include_filter.tags = include_tags
+        startup_include_filter.tagsMode = tags_mode
 
     if name:
         startup_include_filter = startup_include_filter or StartupFilter()
@@ -123,6 +151,11 @@ def create_search_filter(
         startup_exclude_filter = startup_exclude_filter or StartupFilter()
         startup_exclude_filter.taxonomyItems = exclude_taxonomy_items
         startup_exclude_filter.taxonomyItemsMode = "OR"
+
+    if exclude_tags:
+        startup_exclude_filter = startup_exclude_filter or StartupFilter()
+        startup_exclude_filter.tags = exclude_tags
+        startup_exclude_filter.tagsMode = tags_mode
 
     if startup_exclude_filter:
         main_filter.exclude = startup_exclude_filter
