@@ -9,6 +9,7 @@ from typing import Literal
 
 from more_itertools import chunked
 import pandas as pd
+from sqlalchemy.dialects.postgresql import JSONB
 
 from vdl_tools.shared_tools.database_cache.database_models.linkedin_base_employee import LinkedInBaseEmployee
 from vdl_tools.shared_tools.database_cache.database_models.linkedin_clean_employee import LinkedInCleanEmployee
@@ -96,22 +97,24 @@ def get_employee_profiles(
 
     # Determine which profiles to query
     if skip_existing:
-        # Query existing profiles from database
+        # Query existing profiles from database.
+        # original_url stores the full URL the profile was queried with,
+        # so match on the full URL (x[0]), not the extracted linkedin id.
         found_rows = (
             session
             .query(Model)
             .filter(
-                getattr(Model, "original_url").in_([x[1] for x in urls_ids]),
+                getattr(Model, "original_url").in_([x[0] for x in urls_ids]),
             )
             .all()
         )
 
-        found_ids = {str(getattr(row, "original_url")) for row in found_rows}
+        found_urls = {str(getattr(row, "original_url")) for row in found_rows}
 
         # Filter out profiles that already exist
         unfound_rows = [
             x for x in urls_ids
-            if x[1] not in found_ids
+            if x[0] not in found_urls
         ]
     else:
         found_rows = []
@@ -153,6 +156,14 @@ def get_employee_profiles(
 
             # Filter result to only include columns that are in the model
             db_result = {k: v for k, v in result.items() if k in Model.__table__.columns.keys()}
+
+            # The API doesn't always return every list field (e.g. also_viewed,
+            # groups, skills) but the table declares them NOT NULL --
+            # fill missing ones with empty lists so the insert doesn't fail
+            for column in Model.__table__.columns:
+                if isinstance(column.type, JSONB) and not column.nullable:
+                    if db_result.get(column.name) is None:
+                        db_result[column.name] = []
 
             # Store in database
             try:
