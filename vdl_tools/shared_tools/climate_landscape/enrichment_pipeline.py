@@ -456,9 +456,6 @@ def run_pipeline(
     n_per_commit=N_PER_COMMIT,
 ):
     """Pure enrichment: scrape, summarize, classify, geocode, and write the meta artifact.
-
-    Taxonomy mapping (One Earth, Drawdown) is a follow-on stage that reads the
-    meta artifact — see climate-landscape's ``process_map_taxonomies``.
     """
     log_major_step("loading pre-processed combined crunchbase + candid data")
     if enrich_input_uri:
