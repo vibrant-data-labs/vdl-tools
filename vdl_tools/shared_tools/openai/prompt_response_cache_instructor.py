@@ -13,7 +13,7 @@ docstring Notes for model-specific parameters (e.g. reasoning for gpt-5).
 
 import logging
 
-from vdl_tools.shared_tools.database_cache.database_models.prompt import PromptResponse
+from vdl_tools.shared_tools.database_cache.database_models.prompt import Prompt, PromptResponse
 from vdl_tools.shared_tools.openai.prompt_response_cache_sql import PromptResponseCacheSQL, DEFAULT_MODEL
 from vdl_tools.shared_tools.openai.openai_constants import MODEL_DATA
 from vdl_tools.shared_tools.tools.logger import logger
@@ -94,7 +94,7 @@ class InstructorPRC(PromptResponseCacheSQL):
             If True, persist responses to the database. Default is True.
         """
         # If None or "" is passed in
-        prompt_str_w_schema = f"{prompt_str}\n{response_model.schema_json()}"
+        prompt_str_w_schema = self.build_prompt_str(prompt_str, response_model)
         super().__init__(
             session=session,
             prompt_str=prompt_str_w_schema,
@@ -107,6 +107,22 @@ class InstructorPRC(PromptResponseCacheSQL):
         self.prompt_text = prompt_str
         self.response_model = response_model
         self.model = model
+
+    @classmethod
+    def build_prompt_str(cls, prompt_str, response_model):
+        """The full prompt this cache registers: prompt text + response schema JSON."""
+        return f"{prompt_str}\n{response_model.schema_json()}"
+
+    @classmethod
+    def build_prompt_id(cls, prompt_str, response_model):
+        """Deterministic cache ``prompt_id`` for (prompt_str, response_model).
+
+        The id this cache would register or look up for the pair — a hash of
+        ``build_prompt_str``'s output, identical to the ``prompt`` table's
+        ``id`` column. Needs no session, so callers can record the cache
+        identity in output lineage or query the table directly.
+        """
+        return Prompt.create_text_id(cls.build_prompt_str(prompt_str, response_model))
 
     def get_completion(
         self,
