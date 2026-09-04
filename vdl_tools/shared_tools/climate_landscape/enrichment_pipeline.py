@@ -12,6 +12,7 @@ from vdl_tools.scrape_enrich.scraper.scrape_websites import extract_website_name
 from vdl_tools.shared_tools import climatebert_adaptation as adp
 from vdl_tools.shared_tools.all_source_organization_summarization import generate_summary_of_summaries, BASE_SUMMARY_OF_SUMMARIES_PROMPT
 from vdl_tools.shared_tools.climate_landscape.diversity_keywords import DIVERSITY_BIPOC_DICT
+from vdl_tools.shared_tools.climate_landscape.venture_backed_flag import add_venture_backed_flag
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 from vdl_tools.shared_tools.geotagging_prompting import geotag_texts_bulk
 from vdl_tools.shared_tools.org_type_classifier import org_type_classifier
@@ -454,8 +455,14 @@ def run_pipeline(
     label_override_filepath=None,
     max_workers=MAX_WORKERS,
     n_per_commit=N_PER_COMMIT,
+    funding_rounds_uri=None,
+    venture_backed_org_type_col='OrgType Prediction',
 ):
     """Pure enrichment: scrape, summarize, classify, geocode, and write the meta artifact.
+
+    When ``funding_rounds_uri`` (the UNFILTERED raw Crunchbase rounds parquet) is
+    set, the ``venture_backed`` flag is attached from it right after the org-type
+    prediction, using ``venture_backed_org_type_col`` for the grant-only rule.
     """
     log_major_step("loading pre-processed combined crunchbase + candid data")
     if enrich_input_uri:
@@ -676,6 +683,18 @@ def run_pipeline(
     log_major_step("Running Prediction for Organization Type")
     df_relevant = org_type_classifier.predict(df_relevant)
 
+    # Venture-backed flag from the raw rounds (needs the org-type prediction above)
+    if funding_rounds_uri:
+        log_major_step("Adding venture_backed flag from raw Crunchbase funding rounds")
+        df_relevant = add_venture_backed_flag(
+            df_relevant,
+            funding_rounds_uri,
+            id_col=id_col,
+            org_type_col=venture_backed_org_type_col,
+        )
+    else:
+        logger.warning("funding_rounds_uri not set; skipping the venture_backed flag")
+
     if run_process_images:
         # Add Logos
         log_major_step("Adding Logos")
@@ -717,6 +736,10 @@ def run_pipeline(
                 "source": "enrichment_pipeline.run_pipeline",
                 "enrich_input_uri": enrich_input_uri,
                 "row_count": len(df_relevant),
+                "funding_rounds_uri": funding_rounds_uri,
+                "venture_backed_org_type_col": (
+                    venture_backed_org_type_col if funding_rounds_uri else None
+                ),
             },
         )
 
