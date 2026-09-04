@@ -216,7 +216,10 @@ def predict(
         axis=1
     )
 
-    # If the company raised from a venture round, assume it's a for profit
+    # If the company raised from a venture round, assume it's a for profit.
+    # By this point 'Funding Types' / 'Funding Stage' hold DISPLAY names;
+    # raised_from_venture_rounds normalizes them via funding_types.as_raw, so
+    # this override works on either vocabulary (it used to silently never fire).
     prediction_df[org_type_prediction_field] = prediction_df.apply(
         lambda x: INVERSE_LABEL_MAP['For Profit']
           if raised_from_venture_rounds(

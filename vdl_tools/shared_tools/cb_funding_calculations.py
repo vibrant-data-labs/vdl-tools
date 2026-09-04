@@ -1,19 +1,45 @@
+"""
+Org-level funding classifications derived from an org's Crunchbase rounds.
+
+The round-type vocabulary (slugs, display names, named groups) lives in
+``funding_types``; the group constants are re-exported here so older imports
+such as ``from cb_funding_calculations import ROUND_TO_STAGE`` keep working.
+
+Every predicate below works on raw slugs but passes its inputs through
+``funding_types.as_raw`` first, so it gives the same answer whether it is
+handed the raw column (``Funding Types Raw``) or the display column
+(``Funding Types``). Before this, ``raised_from_venture_rounds`` silently
+returned False for every org inside the enrichment pipeline because it
+compared raw slugs against display names.
+"""
 import pandas as pd
 
-PRE_SEED_STAGES = {
-    'angel', 'pre_seed', 'convertible_note', 'product_crowdfunding'  # , 'non_equity_assistance' #,'product_crowdfunding'
-}  # mention one of these plus 'other'
-OTHER = {'grant', 'debt_financing', 'non_equity_assistance'}
-SEED_STAGES = {'equity_crowdfunding', 'initial_coin_offering', 'seed'}
-IPO_STATES = {
-    'post_ipo_equity', 'post_ipo_debt', 'post_ipo_secondary'
-}
-POST_IPO_TYPES = ['ipo', 'post_ipo_equity', 'post_ipo_debt', 'post_ipo_secondary']
+from vdl_tools.shared_tools.funding_types import (  # noqa: F401  (re-exports)
+    DISCLOSED_STAGES_ORDERED,
+    EARLY_VENTURE_ROUNDS,
+    FUNDING_STAGE_COL,
+    FUNDING_STAGE_RAW_COL,
+    FUNDING_TYPES_COL,
+    FUNDING_TYPES_RAW_COL,
+    IPO_STATES,
+    LATE_VENTURE_ROUNDS,
+    OTHER,
+    POST_IPO,
+    POST_IPO_TYPES,
+    PRE_SEED_STAGES,
+    ROUND_TO_STAGE,
+    SEED_STAGES,
+    UNDISCLOSED_STAGES,
+    VENTURE_BACKED_ROUNDS,
+    VENTURE_ROUNDS,
+    as_raw,
+)
+
+# Kept for compatibility; no consumers in the VDL repos as of 2026-09.
 EQUITY_MAPPING = {
     'equity_crowdfunding': 'pre_seed',
     'initial_coin_offering': 'pre_seed',
     'angel': 'pre_seed',
-    # 'private_equity': 'late_venture',
     'series_c': 'late_venture',
     'series_d': 'late_venture',
     'series_e': 'late_venture',
@@ -24,81 +50,58 @@ EQUITY_MAPPING = {
     'series_j': 'late_venture'
 }
 
-DISCLOSED_STAGES_ORDERED = [
-    'grant', 'equity_crowdfunding', 'initial_coin_offering', 'angel', 'pre_seed', 'seed',
-    'series_a', 'series_b', 'series_c', 'series_d', 'series_e', 'series_f',
-    'series_g', 'series_h', 'series_i', 'series_j', 'corporate_round', 'secondary_market',
-    # 'private_equity',
-    'post_ipo_equity', 'post_ipo_debt', 'post_ipo_secondary',
-]
-EARLY_VENTURE_ROUNDS = {
-    'series_a', 'series_b'
-}
-LATE_VENTURE_ROUNDS = set(DISCLOSED_STAGES_ORDERED[
-                          DISCLOSED_STAGES_ORDERED.index('series_c'):DISCLOSED_STAGES_ORDERED.index('post_ipo_equity')])
-# series_unknown counts as a venture round - it's a venture round whose stage wasn't disclosed
-VENTURE_ROUNDS = LATE_VENTURE_ROUNDS | EARLY_VENTURE_ROUNDS | {'seed', 'series_unknown'}
-# Round types that make an org "venture-backed" on their own (see
-# climate_landscape/venture_backed_flag.py). Grants are handled separately there:
-# grant + for-profit counts as venture-backed, grant + non-profit does not.
-VENTURE_BACKED_ROUNDS = VENTURE_ROUNDS | PRE_SEED_STAGES
-POST_IPO = set(DISCLOSED_STAGES_ORDERED[DISCLOSED_STAGES_ORDERED.index('post_ipo_equity'):])
-UNDISCLOSED_STAGES = {'undisclosed', 'series_unknown'}
 
-ROUND_TO_STAGE = {}
-for stage in PRE_SEED_STAGES:
-    ROUND_TO_STAGE[stage] = 'pre_seed'
-for stage in SEED_STAGES:
-    ROUND_TO_STAGE[stage] = 'seed'
-for stage in EARLY_VENTURE_ROUNDS:
-    ROUND_TO_STAGE[stage] = 'early_stage_venture'
-for stage in LATE_VENTURE_ROUNDS:
-    ROUND_TO_STAGE[stage] = 'late_stage_venture'
-for stage in IPO_STATES:
-    ROUND_TO_STAGE[stage] = 'ipo'
-for stage in OTHER:
-    ROUND_TO_STAGE[stage] = stage
-ROUND_TO_STAGE['private_equity'] = 'private_equity'
-# venture round with undisclosed stage - ~13% of crunchbase rounds, too common to leave unmapped
-ROUND_TO_STAGE['series_unknown'] = 'unknown_venture_stage'
+def _raw_types(company_row, funding_types_field):
+    """The org's round types as a set of raw slugs (empty set when missing)."""
+    value = company_row[funding_types_field]
+    if isinstance(value, str):
+        value = [value] if value else []
+    if value is None or not isinstance(value, (list, tuple)):
+        return set()
+    return set(as_raw(list(value)))
 
 
-def complete_stage_from_type(company_row):
-    """ complete the stage of a company
-    private equity replaced with late stage
-    blanks will be replaced with the latest known stage
-    if company got only seed stages then it is a pre_seed
-    if pre-seed and unknown or undisclosed then early_stage_venture
-    if late venture rounds present then late_stage_venture
-    if any post-ipo then is ipo
-    based on the type of funding """
+def _raw_stage(company_row, funding_stage_field):
+    """The org's stage as a raw label ('' when missing)."""
+    value = company_row.get(funding_stage_field) if hasattr(company_row, 'get') else company_row[funding_stage_field]
+    if value is None or value == '' or value != value:
+        return ''
+    return as_raw(value)
 
-    company_funding_types = set(company_row["Funding Types"])
 
-    if company_row["funding_stage"] == 'private_equity':
+def complete_stage_from_type(company_row, funding_types_field=FUNDING_TYPES_RAW_COL):
+    """Overall stage label for a company from its round types and Crunchbase's
+    own ``funding_stage`` field (raw label; map with funding_types.to_display).
+
+    Rules, in order: private equity counts as late stage; non-profits are
+    'Philanthropy'; a 'seed'-stage company with only pre-seed-type rounds is
+    'pre_seed'; otherwise Crunchbase's stage is used when present; when it is
+    blank the stage is inferred from the round types (post-IPO -> 'ipo', late
+    venture, early venture, 'debt_only', 'grant_only', pre-seed, seed,
+    'non_equity_assistance', 'unknown_venture_stage', else 'unknown').
+    """
+    company_funding_types = _raw_types(company_row, funding_types_field)
+    funding_stage = _raw_stage(company_row, 'funding_stage')
+
+    if funding_stage == 'private_equity':
         return 'late_stage_venture'
     elif company_row['company_type'] == 'non_profit':
         return "Philanthropy"
-    elif company_row['funding_stage'] == 'seed' and company_funding_types.issubset(
+    elif funding_stage == 'seed' and company_funding_types.issubset(
             PRE_SEED_STAGES | OTHER) and not company_funding_types.issubset(OTHER):
         return 'pre_seed'
     # If there is already a `funding_stage` present, use it.
-    elif not pd.isna(company_row['funding_stage']) and company_row['funding_stage'] != '':
-        return company_row['funding_stage']
+    elif funding_stage != '':
+        return funding_stage
 
-    elif pd.isna(company_row['funding_stage']) or company_row['funding_stage'] == '':
+    else:
         if company_funding_types & POST_IPO:
             return 'ipo'
-
-
         elif company_funding_types & LATE_VENTURE_ROUNDS:
             return 'late_stage_venture'
-
         # all company_funding_types are one of pre_seed_stages/early venture and unknown or undisclosed
-
         elif company_funding_types & EARLY_VENTURE_ROUNDS:
             return 'early_stage_venture'
-
         elif company_funding_types == {'debt_financing'}:
             return 'debt_only'
         elif company_funding_types == {'grant'}:
@@ -108,7 +111,6 @@ def complete_stage_from_type(company_row):
                 PRE_SEED_STAGES | OTHER | UNDISCLOSED_STAGES) and not company_funding_types.issubset(
             OTHER | UNDISCLOSED_STAGES):
             return 'pre_seed'
-
         elif company_funding_types & SEED_STAGES:
             return "seed"
         elif company_funding_types == {'non_equity_assistance'}:
@@ -116,52 +118,54 @@ def complete_stage_from_type(company_row):
         elif company_funding_types & (UNDISCLOSED_STAGES | {'product_crowdfunding'}):
             return 'unknown_venture_stage'
         else:
-            # print('uh oh')
             return 'unknown'
 
 
-def p_vs_venture(company_row):
-    """ return if company is a pre-seed, venture,  postventure or philantropic based on funding types"""
-
+def p_vs_venture(company_row, funding_stage_field=FUNDING_STAGE_COL):
+    """'Philanthropy' / 'Venture' / 'Post-Venture' / 'Non-Equity' / 'Unknown'
+    from the org type and the DISPLAY funding stage."""
     if company_row['Org Type'] in ['Nonprofit', 'Non Profit', 'non_profit']:
         return 'Philanthropy'
-    if company_row['Funding Stage'] == 'Philanthropy':
+    stage = company_row[funding_stage_field]
+    if stage == 'Philanthropy':
         return 'Philanthropy'
-    elif company_row['Funding Stage'] == 'Late Venture':
+    elif stage == 'Late Venture':
         return 'Venture'
-    elif company_row['Funding Stage'] in ['Pre-Seed', 'Seed', 'Early Venture']:
+    elif stage in ['Pre-Seed', 'Seed', 'Early Venture']:
         return 'Venture'
-    elif company_row['Funding Stage'] in ['IPO', 'M&A']:
+    elif stage in ['IPO', 'M&A']:
         return 'Post-Venture'
-    elif company_row['Funding Stage'] == 'Non-Equity':
+    elif stage == 'Non-Equity':
         return 'Non-Equity'
-    elif company_row['Funding Stage'] == 'Venture (Unknown Stage)':
+    elif stage == 'Venture (Unknown Stage)':
         return 'Venture'
     return 'Unknown'
 
 
-def grant_loan_flags(df):
-    # Initialize lists to store the boolean flags for each company
+def grant_loan_flags(df, funding_types_field=FUNDING_TYPES_RAW_COL):
+    """Add four booleans per org from the chronological round list: whether a
+    grant / a loan (debt_financing) came before any seed round ('Before Seed
+    Grant' / 'Before Seed Loan') or between seed and IPO ('Venture Grant' /
+    'Venture Loan'). Rounds after the first post-IPO round are ignored.
+    ``funding_types_field`` must be in chronological order."""
     grant_pre_seed = []
     loan_pre_seed = []
     grant_venture = []
     loan_venture = []
 
-    # Define the funding types of interest
-    funding_interest = {'grant', 'debt_financing'}
-
-    for funding_list in df['Funding Types']:
+    for funding_list in df[funding_types_field]:
+        if not isinstance(funding_list, (list, tuple)):
+            funding_list = []
+        funding_list = as_raw(list(funding_list))
         # Reset flags for each company
         grant_before_seed = False
         grant_between_seed_ipo = False
         loan_before_seed = False
         loan_between_seed_ipo = False
-        # after_seriesB = False
 
         # Flags to mark if Seed and Series A have been found
         found_seed = False
         found_early_venture = False
-        # found_seriesB = False
         found_otherFR = False
 
         for round_type in funding_list:
@@ -207,24 +211,34 @@ def grant_loan_flags(df):
     return df
 
 
+# Round types that imply an org raises money like a for-profit: any venture,
+# pre-seed, crowdfunding, private-equity or post-IPO round. Broader than
+# VENTURE_BACKED_ROUNDS on purpose - this is used to infer org TYPE, not to
+# decide whether an org is venture-backed.
+FOR_PROFIT_ROUND_TYPES = VENTURE_ROUNDS | PRE_SEED_STAGES | {
+    'equity_crowdfunding', 'initial_coin_offering', 'private_equity',
+} | POST_IPO
+
+
 def raised_from_venture_rounds(
     company_row,
-    funding_types_field='Funding Types',
+    funding_types_field=FUNDING_TYPES_RAW_COL,
     funding_stage_field='funding_stage',
 ):
-    company_funding_types = set(company_row[funding_types_field])
-    target_funding_types = VENTURE_ROUNDS.union(
-        {'equity_crowdfunding', 'initial_coin_offering', 'angel', 'pre_seed', 'product_crowdfunding',
-         'series_unknown', 'private_equity', 'convertible_note'}
-    ) | POST_IPO
-    if company_funding_types & target_funding_types:
+    """True if the org has any for-profit-style round (see
+    FOR_PROFIT_ROUND_TYPES) or its stage is 'ipo'. Accepts raw or display
+    values in either field."""
+    company_funding_types = _raw_types(company_row, funding_types_field)
+    if company_funding_types & FOR_PROFIT_ROUND_TYPES:
         return True
-    elif company_row[funding_stage_field] == 'ipo':
+    elif _raw_stage(company_row, funding_stage_field) == 'ipo':
         return True
     return False
 
 
 def deduce_org_type(company_row):
+    """Crunchbase's company_type, except an org that raised for-profit-style
+    rounds is always 'For Profit'."""
     if raised_from_venture_rounds(company_row):
         return "For Profit"
     return company_row['company_type']

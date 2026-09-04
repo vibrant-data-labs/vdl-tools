@@ -8,6 +8,7 @@ from vdl_tools.shared_tools.tools.logger import logger
 from vdl_tools.scrape_enrich.crunchbase import api
 import vdl_tools.scrape_enrich.crunchbase.organizations_api_db as orgs_api
 import vdl_tools.shared_tools.cb_funding_calculations as fcalc
+import vdl_tools.shared_tools.funding_types as ft
 import vdl_tools.shared_tools.common_functions as cf  # from common directory: commonly used functions
 import vdl_tools.shared_tools.project_config as pc
 
@@ -402,13 +403,21 @@ def _process_crunchbase_data(
     funding_rounds_dict, funding_rounds_dates_dict = __precompute_funding_rounds(df_funding_rounds)
 
     logger.info('Applying functions to extract funding rounds')
-    df_cb['Funding Types'] = (
+    # Round types per org, chronological, duplicates kept, aligned 1:1 with the
+    # dates list. The raw slugs stay in 'Funding Types Raw'; the display names in
+    # 'Funding Types' are assigned HERE and nowhere else (see funding_types.py).
+    new_slugs = ft.unknown_slugs(df_funding_rounds['investment_type'])
+    if new_slugs:
+        logger.warning('Crunchbase round types not in funding_types.ROUND_TYPES '
+                       '(they will show unmapped): %s', sorted(new_slugs))
+    df_cb['Funding Types Raw'] = (
         df_cb['permalink']
         .apply(lambda p: __extract_funding_rounds(p, funding_rounds_dict))
     )
     df_cb['Funding Types Dates'] = df_cb['permalink'].apply(
         lambda p: __extract_funding_rounds_dates(p, funding_rounds_dates_dict))
-    df_cb['Last_Funding_Type'] = df_cb['Funding Types'].apply(lambda ft: ft[-1] if ft else None)
+    df_cb['Funding Types'] = df_cb['Funding Types Raw'].apply(ft.to_display)
+    df_cb['Last_Funding_Type'] = df_cb['Funding Types'].apply(lambda types: types[-1] if types else None)
     logger.info('Extracted funding types from funding rounds')
 
     logger.info('Extracting year last funded')
@@ -477,13 +486,16 @@ def _process_crunchbase_data(
     logger.info('Adding link back to Crunchbase')
     df_cb['Crunchbase_URL'] = 'https://www.crunchbase.com/organization/' + df_cb['permalink']
 
+    # The three classifications below read the raw round slugs ('Funding Types Raw')
     logger.info('Deducing organization type')
     df_cb['company_type'] = df_cb.apply(lambda x: fcalc.deduce_org_type(company_row=x), axis=1)
 
     logger.info('Deducing funding stage')
-    df_cb['Funding Stage'] = df_cb.apply(
+    # raw stage label in 'Funding Stage Raw'; display name in 'Funding Stage'
+    df_cb['Funding Stage Raw'] = df_cb.apply(
         lambda x: fcalc.complete_stage_from_type(company_row=x), axis=1
     )
+    df_cb['Funding Stage'] = df_cb['Funding Stage Raw'].apply(ft.to_display)
 
     logger.info('Granting loan flags')
     df_cb = fcalc.grant_loan_flags(df_cb)
