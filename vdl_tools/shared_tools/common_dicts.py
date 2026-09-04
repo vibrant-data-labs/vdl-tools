@@ -10,7 +10,7 @@ Created on Tue Oct 12 14:54:17 2021
 # Government funder name lists (used by the coinvestor / investor prep scripts).
 # The funding-type dicts that used to live here (fundingDict, stageDict,
 # stageCategoriesDict) had no consumers and were replaced by
-# vdl_tools.shared_tools.funding_types; the unused company-size maps were
+# vdl_tools.shared_tools.cb_funding_types; the unused company-size maps were
 # removed at the same time.
 
 gov_list = ['NASA',

@@ -1,4 +1,4 @@
-"""Tests for shared_tools.funding_types and the cb_funding_calculations predicates.
+"""Tests for shared_tools.cb_funding_types and the cb_funding_calculations predicates.
 
 Covers the vocabulary contract (every grouped slug is a known round type, the
 display mapping round-trips) and the bug that motivated it: predicates must
@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from vdl_tools.shared_tools import cb_funding_calculations as fcalc
-from vdl_tools.shared_tools import funding_types as ft
+from vdl_tools.shared_tools import cb_funding_types as ft
 
 
 # ---------------------------------------------------------------------------

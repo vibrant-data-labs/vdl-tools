@@ -5,7 +5,7 @@ import pandas as pd
 from vdl_tools.shared_tools.tools.logger import logger
 import vdl_tools.scrape_enrich.crunchbase.organizations_api_extended as orgs_api
 import vdl_tools.shared_tools.cb_funding_calculations as fcalc
-import vdl_tools.shared_tools.funding_types as ft
+import vdl_tools.shared_tools.cb_funding_types as ft
 import vdl_tools.shared_tools.common_functions as cf  # from common directory: commonly used functions
 import vdl_tools.shared_tools.project_config as pc
 
@@ -252,7 +252,7 @@ def __process_crunchbase_raw_data(filter_yr=2016):
         lambda x: ast.literal_eval(x)['permalink'])
     funding_rounds_dict, funding_rounds_dates_dict = __precompute_funding_rounds(df_funding_rounds)
 
-    # Raw slugs in 'Funding Types Raw', display names in 'Funding Types' (see funding_types.py)
+    # Raw slugs in 'Funding Types Raw', display names in 'Funding Types' (see cb_funding_types.py)
     df_cb['Funding Types Raw'] = df_cb['permalink'].apply(lambda p: __extract_funding_rounds(p, funding_rounds_dict))
     df_cb['Funding Types Dates'] = df_cb['permalink'].apply(
         lambda p: __extract_funding_rounds_dates(p, funding_rounds_dates_dict))

@@ -8,7 +8,7 @@ from vdl_tools.shared_tools.tools.logger import logger
 from vdl_tools.scrape_enrich.crunchbase import api
 import vdl_tools.scrape_enrich.crunchbase.organizations_api_db as orgs_api
 import vdl_tools.shared_tools.cb_funding_calculations as fcalc
-import vdl_tools.shared_tools.funding_types as ft
+import vdl_tools.shared_tools.cb_funding_types as ft
 import vdl_tools.shared_tools.common_functions as cf  # from common directory: commonly used functions
 import vdl_tools.shared_tools.project_config as pc
 
@@ -405,10 +405,10 @@ def _process_crunchbase_data(
     logger.info('Applying functions to extract funding rounds')
     # Round types per org, chronological, duplicates kept, aligned 1:1 with the
     # dates list. The raw slugs stay in 'Funding Types Raw'; the display names in
-    # 'Funding Types' are assigned HERE and nowhere else (see funding_types.py).
+    # 'Funding Types' are assigned HERE and nowhere else (see cb_funding_types.py).
     new_slugs = ft.unknown_slugs(df_funding_rounds['investment_type'])
     if new_slugs:
-        logger.warning('Crunchbase round types not in funding_types.ROUND_TYPES '
+        logger.warning('Crunchbase round types not in cb_funding_types.ROUND_TYPES '
                        '(they will show unmapped): %s', sorted(new_slugs))
     df_cb['Funding Types Raw'] = (
         df_cb['permalink']

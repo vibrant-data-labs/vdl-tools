@@ -10,7 +10,7 @@ import pandas as pd
 from vdl_tools.shared_tools import common_functions as cf
 from vdl_tools.linkedin.utils.linkedin_url import extract_linkedin_id
 import vdl_tools.shared_tools.cb_funding_calculations as fcalc
-import vdl_tools.shared_tools.funding_types as ft
+import vdl_tools.shared_tools.cb_funding_types as ft
 from vdl_tools.shared_tools.tools.falsey_checks import coerced_bool
 from vdl_tools.shared_tools.tools.logger import logger
 
@@ -19,7 +19,7 @@ def combine_cb_cd(
     df_cb,  # processed crunchbase data
     df_cd,  # processed candid data
     out_name,  # json filename to write combined results
-    funding_type_map_path=None,  # DEPRECATED, ignored: funding types now map in code (funding_types.py)
+    funding_type_map_path=None,  # DEPRECATED, ignored: funding types now map in code (cb_funding_types.py)
 ):
     """Stack the processed Crunchbase and Candid frames, normalize org type,
     fill the raw funding columns for rows that only carry display values, and
@@ -34,7 +34,7 @@ def combine_cb_cd(
 
     if funding_type_map_path is not None:
         logger.warning("combine_cb_cd: funding_type_map_path is ignored; the funding-type "
-                       "mapping lives in vdl_tools.shared_tools.funding_types")
+                       "mapping lives in vdl_tools.shared_tools.cb_funding_types")
 
     print("\nCOMBINING CRUNCHBASE and CANDID")
     df_cb_cd = pd.concat([df_cb, df_cd], ignore_index=True)

@@ -2,11 +2,11 @@
 Org-level funding classifications derived from an org's Crunchbase rounds.
 
 The round-type vocabulary (slugs, display names, named groups) lives in
-``funding_types``; the group constants are re-exported here so older imports
+``cb_funding_types``; the group constants are re-exported here so older imports
 such as ``from cb_funding_calculations import ROUND_TO_STAGE`` keep working.
 
 Every predicate below works on raw slugs but passes its inputs through
-``funding_types.as_raw`` first, so it gives the same answer whether it is
+``cb_funding_types.as_raw`` first, so it gives the same answer whether it is
 handed the raw column (``Funding Types Raw``) or the display column
 (``Funding Types``). Before this, ``raised_from_venture_rounds`` silently
 returned False for every org inside the enrichment pipeline because it
@@ -14,7 +14,7 @@ compared raw slugs against display names.
 """
 import pandas as pd
 
-from vdl_tools.shared_tools.funding_types import (  # noqa: F401  (re-exports)
+from vdl_tools.shared_tools.cb_funding_types import (  # noqa: F401  (re-exports)
     DISCLOSED_STAGES_ORDERED,
     EARLY_VENTURE_ROUNDS,
     FUNDING_STAGE_COL,
@@ -71,7 +71,7 @@ def _raw_stage(company_row, funding_stage_field):
 
 def complete_stage_from_type(company_row, funding_types_field=FUNDING_TYPES_RAW_COL):
     """Overall stage label for a company from its round types and Crunchbase's
-    own ``funding_stage`` field (raw label; map with funding_types.to_display).
+    own ``funding_stage`` field (raw label; map with cb_funding_types.to_display).
 
     Rules, in order: private equity counts as late stage; non-profits are
     'Philanthropy'; a 'seed'-stage company with only pre-seed-type rounds is

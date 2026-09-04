@@ -200,7 +200,7 @@ def as_raw(value):
         return DISPLAY_TO_SLUG[value]
     raise ValueError(
         f"{value!r} is not a known Crunchbase funding type (slug or display name); "
-        "add it to funding_types.ROUND_TYPES / STAGE_LABELS"
+        "add it to cb_funding_types.ROUND_TYPES / STAGE_LABELS"
     )
 
 
