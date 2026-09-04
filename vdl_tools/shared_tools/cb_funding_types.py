@@ -139,7 +139,8 @@ LATE_VENTURE_ROUNDS = set(DISCLOSED_STAGES_ORDERED[
 VENTURE_ROUNDS = LATE_VENTURE_ROUNDS | EARLY_VENTURE_ROUNDS | {'seed', 'series_unknown'}
 # Round types that make an org "venture-backed" on their own (see
 # climate_landscape/venture_backed_flag.py). Grants are handled separately there:
-# grant + for-profit counts as venture-backed, grant + non-profit does not.
+# grant-only + for-profit counts as venture-backed; a grant next to any other
+# round type does not, and grant + non-profit does not.
 VENTURE_BACKED_ROUNDS = VENTURE_ROUNDS | PRE_SEED_STAGES
 POST_IPO = set(DISCLOSED_STAGES_ORDERED[DISCLOSED_STAGES_ORDERED.index('post_ipo_equity'):])
 UNDISCLOSED_STAGES = {'undisclosed', 'series_unknown'}
