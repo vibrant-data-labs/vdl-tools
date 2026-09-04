@@ -1,3 +1,15 @@
+"""
+LEGACY - survival / failure-rate analytics for Crunchbase funding histories.
+
+The round-type vocabulary defined at the top of this module (SEED_STAGES,
+DISCLOSED_STAGES_ORDERED, VENTURE_ROUNDS, ...) is an older, different
+definition from the canonical one and is kept only because the functions
+below depend on it. Do NOT import it elsewhere: the single source of truth
+for Crunchbase funding types is ``vdl_tools.shared_tools.cb_funding_types``
+(vocabulary) and ``cb_funding_calculations`` (org-level predicates). Only
+``get_df_location`` and ``create_plot_get_metrics`` are still imported from
+here (project_relevance, netzero_insights).
+"""
 import datetime as dt
 
 import numpy as np

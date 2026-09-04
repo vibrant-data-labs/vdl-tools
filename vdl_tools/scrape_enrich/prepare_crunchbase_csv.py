@@ -5,6 +5,7 @@ import pandas as pd
 from vdl_tools.shared_tools.tools.logger import logger
 import vdl_tools.scrape_enrich.crunchbase.organizations_api_extended as orgs_api
 import vdl_tools.shared_tools.cb_funding_calculations as fcalc
+import vdl_tools.shared_tools.cb_funding_types as ft
 import vdl_tools.shared_tools.common_functions as cf  # from common directory: commonly used functions
 import vdl_tools.shared_tools.project_config as pc
 
@@ -251,10 +252,12 @@ def __process_crunchbase_raw_data(filter_yr=2016):
         lambda x: ast.literal_eval(x)['permalink'])
     funding_rounds_dict, funding_rounds_dates_dict = __precompute_funding_rounds(df_funding_rounds)
 
-    df_cb['Funding Types'] = df_cb['permalink'].apply(lambda p: __extract_funding_rounds(p, funding_rounds_dict))
+    # Raw slugs in 'Funding Types Raw', display names in 'Funding Types' (see cb_funding_types.py)
+    df_cb['Funding Types Raw'] = df_cb['permalink'].apply(lambda p: __extract_funding_rounds(p, funding_rounds_dict))
     df_cb['Funding Types Dates'] = df_cb['permalink'].apply(
         lambda p: __extract_funding_rounds_dates(p, funding_rounds_dates_dict))
-    df_cb['Last_Funding_Type'] = df_cb['Funding Types'].apply(lambda ft: ft[-1] if ft else None)
+    df_cb['Funding Types'] = df_cb['Funding Types Raw'].apply(ft.to_display)
+    df_cb['Last_Funding_Type'] = df_cb['Funding Types'].apply(lambda types: types[-1] if types else None)
     logger.info('extracted funding types from funding rounds')
 
     df_cb['Year_Last_Funded'] = df_cb['last_funding_at'].apply(
@@ -303,9 +306,11 @@ def __process_crunchbase_raw_data(filter_yr=2016):
     # add link back to crunchbase with identifier column as https://www.crunchbase.com/entity_def_id/permalink
     df_cb['Crunchbase_URL'] = 'https://www.crunchbase.com/organization/' + df_cb['permalink']
     df_cb['company_type'] = df_cb.apply(lambda x: fcalc.deduce_org_type(company_row=x), axis=1)
-    df_cb['Funding Stage'] = df_cb.apply(
+    # raw stage label in 'Funding Stage Raw'; display name in 'Funding Stage'
+    df_cb['Funding Stage Raw'] = df_cb.apply(
         lambda x: fcalc.complete_stage_from_type(company_row=x), axis=1
     )
+    df_cb['Funding Stage'] = df_cb['Funding Stage Raw'].apply(ft.to_display)
 
     df_cb = fcalc.grant_loan_flags(df_cb)
 
