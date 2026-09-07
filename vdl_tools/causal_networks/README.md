@@ -205,6 +205,7 @@ nodes, links = pipeline.run_causal_network_analysis(nodes, links, out_xlsx="resu
                                                     n_trials=100, seed=42, group_attr="Theme")
 plots.keystone_vs_upstream_scatter(nodes, out_html="scatter.html", color="Theme")
 player.build_player(nodes, links, "player", title="My causal network", group_attr="Theme")
+player.serve_player("player")   # opens http://localhost:8000 in your browser; Ctrl-C to stop
 ```
 
 Which attributes the player shows where (filters, profile, search, axis/color/size dropdowns, hover
@@ -230,7 +231,7 @@ see the `keystone-factor-analysis` repository (Manitoba / RRC Polytech, 73 facto
 | `ensemble.py` | `build_threshold_networks`, `aggregate_ensemble`, `monte_carlo_thinning` |
 | `pipeline.py` | `run_causal_network_analysis`, `analyze_single_network`, `finalize_for_display`, `write_network_excel`, `DISPLAY_NAMES` |
 | `plots.py` | `keystone_vs_upstream_scatter` |
-| `player.py` | `build_player`, `DEFAULT_ATTRIBUTE_SETTINGS` (spreadsheet-style table: one row per attribute, 0/1 columns per setting, `Display_Name`, `Keep`, `tooltip`), `write_attribute_settings`, `read_attribute_settings` |
+| `player.py` | `build_player`, `DEFAULT_ATTRIBUTE_SETTINGS` (spreadsheet-style table: one row per attribute, 0/1 columns per setting, `Display_Name`, `Keep`, `tooltip`), `write_attribute_settings`, `read_attribute_settings`, `serve_player` (serve a built player at localhost:8000 and open the browser; blocks until Ctrl-C) |
 | `tests/` | `pytest vdl_tools/causal_networks/tests` |
 
 ## Acknowledgements

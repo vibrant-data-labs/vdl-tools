@@ -15,6 +15,9 @@ format VDL uses in other projects (a `player_attribute_settings.xlsx` with 0/1 c
 with `write_attribute_settings(path)`, edit it in Excel, and pass the path back to `build_player`.
 """
 
+import http.server
+import socketserver
+import webbrowser
 from pathlib import Path
 
 import pandas as pd
@@ -140,13 +143,17 @@ def build_player(nodes, links, out_dir,
                  logo_image_url=None, logo_url=None, feedback_email=None,
                  attribute_settings=None,     # settings table (DataFrame, .xlsx or .csv); default: DEFAULT_ATTRIBUTE_SETTINGS
                  node_size_scaling=(5, 15, 1),
-                 launch_local=False,          # serve the player locally after building
+                 launch_local=False,          # serve the player in the browser right after building (blocks until Ctrl-C)
                  s3_bucket=None,              # upload to this S3 bucket after building (needs [aws] config)
                  ):
     """
     Build an openmappr player into `out_dir` from the display tables returned by pipeline.py.
     `nodes` must have `id`, `label`, `x`, `y`; `links` must have `Source`, `Target`.
     Attributes absent from the settings table are kept but shown nowhere (no filter, profile or search).
+
+    `launch_local=True` serves the player and blocks, so nothing after this call runs until you stop it.
+    When a script builds several players, build them all with launch_local=False and call
+    `serve_player(out_dir)` once at the end instead.
     """
     # apply the settings table: rename / drop attributes, then keep only settings for attributes present
     rename, drop, settings = read_attribute_settings(
@@ -227,3 +234,26 @@ def build_player(nodes, links, out_dir,
     else:
         mappr.build(out_folder=out_dir)
     print(f"Player built in {out_dir}")
+
+
+
+def serve_player(out_dir, port=8000, open_browser=True):
+    """
+    Serve a built player folder at http://localhost:<port> and open it in the browser.
+    Blocks until Ctrl-C, so call it as the last step of a run script. The page loads the openmappr
+    code from mappr-player.openmappr.org, so it needs an internet connection even when served locally.
+    """
+    out_dir = Path(out_dir)
+    if not (out_dir / "index.html").exists():
+        raise FileNotFoundError(f"No player found in {out_dir}; build one with build_player() first.")
+    handler = lambda *args, **kwargs: http.server.SimpleHTTPRequestHandler(*args, directory=str(out_dir), **kwargs)
+    socketserver.TCPServer.allow_reuse_address = True
+    with socketserver.TCPServer(("", port), handler) as httpd:
+        url = f"http://localhost:{port}"
+        print(f"\nServing the player at {url}  (Ctrl-C to stop)")
+        if open_browser:
+            webbrowser.open_new_tab(url)
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            print("\nStopped serving the player.")
