@@ -1,8 +1,9 @@
-# Causal Networks
+# Keystone Factor Analysis
 
 Which parts of a big, messy problem, if solved, would have the biggest cascading effect on the rest?
 
-This package answers that question structurally. Break a problem into its critical factors, collect
+**Keystone Factor Analysis (KFA)**, also called catalytic factor analysis, answers that question
+structurally; this package (`vdl_tools.causal_networks`) implements it. Break a problem into its critical factors, collect
 "if X improves, does Y improve too?" judgements between them, and treat the result as a directed
 network. Two ideas borrowed from ecology then rank the factors:
 
@@ -11,7 +12,8 @@ network. Two ideas borrowed from ecology then rank the factors:
 * **Upstream position** - like trophic level in a food web, where a factor sits in the flow of
   causation: a root cause (upstream) or a downstream symptom.
 
-Factors that are both high-leverage and upstream get the highest **Catalytic Score**. Because the
+Factors that are both high-leverage and upstream are the **keystone factors**; they get the highest
+**Catalytic Score**. Because the
 link data come from votes, everything is computed on an ensemble of networks and repeated with random
 link deletion, so every score is a mean across many plausible networks, with a standard deviation.
 
@@ -75,7 +77,8 @@ it through for display and filtering.
 
 **Planned: signed links.** Extending the metrics to distinguish "X improves Y" from "X worsens Y"
 (e.g. separate positive and negative 2-hop reach) is a planned next step. The pre-2024 signed-vote
-code in the `kumu` repo history (`process_kumu_data.py`) is the reference for the signed link format.
+code in the `keystone-factor-analysis` repo history (formerly `kumu`, `process_kumu_data.py`) is the
+reference for the signed link format.
 
 ---
 
@@ -216,7 +219,7 @@ link list. Regenerate the example data with `examples/make_example_data.py`.
 
 For a real Undercurrent export replace the first line with
 `nodes, links = load_data.from_undercurrent("survey-export.json")`. For a worked example on real data
-see the `kumu` repository (Manitoba / RRC Polytech, 73 factors).
+see the `keystone-factor-analysis` repository (Manitoba / RRC Polytech, 73 factors).
 
 ## Module map
 

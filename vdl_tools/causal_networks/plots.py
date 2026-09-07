@@ -15,7 +15,7 @@ def keystone_vs_upstream_scatter(nodes,
                                  width=600, height=450, title=None):
     """
     Scatter of every factor's keystone leverage against its upstream position.
-    The most catalytic factors sit in the upper right. Drag to highlight a region.
+    The keystone factors sit in the upper right. Drag to highlight a region.
     Returns the Altair chart (and saves it to `out_html` when given).
     """
     df = nodes.copy()

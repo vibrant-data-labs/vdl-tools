@@ -202,7 +202,7 @@ def build_player(nodes, links, out_dir,
         snap.set_display_data(
             title=snap_title,
             subtitle=f"{y_attr} (leverage) vs {x_attr} (causal position)",
-            description="<p>The most catalytic factors sit in the upper right: "
+            description="<p>The keystone factors sit in the upper right: "
                         "high keystone leverage and upstream in the causal flow.</p>")
         scatters.append(snap)
     project.snapshots = [snap_groups] + scatters

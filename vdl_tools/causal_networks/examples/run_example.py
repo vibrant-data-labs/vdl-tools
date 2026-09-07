@@ -39,4 +39,4 @@ sims = metrics.node_pair_similarities(nw, dict(zip(nodes["id"], nodes["Root Fact
 sims.to_csv(OUT / "example_node_similarities.csv", index=False)
 
 # 5. interactive openmappr player (open output/player/index.html via its run_local.sh)
-player.build_player(nodes, links, OUT / "player", title="Example causal network", group_attr="Theme")
+player.build_player(nodes, links, OUT / "player", title="Example causal network", group_attr="Theme", launch_local=True)

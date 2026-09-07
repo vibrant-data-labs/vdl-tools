@@ -1,5 +1,6 @@
 """
-Structural analysis of causal networks.
+Keystone Factor Analysis (KFA): structural analysis of voted causal networks.
+Also called catalytic factor analysis.
 
 A causal network here is a set of factors (nodes) and directed "if X improves, Y improves too"
 links between them, typically gathered by voting (e.g. Kumu's Undercurrent survey).

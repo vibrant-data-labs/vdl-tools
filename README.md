@@ -4,7 +4,7 @@ This repository contains a set of tools which are used at Vibrant Data Labs.
 
 ## Tools
 
-- [Causal Networks](./vdl_tools/causal_networks/) - keystone / upstream analysis of voted causal networks
+- [Causal Networks](./vdl_tools/causal_networks/) - Keystone Factor Analysis (KFA) of voted causal networks
 - [Network Tools](./vdl_tools/network_tools/)
 - [LinkedIn](./vdl_tools/LinkedIn/) - Set of methods to interact with LinkedIn via CoreSignal API
 - [Download Process Images](./vdl_tools/download_process_images) - Helper methods to download, convert and save images to S3 bucket

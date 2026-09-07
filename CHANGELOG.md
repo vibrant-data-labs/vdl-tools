@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [2.1.0] - 2026-09-07
 
 ### Added
-- `vdl_tools.causal_networks`: structural analysis of voted causal networks (keystone leverage,
+- `vdl_tools.causal_networks`: Keystone Factor Analysis of voted causal networks (keystone leverage,
   trophic level / upstream position, ensemble of vote thresholds, monte-carlo link deletion,
   Excel output, Altair scatter, openmappr player), with README, runnable examples and tests.
   Works on any nodes/links tables; Undercurrent and weighted Kumu exports are loaders.
