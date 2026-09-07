@@ -4,7 +4,8 @@ This repository contains a set of tools which are used at Vibrant Data Labs.
 
 ## Tools
 
-- [Network Tools](./vdl_tools/network-tools/)
+- [Causal Networks](./vdl_tools/causal_networks/) - keystone / upstream analysis of voted causal networks
+- [Network Tools](./vdl_tools/network_tools/)
 - [LinkedIn](./vdl_tools/LinkedIn/) - Set of methods to interact with LinkedIn via CoreSignal API
 - [Download Process Images](./vdl_tools/download_process_images) - Helper methods to download, convert and save images to S3 bucket
 - [Py2Mappr](./vdl_tools/py2mappr) - Python wrapper for generating the OpenMappr player
