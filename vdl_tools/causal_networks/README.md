@@ -60,7 +60,7 @@ Which analysis applies depends only on the optional link columns:
 | function | input | notes |
 |---|---|---|
 | `from_tables(nodes_df, links_df)` | any two DataFrames | the generic entry point; column names configurable; endpoints may be labels or the values of a node id column |
-| `from_undercurrent(path)` | raw Kumu Undercurrent export, `.json` or two-sheet `.xlsx` | recomputes `votes = yes + no`; drops the raw `votes` (it counts skips) and `sum` |
+| `from_undercurrent(path)` | raw export from [Undercurrent](https://kumu.io), the pairwise-voting survey tool developed by Kumu; `.json` or two-sheet `.xlsx` | recomputes `votes = yes + no`; drops the raw `votes` (it counts skips) and `sum` |
 | `from_kumu_weighted(path)` | Kumu Elements/Connections `.xlsx` with a `weight` column | untested against real data |
 
 All loaders return `nodes` with an integer `id` (0..N-1, sorted by label) and `links` with integer
@@ -69,8 +69,8 @@ All loaders return `nodes` with an integer `id` (0..N-1, sorted by label) and `l
 
 ### What a link means
 
-A link Source -> Target means "if Source improves, Target improves too" (the Undercurrent survey
-question). Links are **unsigned** and every metric below ignores sign. If your data carry a sign, a
+A link Source -> Target means "if Source improves, Target improves too" (the question Kumu's
+Undercurrent survey asks). Links are **unsigned** and every metric below ignores sign. If your data carry a sign, a
 confidence, or any other link attribute, keep the column: the loaders, the ensemble aggregation
 (numeric columns averaged, text columns keep their first value) and the Excel/player outputs all carry
 it through for display and filtering.
@@ -217,7 +217,7 @@ that default sheet.
 hit Run; ~10 seconds). `examples/run_example_unweighted.py` shows the single-network path on a plain
 link list. Regenerate the example data with `examples/make_example_data.py`.
 
-For a real Undercurrent export replace the first line with
+For a real export from Kumu's Undercurrent survey replace the first line with
 `nodes, links = load_data.from_undercurrent("survey-export.json")`. For a worked example on real data
 see the `keystone-factor-analysis` repository (Manitoba / RRC Polytech, 73 factors).
 
@@ -232,6 +232,12 @@ see the `keystone-factor-analysis` repository (Manitoba / RRC Polytech, 73 facto
 | `plots.py` | `keystone_vs_upstream_scatter` |
 | `player.py` | `build_player`, `DEFAULT_ATTRIBUTE_SETTINGS` (spreadsheet-style table: one row per attribute, 0/1 columns per setting, `Display_Name`, `Keep`, `tooltip`), `write_attribute_settings`, `read_attribute_settings` |
 | `tests/` | `pytest vdl_tools/causal_networks/tests` |
+
+## Acknowledgements
+
+Undercurrent, the pairwise causal-voting survey whose exports this package reads, is developed by
+[Kumu](https://kumu.io). The keystone and trophic-level ideas come from ecology (Paine, 1966;
+Martinez, 1991) and were adapted to problem structure by Vibrant Data Labs.
 
 ## Gotchas
 

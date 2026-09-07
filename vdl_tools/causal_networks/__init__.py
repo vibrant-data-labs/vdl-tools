@@ -3,7 +3,7 @@ Keystone Factor Analysis (KFA): structural analysis of voted causal networks.
 Also called catalytic factor analysis.
 
 A causal network here is a set of factors (nodes) and directed "if X improves, Y improves too"
-links between them, typically gathered by voting (e.g. Kumu's Undercurrent survey).
+links between them, typically gathered by voting, e.g. with Undercurrent, the pairwise-voting survey tool developed by Kumu (kumu.io).
 The package ranks factors by two structural ideas borrowed from ecology:
 
 * keystone leverage  - few incoming controls, many direct and 2-hop outgoing influences

@@ -11,7 +11,7 @@ The analysis does not care where the data came from. It only needs:
     links : one row per directed causal link (source -> target)
         Source, Target    integer node ids
         fromName, toName  the node labels (for readability)
-        yes, no           vote counts per link (Undercurrent surveys)  -> full ensemble pipeline
+        yes, no           vote counts per link (e.g. Kumu's Undercurrent)  -> full ensemble pipeline
         weight            a pre-computed link strength                 -> single-network analysis
         (nothing)         just the link list                           -> single-network analysis
         ...               any other link columns are carried through untouched, for display only
@@ -125,7 +125,7 @@ def _label_from_kumu_string(text):
 
 def from_undercurrent(path):
     """
-    Load a raw Undercurrent survey export into the standard two tables.
+    Load a raw export from Undercurrent (Kumu's pairwise-voting survey tool, kumu.io) into the standard two tables.
 
     Accepts the raw .json export ({"elements": [...], "connections": [...]}) or the two-sheet .xlsx
     (sheet 'Elements' with ID/Label, sheet 'Connections' with ID/From/To/yes/no, where From/To
