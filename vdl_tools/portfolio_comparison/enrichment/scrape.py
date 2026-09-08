@@ -16,6 +16,9 @@ from vdl_tools.portfolio_comparison.intake.normalize import identity_domain
 
 SCRAPED_BASENAME = "scraped_texts"
 
+# NOTE: classifier + markers are promoted to
+# vdl_tools/scrape_enrich/scraper/text_quality.py in PR #197; switch this
+# module to import from there (and delete this copy) once #197 merges.
 # Parked/for-sale pages answer HTTP but carry no org text. Conservative,
 # lowercase substrings.
 PARKED_MARKERS = [
