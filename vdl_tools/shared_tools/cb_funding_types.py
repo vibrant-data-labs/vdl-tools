@@ -85,7 +85,7 @@ STAGE_LABELS = {
     'm_and_a':               'M&A',
     'grant_only':            'Non-Equity',
     'debt_only':             'Non-Equity',
-    'unknown':               'Unknown',
+    'unknown':               'Non-Equity',
     'Philanthropy':          'Philanthropy',   # non-profits (Candid, and CB non_profit)
 }
 
