@@ -16,7 +16,7 @@ BASE_SUMMARY_OF_SUMMARIES_PROMPT = (
 def generate_summary_of_summaries(
     ids_text_lists: list[tuple],
     use_cached_results: bool=True,
-    n_per_commit: int=None,
+    n_per_commit: int=200,
     prompt_string: str=BASE_SUMMARY_OF_SUMMARIES_PROMPT,
     max_workers: int=10,
     model: str="gpt-4.1-mini",

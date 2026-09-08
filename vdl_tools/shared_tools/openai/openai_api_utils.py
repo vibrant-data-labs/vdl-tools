@@ -27,12 +27,25 @@ def is_reasoning_model(model):
     return model.startswith("gpt-5")
 
 
+# Models tiktoken does not recognize yet, already warned about. Counting runs
+# per text, so without this the warning repeats once per call.
+_ENCODING_WARNED: set[str] = set()
+
+
 def get_num_tokens(text, model_name):
     """Return the number of tokens used by a text."""
     try:
         encoding = tiktoken.encoding_for_model(model_name)
     except KeyError:
-        print("Warning: model not found. Using cl100k_base encoding.")
+        # o200k_base is the right encoding for the GPT-4o/5-era models, so the
+        # count is correct — tiktoken's table just lags new releases. Warn once
+        # per model rather than per call.
+        if model_name not in _ENCODING_WARNED:
+            _ENCODING_WARNED.add(model_name)
+            print(
+                f"Note: tiktoken has no encoding registered for {model_name}; "
+                f"using o200k_base."
+            )
         encoding = tiktoken.get_encoding("o200k_base")
     # Ensure the input is a string (or handle None separately)
     if text is None:

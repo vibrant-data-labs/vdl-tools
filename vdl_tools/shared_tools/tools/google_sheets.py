@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 
 import json
@@ -6,6 +7,7 @@ import pickle
 
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 
 from vdl_tools.shared_tools.tools.config_utils import get_configuration
@@ -32,9 +34,14 @@ def get_sheets_service(credentials_json=None):
     # If there are no valid credentials or the credentials are expired, let's log in again.
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            # "credentials.json" is the file you downloaded from the Google Cloud Console
+            try:
+                creds.refresh(Request())
+            except RefreshError:
+                # refresh token was revoked/expired (Google returns invalid_grant) --
+                # fall through to a fresh interactive login instead of crashing
+                creds = None
+        if not creds or not creds.valid:
+            # opens a browser window for Google sign-in (one time)
             flow = InstalledAppFlow.from_client_config(credentials_json, SCOPES)
             creds = flow.run_local_server(port=0)
         # Save the credentials for the next run
@@ -126,10 +133,17 @@ def write_to_sheet(
 
     # ── normalise DataFrame / list input ───────────────────────────────────
     if isinstance(values, pd.DataFrame):
-        if isinstance(values, pd.DataFrame):
-            # Convert DataFrame to list, replacing NaN with None for JSON compliance
-            df_clean = values.reset_index(drop=True).apply(lambda col: col.map(lambda x: None if pd.isna(x) else x))
-            rows = df_clean.values.tolist()
+        def _to_cell(x):
+            """Make one cell JSON-safe for the Sheets API: sheets cells must be
+            scalars, so lists become ', '-joined strings and NaN becomes None."""
+            if isinstance(x, (list, tuple, set, np.ndarray)):
+                return ", ".join(str(i) for i in x)
+            if isinstance(x, dict):
+                return str(x)
+            return None if pd.isna(x) else x
+
+        df_clean = values.reset_index(drop=True).apply(lambda col: col.map(_to_cell))
+        rows = df_clean.values.tolist()
         if include_header:
             rows = [values.columns.tolist()] + rows
         values = rows

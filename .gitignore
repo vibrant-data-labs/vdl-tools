@@ -38,3 +38,6 @@ coverage.xml
 # Ruff cache
 .ruff_cache/.python-version
 .python-version
+
+# Claude Code worktrees are separate checkouts, never repo content
+.claude/worktrees/

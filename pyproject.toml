@@ -62,6 +62,7 @@ dependencies = [
     "umap-learn==0.5.12",
     "unstructured[all-docs]>=0.16.12,<1.0.0",
     "url-normalize",
+    "vl-convert-python",              # png export for altair charts (taxonomy overlap analysis)
     "webdriver_manager",
     "xlsxwriter",
     "Wikipedia-API"

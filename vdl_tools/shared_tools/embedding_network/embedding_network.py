@@ -454,9 +454,19 @@ def parse_keyword_response(response_obj):
     #       {"keyword": "XYZ", "importance": 10}, ...
     #   ]
     # }
-    resp_json = json.loads(
-        response_obj["response_full"]["choices"][0]["message"]["content"]
-    )
+    # The message content lives in response_text for both old chat-completions
+    # rows (where response_full is a dict) and new responses-API rows (where
+    # response_full is a JSON string) — prefer it, fall back to response_full.
+    content = response_obj.get("response_text")
+    if not content:
+        full = response_obj["response_full"]
+        if isinstance(full, str):
+            full = json.loads(full)
+        if "choices" in full:  # old chat-completions shape
+            content = full["choices"][0]["message"]["content"]
+        else:  # responses-API shape
+            content = full.get("output_text")
+    resp_json = json.loads(content)
     sorted_kwds = sorted(
         resp_json["keywords"], key=lambda x: x["importance"], reverse=True
     )
