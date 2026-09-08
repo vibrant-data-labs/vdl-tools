@@ -150,3 +150,13 @@ def test_oe_schemas_carry_no_match_reason(schema_kwargs):
         '{"matches": [], "no_match_reason": "out of scope"}'
     )
     assert parsed.no_match_reason == "out of scope"
+
+
+def test_drawdown_schema_carries_no_match_reason():
+    from vdl_tools.shared_tools.taxonomy_mapping.drawdown_hierarchical_taxonomy_mapping import (
+        DrawdownMatchesResponse,
+    )
+
+    parsed = DrawdownMatchesResponse(matches=[], no_match_reason="out of scope")
+    assert parsed.no_match_reason == "out of scope"
+    assert DrawdownMatchesResponse(matches=[]).no_match_reason == ""
