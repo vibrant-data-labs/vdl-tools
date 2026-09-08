@@ -32,11 +32,11 @@ def _():
     # Raw comparison inputs — the tables are computed in the next cell so the
     # math is visible and extensible here (the compare stage writes the same
     # tables as recorded CSVs for the ledger).
-    eco = load_ecosystem(R)          # pinned universe + _lvl0/_lvl1/_org_type
+    eco = load_ecosystem(R)  # pinned universe + _lvl0/_lvl1/_org_type
     port = enriched.drop_duplicates(subset="matched_id")
     port = port[port["level0_one_earth_category"].notna()]
     FOREST, MOSS, GOLD, LIGHT = "#2C5F2D", "#97BC62", "#D9A21B", "#D5DFD2"
-    return (FOREST, GOLD, LIGHT, MOSS, R, alt, eco, enriched, mo, pd, port)
+    return FOREST, GOLD, LIGHT, MOSS, R, alt, eco, enriched, mo, pd, port
 
 
 @app.cell
@@ -45,20 +45,41 @@ def _(eco, pd, port):
     # ecosystem frame carries funding columns (Total_Funding_$ etc.), and
     # per-org funding fractions by taxonomy path live in
     # taxonomy_mapping_distributed_funding.json for funding-weighted cuts.
-    def share_table(eco_series, port_df, level_col="level0_one_earth_category"):
+    def share_table(
+        eco_df,
+        port_df,
+        level_col="level0_one_earth_category",
+        funding_col="Total_Funding_$",
+    ):
         def pct(s):
             return (s.value_counts(normalize=True) * 100).round(1)
 
-        t = pd.DataFrame({
-            "n_ecosystem": eco_series.value_counts(),
-            "ecosystem_pct": pct(eco_series),
-            "n_portfolio": port_df[level_col].value_counts(),
-            "portfolio_pct": pct(port_df[level_col]),
-            "invested_pct": pct(port_df.loc[port_df["disposition"] == "invested",
-                                            level_col]),
-            "passed_pct": pct(port_df.loc[port_df["disposition"] == "passed",
-                                          level_col]),
-        }).fillna(0)
+        def pct_funding(df):
+            ratio = (
+                df.groupby(level_col)[funding_col].sum()
+                / df[funding_col].sum()
+            )
+            return (ratio * 100).round(1)
+
+        t = pd.DataFrame(
+            {
+                "n_ecosystem": eco_df[level_col].value_counts(),
+                "ecosystem_pct": pct(eco_df[level_col]),
+                "ecosystem_funding_pct": pct_funding(
+                    eco_df[[level_col, funding_col]]
+                ),
+                "n_portfolio": port_df[level_col].value_counts(),
+                "portfolio_pct": pct(port_df[level_col]),
+                "invested_pct": pct(
+                    port_df.loc[
+                        port_df["disposition"] == "invested", level_col
+                    ]
+                ),
+                "passed_pct": pct(
+                    port_df.loc[port_df["disposition"] == "passed", level_col]
+                ),
+            }
+        ).fillna(0)
         t["tilt_vs_eco"] = (t["portfolio_pct"] - t["ecosystem_pct"]).round(1)
         t.index.name = "category"
         return t.sort_values("ecosystem_pct", ascending=False)
@@ -66,9 +87,11 @@ def _(eco, pd, port):
     def conversion(port_df):
         c = port_df.groupby("level0_one_earth_category")["disposition"].agg(
             n_invested=lambda s: int((s == "invested").sum()),
-            n_passed=lambda s: int((s == "passed").sum()))
+            n_passed=lambda s: int((s == "passed").sum()),
+        )
         c["conversion_rate"] = (
-            c["n_invested"] / (c["n_invested"] + c["n_passed"])).round(3)
+            c["n_invested"] / (c["n_invested"] + c["n_passed"])
+        ).round(3)
         c.index.name = "pillar"
         return c.sort_values("conversion_rate", ascending=False)
 
@@ -77,29 +100,91 @@ def _(eco, pd, port):
     port_fp = port[port["entity_type"] == "for_profit"]
     port_np = port[port["entity_type"] == "nonprofit"]
 
-    pillar = share_table(eco["_lvl0"].dropna(), port)
-    pillar["eco_forprofit_pct"] = (eco_fp["_lvl0"].dropna()
-                                   .value_counts(normalize=True) * 100).round(1)
-    pillar["eco_nonprofit_pct"] = (eco_np["_lvl0"].dropna()
-                                   .value_counts(normalize=True) * 100).round(1)
+    pillar = share_table(eco, port)
+    pillar["eco_forprofit_pct"] = (
+        eco_fp["level0_one_earth_category"].value_counts(normalize=True) * 100
+    ).round(1)
+    pillar["eco_nonprofit_pct"] = (
+        eco_np["level0_one_earth_category"].value_counts(normalize=True) * 100
+    ).round(1)
     pillar = pillar.fillna(0)
-    pillar_fp = share_table(eco_fp["_lvl0"].dropna(), port_fp)
-    pillar_np = share_table(eco_np["_lvl0"].dropna(), port_np)
+    pillar_fp = share_table(eco_fp, port_fp)
+    pillar_np = share_table(eco_np, port_np)
     conv = conversion(port)
     conv_fp = conversion(port_fp)
     conv_np = conversion(port_np)
     return conv, conv_fp, conv_np, pillar, pillar_fp, pillar_np
 
+
+@app.cell
+def _(pillar):
+    pillar
+    return
+
+
 @app.cell
 def _(enriched, mo):
     _matched = enriched["one_earth_category"].notna() & (
-        enriched["one_earth_category"] != "NoMatch")
+        enriched["one_earth_category"] != "NoMatch"
+    )
     mo.md(f"""
     # One Small Planet vs. the US climate ecosystem
-    **Phase 1–2 findings** · {len(enriched)} portfolio orgs · 320 identity-matched ·
-    {int(enriched['Summary'].notna().sum())} with text · {int(_matched.sum())}
-    taxonomy-mapped · {int(enriched['Latitude'].notna().sum())} geocoded
     """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Ecosystem Context
+    """)
+    return
+
+
+@app.cell
+def _(pillar):
+    pillar.reset_index()
+    return
+
+
+@app.cell
+def _(FOREST, GOLD, MOSS, SLATE, pillar, pillar_chart):
+    funding_chart = pillar_chart(
+        pillar,
+        {
+            "ecosystem_pct": "Ecosystem Organizations",
+            "ecosystem_funding_pct": "Ecosystem Funding",
+        },
+        [MOSS, SLATE, GOLD, FOREST],
+        "Full Ecosystem",
+    )
+
+    funding_chart
+    return
+
+
+@app.cell
+def _():
+    return
+
+
+@app.cell
+def _(alt, pillar_np):
+    _chart = (
+        alt.Chart(
+            pillar_np.reset_index()[
+                ["ecosystem_pct", "ecosystem_funding_pct", "category"]
+            ]
+        )
+        .mark_circle()
+        .encode(
+            x="ecosystem_pct",
+            y="ecosystem_funding_pct",
+            color="category",
+            tooltip=["category"],
+        )
+    )
+    _chart
     return
 
 
@@ -108,51 +193,78 @@ def _(FOREST, GOLD, MOSS, alt, mo, pillar, pillar_fp, pillar_np):
     def pillar_chart(df, series, colors, title):
         """Grouped bars per pillar; series = {csv_column: display name}."""
         _long = df.reset_index().melt(
-            id_vars="category", value_vars=list(series),
-            var_name="series", value_name="pct")
+            id_vars="category",
+            value_vars=list(series),
+            var_name="series",
+            value_name="pct",
+        )
         _long["series"] = _long["series"].map(series)
         return mo.ui.altair_chart(
-            alt.Chart(_long).mark_bar().encode(
-                x=alt.X("series:N", title=None, axis=None,
-                        sort=list(series.values())),
+            alt.Chart(_long)
+            .mark_bar()
+            .encode(
+                x=alt.X(
+                    "series:N",
+                    title=None,
+                    axis=None,
+                    sort=list(series.values()),
+                ),
                 y=alt.Y("pct:Q", title="% of orgs with a pillar"),
-                color=alt.Color("series:N", title=None,
-                                scale=alt.Scale(domain=list(series.values()),
-                                                range=colors),
-                                legend=alt.Legend(orient="bottom")),
-                column=alt.Column("category:N", title=None,
-                                  header=alt.Header(labelFontSize=11)),
+                color=alt.Color(
+                    "series:N",
+                    title=None,
+                    scale=alt.Scale(
+                        domain=list(series.values()), range=colors
+                    ),
+                    legend=alt.Legend(orient="bottom"),
+                ),
+                column=alt.Column(
+                    "category:N",
+                    title=None,
+                    header=alt.Header(labelFontSize=11),
+                ),
                 tooltip=["category", "series", "pct"],
-            ).properties(width=110, height=260, title=title))
+            )
+            .properties(width=110, height=260, title=title)
+        )
 
     SLATE = "#50808E"
-    mo.vstack([
-        mo.md("## Where OSP sits in the landscape"),
-        pillar_chart(pillar, {
-            "eco_forprofit_pct": "Ecosystem: for-profits",
-            "eco_nonprofit_pct": "Ecosystem: nonprofits",
-            "portfolio_pct": "OSP full deal flow",
-            "invested_pct": "OSP invested only",
-        }, [MOSS, SLATE, GOLD, FOREST],
-            "Blended: for-profit and nonprofit climate have opposite shapes"),
-        pillar_chart(pillar_fp, {
-            "ecosystem_pct": "Ecosystem for-profits",
-            "portfolio_pct": "OSP companies: deal flow",
-            "invested_pct": "OSP companies: invested",
-        }, [MOSS, GOLD, FOREST],
-            "For-profits only: OSP runs energy-light vs the investable universe"),
-        pillar_chart(pillar_np, {
-            "ecosystem_pct": "Ecosystem nonprofits",
-            "portfolio_pct": "OSP grants: deal flow",
-            "invested_pct": "OSP grants: invested",
-        }, [SLATE, GOLD, FOREST],
-            "Nonprofits only: OSP grants vs the nonprofit landscape"),
-        mo.md("*The blended ecosystem hides a split: for-profit climate is "
-              "energy-dominated (63.5% Energy Transition) while nonprofit "
-              "climate is nature-dominated (63.2% Nature Conservation). The "
-              "segment charts pair each side of OSP with its own universe.*"),
-    ])
-    return
+    mo.vstack(
+        [
+            mo.md("## Where OSP sits in the landscape"),
+            pillar_chart(
+                pillar,
+                {
+                    "ecosystem_pct": "Ecosystem",
+                    "portfolio_pct": "OSP full deal flow",
+                    "invested_pct": "OSP 'invested' only",
+                },
+                [MOSS, SLATE, GOLD, FOREST],
+                "Full Ecosystem",
+            ),
+            pillar_chart(
+                pillar_fp,
+                {
+                    "ecosystem_pct": "Ecosystem for-profits",
+                    "portfolio_pct": "OSP companies: deal flow",
+                    "invested_pct": "OSP companies: invested",
+                },
+                [MOSS, GOLD, FOREST],
+                "For-profits only",
+            ),
+            pillar_chart(
+                pillar_np,
+                {
+                    "ecosystem_pct": "Ecosystem nonprofits",
+                    "portfolio_pct": "OSP grants: deal flow",
+                    "invested_pct": "OSP grants: invested",
+                },
+                [SLATE, GOLD, FOREST],
+                "Nonprofits only",
+            ),
+        ]
+    )
+    return SLATE, pillar_chart
 
 
 @app.cell
@@ -162,39 +274,62 @@ def _(FOREST, LIGHT, alt, conv, conv_fp, conv_np, mo):
         _long = df.reset_index().melt(
             id_vars=["pillar", "conversion_rate"],
             value_vars=["n_invested", "n_passed"],
-            var_name="outcome", value_name="n")
+            var_name="outcome",
+            value_name="n",
+        )
         _long["outcome"] = _long["outcome"].map(
-            {"n_invested": "Invested", "n_passed": "Passed"})
-        _order = df.sort_values("conversion_rate",
-                                ascending=False).index.tolist()
-        _bars = alt.Chart(_long).mark_bar().encode(
-            y=alt.Y("pillar:N", sort=_order, title=None),
-            x=alt.X("n:Q", title="deals with a taxonomy match"),
-            color=alt.Color("outcome:N", title=None,
-                            scale=alt.Scale(domain=["Invested", "Passed"],
-                                            range=[FOREST, LIGHT]),
-                            legend=alt.Legend(orient="bottom")),
-            order=alt.Order("outcome:N"),
-            tooltip=["pillar", "outcome", "n", "conversion_rate"],
+            {"n_invested": "Invested", "n_passed": "Passed"}
+        )
+        _order = df.sort_values(
+            "conversion_rate", ascending=False
+        ).index.tolist()
+        _bars = (
+            alt.Chart(_long)
+            .mark_bar()
+            .encode(
+                y=alt.Y("pillar:N", sort=_order, title=None),
+                x=alt.X("n:Q", title="deals with a taxonomy match"),
+                color=alt.Color(
+                    "outcome:N",
+                    title=None,
+                    scale=alt.Scale(
+                        domain=["Invested", "Passed"], range=[FOREST, LIGHT]
+                    ),
+                    legend=alt.Legend(orient="bottom"),
+                ),
+                order=alt.Order("outcome:N"),
+                tooltip=["pillar", "outcome", "n", "conversion_rate"],
+            )
         )
         _totals = df.reset_index()
         _totals["total"] = _totals["n_invested"] + _totals["n_passed"]
-        _labels = alt.Chart(_totals).mark_text(
-            align="left", dx=6, color=FOREST, fontWeight="bold").encode(
-            y=alt.Y("pillar:N", sort=_order), x="total:Q",
-            text=alt.Text("conversion_rate:Q", format=".0%"),
+        _labels = (
+            alt.Chart(_totals)
+            .mark_text(align="left", dx=6, color=FOREST, fontWeight="bold")
+            .encode(
+                y=alt.Y("pillar:N", sort=_order),
+                x="total:Q",
+                text=alt.Text("conversion_rate:Q", format=".0%"),
+            )
         )
         return mo.ui.altair_chart(
-            (_bars + _labels).properties(width=620, height=200, title=title))
+            (_bars + _labels).properties(width=620, height=200, title=title)
+        )
 
-    mo.vstack([
-        mo.md("## Deals seen vs deals done"),
-        conv_chart(conv, "Blended: OSP passes on energy, converts on nature"),
-        conv_chart(conv_fp, "Companies only"),
-        conv_chart(conv_np, "Nonprofit grants only"),
-        mo.md("*Labels = conversion rate. Blended: a nature deal is 3.4\u00d7 "
-              "likelier to be funded than an energy deal (50% vs 15%).*"),
-    ])
+    mo.vstack(
+        [
+            mo.md("## Deals seen vs deals done"),
+            conv_chart(
+                conv, "Blended: OSP passes on energy, converts on nature"
+            ),
+            conv_chart(conv_fp, "Companies only"),
+            conv_chart(conv_np, "Nonprofit grants only"),
+            mo.md(
+                "*Labels = conversion rate. Blended: a nature deal is 3.4\u00d7 "
+                "likelier to be funded than an energy deal (50% vs 15%).*"
+            ),
+        ]
+    )
     return
 
 
@@ -204,7 +339,9 @@ def _(R, enriched, mo, pd):
     # review pool is exhausted: 7 corrections applied, 11 proposals rejected).
     _no_pillar = enriched[enriched["level0_one_earth_category"].isna()]
     _ask = pd.read_excel(sorted(R.glob("customer_review_*.xlsx"))[-1])
-    _n_ask = len(set(_ask["ID (do not edit)"]) & set(_no_pillar["customer_row_id"]))
+    _n_ask = len(
+        set(_ask["ID (do not edit)"]) & set(_no_pillar["customer_row_id"])
+    )
     _n_text = int(_no_pillar["text_for_taxonomy"].notna().sum())
     mo.md(f"""
     ## What didn't map, and why — {len(_no_pillar)} orgs, mostly signal
@@ -246,8 +383,13 @@ def _(mo):
 
 
 @app.cell
-def _(enriched):
-    enriched
+def _():
+    return
+
+
+@app.cell
+def _(eco):
+    eco["Total_Funding_$"]
     return
 
 

@@ -296,6 +296,18 @@ def import_customer_responses(
         notes = str(resp.get("Your Notes", "")).strip()
 
         fields = _resolve_response(name, domain, ein, universe_domains, universe_ids, cb_client)
+        # Junk guard: cross-references and placeholders ("See above", "n/a")
+        # are notes about the row, not descriptions of the org — ingesting
+        # them as text would poison the summary. Keep them in the decision
+        # record instead.
+        if description and (
+            len(description) < 25
+            or description.lower().rstrip(".").strip() in ("see above", "n/a", "na", "same as above")
+        ):
+            logger.info("row %s: response %r treated as a note, not a description",
+                        row_id, description)
+            notes = f"{notes} | customer wrote: {description}".strip(" |")
+            description = ""
         if description:
             # Customer-supplied text is a first-class text source: identity
             # may stay unresolved while the row becomes enrichable.
