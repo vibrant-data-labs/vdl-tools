@@ -106,13 +106,20 @@ MODELS = {
     # reasoning, giving 61% wasted spend and ~10x the latency of every other
     # model for a 233-token summary.
     #
-    # That reasoning CANNOT be switched off through Vercel. Verified against four
-    # mechanisms: reasoning.effort (accepted, no effect at any level), hy3's
-    # native reasoning_effort="no_think" (rejected 400 by the gateway's enum
+    # CORRECTION: an earlier version of this comment concluded that hy3's
+    # reasoning cannot be switched off through Vercel. That is wrong. The
+    # variable is which provider serves the model, not the parameter -- pinning
+    # to deepinfra gives 0 reasoning tokens (see "tencent/hy3-deepinfra" below).
+    # Check GET /v1/models/{model}/endpoints before treating any behavior as a
+    # property of the model.
+    #
+    # What follows is true of *novita*, which is what auto-routing picks for this
+    # unpinned entry. Four mechanisms were tried against it, none worked:
+    # reasoning.effort (accepted, no effect at any level), hy3's native
+    # reasoning_effort="no_think" (rejected 400 by the gateway's enum
     # validation), extra_body enable_thinking=False (forwarded, ignored), and
     # max_output_tokens (the model spends the whole budget thinking and returns
-    # empty output). The gateway does not pass provider-native parameters
-    # through. A "hy3-nothink" variant was tried and removed -- it produced
+    # empty output). A "hy3-nothink" variant was tried and removed -- it produced
     # results identical to plain hy3.
     "tencent/hy3": {"in": 0.14, "out": 0.58, "context": 262_144},
     # Same weights, pinned to the one provider that serves hy3 without reasoning.
