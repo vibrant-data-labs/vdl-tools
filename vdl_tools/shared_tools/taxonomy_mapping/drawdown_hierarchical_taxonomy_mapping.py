@@ -52,6 +52,9 @@ import pandas as pd
 from pydantic import BaseModel, Field
 
 import vdl_tools.shared_tools.taxonomy_mapping.hierarchical_taxonomy_mapping as _htm
+from vdl_tools.shared_tools.taxonomy_mapping.taxonomy_mapping_cache import (
+    NO_MATCH_REASON_FIELD,
+)
 from vdl_tools.shared_tools.taxonomy_mapping.hierarchical_taxonomy_mapping import (
     build_system_prompt,
     classify_entities,
@@ -230,6 +233,7 @@ class DrawdownMatchesResponse(BaseModel):
     prompt — this class adds no selection disposition of its own."""
 
     matches: list[DrawdownMatch] = []
+    no_match_reason: str = NO_MATCH_REASON_FIELD
 
 
 # Mode-of-operation section — kept in the PROSE prompt (not just the schema
