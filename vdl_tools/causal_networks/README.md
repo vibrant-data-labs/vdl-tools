@@ -77,8 +77,8 @@ it through for display and filtering.
 
 **Planned: signed links.** Extending the metrics to distinguish "X improves Y" from "X worsens Y"
 (e.g. separate positive and negative 2-hop reach) is a planned next step. The pre-2024 signed-vote
-code in the `keystone-factor-analysis` repo history (formerly `kumu`, `process_kumu_data.py`) is the
-reference for the signed link format.
+code in the `manitoba-kfa` repo history (formerly `kumu`, `process_kumu_data.py`) is the reference for
+the signed link format.
 
 ---
 
@@ -220,7 +220,7 @@ link list. Regenerate the example data with `examples/make_example_data.py`.
 
 For a real export from Kumu's Undercurrent survey replace the first line with
 `nodes, links = load_data.from_undercurrent("survey-export.json")`. For a worked example on real data
-see the `keystone-factor-analysis` repository (Manitoba / RRC Polytech, 73 factors).
+see the `manitoba-kfa` repository (Manitoba / RRC Polytech, 73 factors).
 
 ## Module map
 
