@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import logging
+import re
 import httpx
 from enum import Enum
 from typing import Optional, Dict, Any, List, Tuple
@@ -64,6 +65,36 @@ JS_WALL_PATTERNS = [
     'access denied',  # Often paired with bot detection
     'sorry, you have been blocked',
 ]
+
+
+# A 200 response whose visible text (tags and script/style bodies stripped) is
+# shorter than this is treated as a JS app shell when it also contains scripts.
+JS_SHELL_MAX_VISIBLE_TEXT = 200
+
+_SCRIPT_TAG_RE = re.compile(r'<script\b', re.IGNORECASE)
+_INVISIBLE_BLOCK_RE = re.compile(r'(?is)<(script|style|noscript|template|svg)\b.*?</\1\s*>')
+_HTML_COMMENT_RE = re.compile(r'(?s)<!--.*?-->')
+_TAG_RE = re.compile(r'(?s)<[^>]*>')
+
+
+def looks_like_js_shell(html) -> bool:
+    """Whether a successful (200) response body is a client-side app shell.
+
+    Sites rendered entirely in the browser (React/Vue/etc.) return a "success"
+    whose body is just a mount-point div plus <script> tags — all real content
+    arrives only when JS executes, so a plain HTTP fetch yields nothing to
+    extract. These need the browser path even though nothing failed at the
+    HTTP level.
+    """
+    if not html or not isinstance(html, str):
+        return False
+    if not _SCRIPT_TAG_RE.search(html):
+        return False
+    visible = _INVISIBLE_BLOCK_RE.sub(' ', html)
+    visible = _HTML_COMMENT_RE.sub(' ', visible)
+    visible = _TAG_RE.sub(' ', visible)
+    visible = re.sub(r'\s+', ' ', visible).strip()
+    return len(visible) < JS_SHELL_MAX_VISIBLE_TEXT
 
 
 class FailureReason(Enum):
@@ -358,6 +389,17 @@ class AsyncScraper:
         # 1. Try lightweight HTTP first
         content, failure_reason, status_code = await self.fetch_http(url)
         method = "http"
+
+        # 1b. HTTP can "succeed" with a JS app shell: a 200 whose body is a
+        # mount-point div plus scripts, with all content rendered client-side.
+        # Retry through the browser (which executes JS); keep the HTTP shell if
+        # the browser fails so callers still see the raw HTML.
+        if content and looks_like_js_shell(content):
+            logger.info(f"HTTP response for {url} looks like a JS shell, retrying with browser")
+            browser_content = await self.fetch_browser(url)
+            if browser_content:
+                content = browser_content
+                method = "browser"
 
         # 2. Only fall back to browser if it might help (JS wall detected)
         # Skip browser for dead links, HTTP errors, etc. - it won't help

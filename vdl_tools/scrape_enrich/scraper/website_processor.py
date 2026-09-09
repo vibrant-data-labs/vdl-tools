@@ -131,8 +131,9 @@ def get_page_text(
         min_len = 1000
     if len(unstructured_page_text) < min_len:
         logger.error("Failed to get page text from Unstructured for %s trying with fallback", url)
-        page_text = clean_scraped_text(process_page_source(url, html))
-        if page_text is None or len(page_text) < min_len:
+        fallback_text = process_page_source(url, html)
+        page_text = clean_scraped_text(fallback_text) if fallback_text else ""
+        if len(page_text) < min_len:
             logger.error("Failed to get page text from %s", url)
     else:
         page_text = unstructured_page_text
