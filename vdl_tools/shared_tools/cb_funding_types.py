@@ -53,8 +53,8 @@ ROUND_TYPES = {
     'series_a':              ('Series A',                'Early Venture', 'Venture',      3),
     'series_b':              ('Series B',                'Early Venture', 'Venture',      4),
     # a venture round whose stage was not disclosed (~13% of rounds); two slugs, one display name
-    'series_unknown':        ('Venture (Unknown Stage)', 'Early Venture', 'Venture',      5),
-    'undisclosed':           ('Venture (Unknown Stage)', 'Early Venture', 'Venture',      5),
+    'series_unknown':        ('Venture (Unknown Stage)', 'Unknown Stage', 'Venture',      5),
+    'undisclosed':           ('Venture (Unknown Stage)', 'Unknown Stage', 'Venture',      5),
     'series_c':              ('Series C',                'Late Venture',  'Venture',      6),
     'series_d':              ('Series D',                'Late Venture',  'Venture',      6),
     'series_e':              ('Series E',                'Late Venture',  'Venture',      6),
@@ -67,10 +67,10 @@ ROUND_TYPES = {
     'post_ipo_debt':         ('Post-IPO Debt',           'Post Venture',  'Post Venture', 10),
     'post_ipo_secondary':    ('Post-IPO Secondary',      'Post Venture',  'Post Venture', 10),
     'post_ipo_equity':       ('Post-IPO Equity',         'Post Venture',  'Post Venture', 10),
-    'secondary_market':      ('Secondary Market',        'Post Venture',  'Post Venture', 10),
-    'corporate_round':       ('Corporate Round',         'Post Venture',  'Other',        None),
-    'debt_financing':        ('Debt',                    'Debt',          'Other',        None),
-    'non_equity_assistance': ('Non-Equity',              'Non-Equity',    'Other',        None),
+    'secondary_market':      ('Secondary Market',        'Unknown Stage',        'Other',       None),
+    'corporate_round':       ('Corporate Round',         'Unknown Stage',        'Other',       None),
+    'debt_financing':        ('Debt',                    'Debt',           'Other',        None),
+    'non_equity_assistance': ('Non-Equity',              'Non-Equity',     'Other',        None),
 }
 
 # Stage labels that are NOT round types: values of the Crunchbase ``funding_stage``
@@ -129,7 +129,7 @@ POST_IPO_TYPES = ['ipo', 'post_ipo_equity', 'post_ipo_debt', 'post_ipo_secondary
 DISCLOSED_STAGES_ORDERED = [
     'grant', 'equity_crowdfunding', 'initial_coin_offering', 'angel', 'pre_seed', 'seed',
     'series_a', 'series_b', 'series_c', 'series_d', 'series_e', 'series_f',
-    'series_g', 'series_h', 'series_i', 'series_j', 'corporate_round', 'secondary_market',
+    'series_g', 'series_h', 'series_i', 'series_j', 'corporate_round', # 'secondary_market',
     'post_ipo_equity', 'post_ipo_debt', 'post_ipo_secondary',
 ]
 EARLY_VENTURE_ROUNDS = {'series_a', 'series_b'}
