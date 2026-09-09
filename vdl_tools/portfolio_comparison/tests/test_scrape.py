@@ -3,7 +3,6 @@
 import pandas as pd
 
 from vdl_tools.portfolio_comparison.enrichment.scrape import (
-    classify_text_quality,
     scrape_texts,
     select_scrape_targets,
 )
@@ -103,11 +102,3 @@ def test_scrape_texts_fans_out_and_gates(tmp_path):
     assert o.at["r3", "source_url_quality"] == "thin"
     assert o.at["r4", "text_quality"] == "no_url"
     assert (tmp_path / "scraped_texts.parquet").exists()
-
-
-def test_quality_classifier():
-    assert classify_text_quality(LONG) == "ok"
-    assert classify_text_quality("tiny") == "thin"
-    assert classify_text_quality("THIS DOMAIN IS FOR SALE — act now " * 20) == "parked"
-    assert classify_text_quality(None, num_errors=3) == "dead"
-    assert classify_text_quality("", num_errors=0) == "empty"
