@@ -2,8 +2,8 @@
 
 Launch from the ENGAGEMENT REPO ROOT:
 
-    PYTHONPATH=<vdl-tools> marimo run \
-        <vdl-tools>/vdl_tools/portfolio_comparison/review_apps/explore_enrichment.py
+    marimo run \
+        ~/dev/vdl/vdl-tools/vdl_tools/portfolio_comparison/review_apps/explore_enrichment.py
 
 Two jobs (Zein, 2026-08-07): an analyst workbench (all 64 columns behind
 marimo's native dataframe explorer + taxonomy drill-down) and a triage

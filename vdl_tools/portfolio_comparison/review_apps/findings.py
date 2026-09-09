@@ -2,8 +2,8 @@
 
 Launch from the ENGAGEMENT REPO ROOT (marimo edit to see/modify code):
 
-    PYTHONPATH=<vdl-tools> marimo edit \
-        <vdl-tools>/vdl_tools/portfolio_comparison/review_apps/findings.py
+    marimo edit \
+        ~/dev/vdl/vdl-tools/vdl_tools/portfolio_comparison/review_apps/findings.py
 
 Interactive altair charts; all comparison math computed in visible
 cells from the raw ecosystem + enriched portfolio (extend freely, e.g.
