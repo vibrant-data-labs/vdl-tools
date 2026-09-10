@@ -1,0 +1,509 @@
+"""Stage runners — the glue the engagement skills and CLI call into.
+
+Each runner loads ``engagement.yaml`` from the engagement repo root, does one
+stage, records it in pipeline state, and writes its artifacts under
+``data/results/``.
+"""
+
+import json
+from pathlib import Path
+
+import pandas as pd
+
+from vdl_tools.shared_tools.tools.logger import logger
+from vdl_tools.portfolio_comparison import baseline as baseline_mod
+from vdl_tools.portfolio_comparison.engagement_config import EngagementConfig
+from vdl_tools.portfolio_comparison.intake.normalize import (
+    identity_domain,
+    linkedin_slug,
+    normalize_domain,
+    normalize_ein,
+)
+from vdl_tools.portfolio_comparison.intake import profile_inputs as pi
+from vdl_tools.portfolio_comparison.matching.queue import (
+    build_review_queue,
+    match_rate_report,
+    replay_decisions,
+    save_id_mapping,
+)
+from vdl_tools.portfolio_comparison.matching.universe import UniverseIndex, run_tier1
+from vdl_tools.portfolio_comparison.schema import ID_MAPPING_COLUMNS
+from vdl_tools.portfolio_comparison.state import PipelineState
+
+# Which input slot a file arrived in determines its default entity type.
+INPUT_ENTITY_TYPES = {"companies": "for_profit", "nonprofits": "nonprofit"}
+
+
+def _load_config(engagement_root: str | Path) -> EngagementConfig:
+    return EngagementConfig.from_yaml(Path(engagement_root) / "engagement.yaml")
+
+
+def _read_customer_file(path: Path) -> pd.DataFrame:
+    if path.suffix in (".xlsx", ".xls"):
+        df = pd.read_excel(path)
+    else:
+        df = pd.read_csv(path)
+    # Excel year headers arrive as mixed int/str ('2021' vs 2022) — stringify
+    # so mappings and JSON serialization are stable.
+    df.columns = [str(c) for c in df.columns]
+    return df
+
+
+def run_pin_baseline(engagement_root: str | Path) -> pd.DataFrame:
+    config = _load_config(engagement_root)
+    return baseline_mod.pin_baseline(config)
+
+
+def run_intake(engagement_root: str | Path) -> dict:
+    config = _load_config(engagement_root)
+    config.validate_inputs_exist()
+    state = PipelineState(config.root)
+
+    column_overrides = config.intake.get("column_overrides", {})
+    dispo_overrides = config.intake.get("disposition_value_overrides", {})
+
+    profiles = []
+    for label in config.inputs:
+        entity_type = INPUT_ENTITY_TYPES.get(label, "unknown")
+        df = _read_customer_file(config.input_path(label))
+        mapping = pi.propose_column_mapping(df.columns)
+        mapping.update(column_overrides.get(label, {}))
+        profiles.append(profile := pi.profile_file(
+            df, label, entity_type,
+            column_mapping=mapping,
+            disposition_overrides=dispo_overrides,
+        ))
+        if profile.get("blocking"):
+            logger.warning("intake blocking issue in %s: %s", label, profile["blocking"])
+
+    out = pi.write_intake_profile(profiles, config.results_dir())
+    state.record_artifact("intake_profile", out)
+    state.record_stage(
+        "intake",
+        status="completed",
+        n_files=len(profiles),
+        n_rows=sum(p["n_rows"] for p in profiles),
+    )
+    payload = json.loads(out.read_text())
+    logger.info("intake pre-flight: %s", payload["preflight"])
+    return payload
+
+
+def _customer_rows(config: EngagementConfig, profiles: dict) -> pd.DataFrame:
+    """Build normalized customer rows from the confirmed column mappings."""
+    dispo_overrides = config.intake.get("disposition_value_overrides", {})
+    ein_ignore = config.intake.get("ein_ignore")
+
+    frames = []
+    for profile in profiles["files"]:
+        label = profile["file"]
+        mapping = profile["column_mapping"]
+        inverse = {v: k for k, v in mapping.items() if v != "passthrough"}
+        df = _read_customer_file(config.input_path(label))
+
+        name_col = inverse["name"]
+        url_col = inverse.get("url")
+        ein_col = inverse.get("ein")
+        dispo_col = inverse.get("disposition")
+
+        eins = df[ein_col].map(normalize_ein) if ein_col else None
+        if eins is not None and ein_ignore and ein_ignore["column"] in df.columns:
+            # Rows whose EIN belongs to someone else (e.g. fiscal sponsor):
+            # the EIN is context, not identity — blank it for matching.
+            not_own = df[ein_ignore["column"]].astype(str).str.contains(
+                ein_ignore["pattern"], case=False, na=False
+            )
+            n_ignored = int((not_own & eins.ne("")).sum())
+            if n_ignored:
+                logger.info(
+                    "%s: ignoring %d EINs for identity (%s ~ %r)",
+                    label, n_ignored, ein_ignore["column"], ein_ignore["pattern"],
+                )
+            eins = eins.mask(not_own, "")
+
+        rows = pd.DataFrame({
+            "customer_name": df[name_col],
+            "customer_url": df[url_col] if url_col else None,
+            "customer_ein": eins,
+        })
+        rows["customer_row_id"] = [
+            pi.make_row_id(label, n, u or "", i)
+            for i, (n, u) in enumerate(zip(rows["customer_name"], rows["customer_url"]))
+        ]
+        rows["entity_type"] = profile["default_entity_type"]
+        if dispo_col is not None:
+            rows["disposition"] = pi.map_dispositions(df[dispo_col], dispo_overrides)
+        else:
+            rows["disposition"] = "invested"
+
+        n_excluded = int((rows["disposition"] == "exclude").sum())
+        if n_excluded:
+            logger.info("%s: excluding %d rows per disposition overrides", label, n_excluded)
+        rows = rows[rows["disposition"] != "exclude"]
+        rows = rows[rows["customer_name"].fillna("").astype(str).str.strip() != ""]
+        # Summary/junk rows the disposition overrides can't catch (e.g. a
+        # TOTAL row whose disposition cell is blank).
+        for pattern in config.intake.get("exclude_name_patterns", []):
+            hit = rows["customer_name"].astype(str).str.contains(pattern, case=False, regex=True)
+            if hit.any():
+                logger.info("%s: excluding %d rows matching %r", label, int(hit.sum()), pattern)
+                rows = rows[~hit]
+        frames.append(rows)
+    return pd.concat(frames, ignore_index=True)
+
+
+def run_match(engagement_root: str | Path) -> pd.DataFrame:
+    """All matching lanes: baseline, source API, GT datamart."""
+    config = _load_config(engagement_root)
+    state = PipelineState(config.root)
+    results_dir = config.results_dir()
+
+    # Advisory lock: a live review session must not race a match run —
+    # the run's final save would eclipse decisions recorded mid-run.
+    # PID-stamped so a killed run's stale lock self-clears.
+    import os
+
+    from vdl_tools.portfolio_comparison.matching.queue import (
+        MATCH_LOCK_FILENAME,
+        match_lock_active,
+    )
+
+    lock = results_dir / MATCH_LOCK_FILENAME
+    if match_lock_active(results_dir):
+        raise RuntimeError(
+            f"another match run appears active ({lock}); if that's stale, delete it"
+        )
+    lock.write_text(str(os.getpid()))
+    try:
+        return _run_match_locked(config, state, results_dir)
+    finally:
+        lock.unlink(missing_ok=True)
+
+
+def _run_match_locked(config, state, results_dir) -> pd.DataFrame:
+
+    profile_path = results_dir / "intake_profile.json"
+    if not profile_path.exists():
+        raise FileNotFoundError("run intake first — intake_profile.json not found")
+    universe_path = results_dir / "baseline_universe.json"
+    if not universe_path.exists():
+        raise FileNotFoundError("run pin-baseline first — baseline_universe.json not found")
+
+    profiles = json.loads(profile_path.read_text())
+    rows = _customer_rows(config, profiles)
+
+    enriched = baseline_mod._load_records(
+        results_dir / "baseline" / Path(config.baseline_run.enriched_uri).name
+    )
+    id_col = baseline_mod._find_id_column(
+        enriched, "enriched file", config.baseline_run.source
+    )
+    universe_ids = set(
+        pd.read_json(universe_path, convert_dates=False)[id_col].astype(str)
+    )
+    index = UniverseIndex(enriched, universe_ids, id_col=id_col)
+
+    id_mapping, candidates = run_tier1(rows, index)
+
+    # Nonprofit EIN lane — optional at this stage: needs GT datamart access.
+    nonprofit_rows = rows[rows["entity_type"] == "nonprofit"]
+    if not nonprofit_rows.empty:
+        try:
+            from vdl_tools.portfolio_comparison.matching.nonprofit import match_by_ein
+
+            for row_id, cand in match_by_ein(nonprofit_rows).items():
+                mask = id_mapping["customer_row_id"] == row_id
+                id_mapping.loc[mask, ["matched_id", "matched_name", "matched_url"]] = (
+                    cand.matched_id, cand.matched_name, cand.matched_url,
+                )
+                id_mapping.loc[mask, ["match_method", "confidence", "status", "decided_by"]] = (
+                    cand.method, cand.score, "auto_matched", "auto",
+                )
+        except Exception as exc:  # no DB access, client missing, etc.
+            logger.warning("nonprofit EIN lane skipped: %s", exc)
+
+    id_mapping = id_mapping[ID_MAPPING_COLUMNS]
+    # Reruns rebuild from scratch; recorded human decisions always win.
+    id_mapping = replay_decisions(id_mapping, results_dir)
+
+    # Tier 2: source-API pre-research BEFORE any human/web research (higher
+    # recall than the baseline). Decided rows are excluded by construction.
+    try:
+        from vdl_tools.portfolio_comparison.matching.source_adapter import (
+            ChainedSourceClient,
+            CrunchbaseClient,
+            NZIClient,
+            get_source_client,
+        )
+        from vdl_tools.portfolio_comparison.matching.tier2 import run_tier2
+
+        if config.match_objective == "text":
+            # Text objective mixes sources; NZI descriptions preferred.
+            client = ChainedSourceClient([
+                NZIClient(cache_path=results_dir / "nzi_search_cache.json"),
+                CrunchbaseClient(cache_path=results_dir / "source_search_cache.json"),
+            ])
+        else:
+            client = get_source_client(
+                config.baseline_run.source,
+                cache_path=results_dir / "source_search_cache.json",
+            )
+        id_mapping, candidates, _ = run_tier2(id_mapping, client, candidates)
+    except NotImplementedError as exc:
+        logger.warning("Tier 2 skipped: %s", exc)
+    except Exception as exc:
+        logger.warning("Tier 2 failed, continuing without it: %s", exc)
+
+    # Nonprofit identity lane (EIN-less + fiscal-sponsor rows): GT datamart
+    # ranked identity search — same source-API-first ordering as Tier 2.
+    np_pending = id_mapping[
+        (id_mapping["entity_type"] == "nonprofit")
+        & (id_mapping["status"].isna() | (id_mapping["status"] == "needs_review"))
+    ]
+    if not np_pending.empty:
+        try:
+            from vdl_tools.portfolio_comparison.matching.nonprofit import (
+                apply_identity_matches,
+                match_identity,
+            )
+            from vdl_tools.portfolio_comparison.matching.tier2 import _dedupe
+
+            gt_matches = match_identity(np_pending, universe_ids=universe_ids)
+            for row_id, cands in gt_matches.items():
+                candidates[row_id] = _dedupe(candidates.get(row_id, []), cands)
+            id_mapping = apply_identity_matches(id_mapping, gt_matches)
+            logger.info(
+                "GT identity lane: %d of %d pending nonprofit rows got candidates",
+                len(gt_matches), len(np_pending),
+            )
+        except Exception as exc:
+            logger.warning("nonprofit identity lane skipped: %s", exc)
+
+    # Completeness passes (text objective): every matched row gets each
+    # source's domain-confirmed id regardless of which source won the
+    # primary match, so enrichment can choose descriptions freely.
+    if config.match_objective == "text":
+        try:
+            from vdl_tools.portfolio_comparison.matching.source_adapter import (
+                CrunchbaseClient,
+                NZIClient,
+            )
+            from vdl_tools.portfolio_comparison.matching.tier2 import (
+                supplement_cb_ids,
+                supplement_nzi_ids,
+            )
+
+            id_mapping = supplement_nzi_ids(
+                id_mapping,
+                NZIClient(cache_path=results_dir / "nzi_search_cache.json"),
+            )
+            id_mapping = supplement_cb_ids(
+                id_mapping,
+                CrunchbaseClient(cache_path=results_dir / "source_search_cache.json"),
+            )
+        except Exception as exc:
+            logger.warning("supplement passes skipped: %s", exc)
+
+    # Replay AGAIN immediately before saving: decisions recorded while the
+    # API lanes were running (minutes) must survive this run's save.
+    id_mapping = replay_decisions(id_mapping, results_dir)
+    id_mapping = annotate_sources(id_mapping)
+    id_mapping = assess_readiness(id_mapping, config.match_objective)
+
+    # Coresignal last resort (opt-in — costs search credits): find LinkedIn
+    # identities for textless rows, then reassess.
+    if config.match_objective == "text" and config.intake.get("use_coresignal"):
+        try:
+            from vdl_tools.shared_tools.tools.config_utils import get_configuration
+            from vdl_tools.portfolio_comparison.matching.coresignal import (
+                coresignal_last_resort,
+            )
+
+            api_key = get_configuration()["linkedin"]["coresignal_api_key"]
+            id_mapping = coresignal_last_resort(id_mapping, api_key)
+            id_mapping = assess_readiness(id_mapping, config.match_objective)
+        except Exception as exc:
+            logger.warning("Coresignal last resort skipped: %s", exc)
+
+    # A URL nobody ever fetched is not a text source (Zein's ruling,
+    # 2026-08-07): rows whose readiness rests solely on the customer URL get
+    # a liveness check; dead links join the customer round-trip now instead
+    # of failing at enrichment after the customer window has closed.
+    if config.match_objective == "text":
+        id_mapping = verify_website_readiness(
+            id_mapping, cache_path=results_dir / "url_liveness_cache.json"
+        )
+
+    mapping_path = results_dir / "id_mapping.parquet"
+    save_id_mapping(id_mapping, results_dir)
+
+    queue = build_review_queue(id_mapping, candidates, results_dir=results_dir)
+    queue_path = results_dir / "review_queue.json"
+    queue.to_json(queue_path, orient="records", indent=2)
+
+    report = match_rate_report(id_mapping)
+    logger.info("match rates:\n%s", report.to_string(index=False))
+
+    try:
+        from vdl_tools.portfolio_comparison.review_apps.workbook import (
+            write_review_workbook,
+        )
+
+        write_review_workbook(id_mapping, results_dir)
+    except Exception as exc:
+        logger.warning("review workbook not written: %s", exc)
+
+    state.record_artifact("id_mapping", mapping_path)
+    state.record_stage(
+        "match",
+        status="completed",
+        n_rows=len(id_mapping),
+        n_auto=int((id_mapping["status"] == "auto_matched").sum()),
+        n_review=int((id_mapping["status"] == "needs_review").sum()),
+        n_unresolved=int(id_mapping["status"].isna().sum()),
+        match_objective=config.match_objective,
+        n_enrichment_ready=int(id_mapping["enrichment_ready"].sum()),
+    )
+    return id_mapping
+
+
+def _infer_matched_source(matched_id) -> str:
+    """Which source an id belongs to, by shape: NZI ids are numeric, CB ids
+    are 36-char uuids, Giving Tuesday/Candid ids are EINs (NN-NNNNNNN)."""
+    import re
+
+    s = str(matched_id)
+    if re.fullmatch(r"\d+", s):
+        return "nzi"
+    if re.fullmatch(r"[0-9a-f-]{36}", s, re.IGNORECASE):
+        return "crunchbase"
+    if re.fullmatch(r"\d{2}-\d{7}", s):
+        return "givingtuesday"
+    return "other"
+
+
+def annotate_sources(id_mapping: pd.DataFrame) -> pd.DataFrame:
+    """Make source attribution explicit and self-contained for reviewers:
+    matched_source names the primary id's source, and nzi_id is filled
+    whenever an NZI identity exists — including when it IS the primary."""
+    matched = id_mapping["matched_id"].notna() & id_mapping["matched_id"].astype(str).ne("")
+    id_mapping.loc[matched, "matched_source"] = id_mapping.loc[matched, "matched_id"].map(
+        _infer_matched_source
+    )
+    primary_nzi = matched & (id_mapping["matched_source"] == "nzi")
+    id_mapping.loc[primary_nzi, "nzi_id"] = id_mapping.loc[primary_nzi, "matched_id"]
+    primary_cb = matched & (id_mapping["matched_source"] == "crunchbase")
+    id_mapping.loc[primary_cb, "cb_id"] = id_mapping.loc[primary_cb, "matched_id"]
+    return id_mapping
+
+
+def assess_readiness(id_mapping: pd.DataFrame, objective: str) -> pd.DataFrame:
+    """Judge each row against the engagement's match objective.
+
+    text: a row is ready with a matched source record's description, a
+    scrapeable website, or a customer-supplied description. A LinkedIn page
+    alone is the LAST RESORT — queryable, but not sufficient: it stays in
+    text_sources yet does not make a row ready, so the customer still gets
+    asked and source matching keeps trying. Websites can be dead, which is
+    why source URIs (NZI preferred, then CB) remain worth having for every
+    row; liveness is confirmed at enrichment.
+    financials: only a matched canonical id counts.
+    """
+    website = id_mapping["customer_url"].map(lambda u: bool(identity_domain(u)))
+    linkedin = id_mapping["customer_url"].map(lambda u: bool(linkedin_slug(u))) | (
+        id_mapping["linkedin_url"].notna()
+        & id_mapping["linkedin_url"].astype(str).str.strip().ne("")
+    )
+    source = id_mapping["matched_id"].notna() & id_mapping["matched_id"].astype(str).ne("")
+    customer_text = (
+        id_mapping["customer_description"].notna()
+        & id_mapping["customer_description"].astype(str).str.strip().ne("")
+    )
+
+    labels = pd.DataFrame({
+        "website": website, "linkedin": linkedin,
+        "source_record": source, "customer_text": customer_text,
+    })
+    id_mapping["text_sources"] = labels.apply(
+        lambda r: ",".join(c for c in labels.columns if r[c]), axis=1
+    )
+    if objective == "text":
+        id_mapping["enrichment_ready"] = source | website | customer_text
+    else:
+        id_mapping["enrichment_ready"] = source
+    n_li_only = int((linkedin & ~id_mapping["enrichment_ready"]).sum())
+    logger.info(
+        "readiness (%s objective): %d of %d rows enrichment-ready"
+        " (%d linkedin-only, last resort)",
+        objective, int(id_mapping["enrichment_ready"].sum()),
+        len(id_mapping), n_li_only,
+    )
+    return id_mapping
+
+
+def check_url_alive(url: str, timeout: float = 10.0) -> bool:
+    """A streamed GET (headers only, body never read). Dead: DNS/connection
+    failure or a definitive 404/410. Bot walls (403/503) count as alive —
+    the enrichment scraper deals with those. Certs are NOT verified:
+    liveness asks whether content exists, and a self-signed cert
+    (winnememwintu.us) still fronts a scrapeable site."""
+    import httpx
+
+    target = url if "://" in str(url) else f"https://{url}"
+    try:
+        with httpx.stream(
+            "GET", target, follow_redirects=True, timeout=timeout, verify=False,
+        ) as resp:
+            return resp.status_code not in (404, 410)
+    except Exception:
+        return False
+
+
+def verify_website_readiness(
+    id_mapping: pd.DataFrame, cache_path, checker=check_url_alive
+) -> pd.DataFrame:
+    """Liveness-check rows whose enrichment readiness rests SOLELY on the
+    customer-provided URL (no source record, no customer description). Dead
+    URLs demote text_sources ``website`` → ``website_dead`` and drop
+    ``enrichment_ready`` so the row enters the customer round-trip. Results
+    cached per domain (``url_liveness_cache.json``); delete the cache entry
+    to re-check a domain."""
+    import json
+    from pathlib import Path as _Path
+
+    cache_path = _Path(cache_path)
+    cache = json.loads(cache_path.read_text()) if cache_path.exists() else {}
+
+    source = id_mapping["matched_id"].notna() & id_mapping["matched_id"].astype(str).ne("")
+    customer_text = (
+        id_mapping["customer_description"].notna()
+        & id_mapping["customer_description"].astype(str).str.strip().ne("")
+    )
+    website_only = (
+        id_mapping["enrichment_ready"].fillna(False).astype(bool)
+        & ~source
+        & ~customer_text
+    )
+    n_dead = 0
+    for idx, row in id_mapping[website_only].iterrows():
+        domain = identity_domain(row["customer_url"])
+        if not domain:
+            continue
+        if domain not in cache:
+            cache[domain] = checker(str(row["customer_url"]))
+        if not cache[domain]:
+            id_mapping.loc[idx, "text_sources"] = str(
+                id_mapping.loc[idx, "text_sources"] or ""
+            ).replace("website", "website_dead")
+            id_mapping.loc[idx, "enrichment_ready"] = False
+            n_dead += 1
+    cache_path.write_text(json.dumps(cache))
+    logger.info(
+        "website liveness: %d website-only-ready rows checked, %d dead links demoted",
+        int(website_only.sum()), n_dead,
+    )
+    return id_mapping
+
+
+def run_status(engagement_root: str | Path) -> str:
+    return PipelineState(engagement_root).render_status()

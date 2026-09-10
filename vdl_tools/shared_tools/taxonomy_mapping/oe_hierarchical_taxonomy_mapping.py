@@ -60,6 +60,9 @@ from vdl_tools.shared_tools.taxonomy_mapping.hierarchical_taxonomy_mapping impor
 )
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 from vdl_tools.shared_tools.json_cache import write_json
+from vdl_tools.shared_tools.taxonomy_mapping.taxonomy_mapping_cache import (
+    NO_MATCH_REASON_FIELD,
+)
 from vdl_tools.shared_tools.tools.logger import logger
 
 
@@ -223,6 +226,7 @@ class OneEarthMatchesResponse(BaseModel):
     own."""
 
     matches: list[OneEarthMatch] = []
+    no_match_reason: str = NO_MATCH_REASON_FIELD
 
 
 class OneEarthMatchWithConfidence(OneEarthMatch):
@@ -246,6 +250,7 @@ class OneEarthMatchesWithConfidenceResponse(BaseModel):
     it is uncertain; emit it with a low confidence value instead."""
 
     matches: list[OneEarthMatchWithConfidence] = []
+    no_match_reason: str = NO_MATCH_REASON_FIELD
 
 
 class OneEarthResearchMatch(BaseModel):
@@ -264,6 +269,7 @@ class OneEarthResearchMatchesResponse(BaseModel):
     passing climate vocabulary in a broader-impacts statement."""
 
     matches: list[OneEarthResearchMatch] = []
+    no_match_reason: str = NO_MATCH_REASON_FIELD
 
 
 def oneearth_match_schema(
@@ -1019,7 +1025,8 @@ def map_to_oneearth(
     read_from_cache: bool = True,
     write_to_cache: bool = True,
     filter_by_model: bool = True,
-    llm_api_kwargs: dict | None = {"reasoning": {"effort": "low"}}
+    llm_api_kwargs: dict | None = {"reasoning": {"effort": "low"}},
+    recovery_llm_api_kwargs: dict | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Classify a DataFrame of entities against the One Earth taxonomy.
 
@@ -1130,7 +1137,10 @@ def map_to_oneearth(
         ``id_col``, ``name_col``, ``text_col``, all the entity's other
         columns, then ``Pillar`` / ``Sub-Pillar`` / ``Solution`` /
         ``Sub-Term``, ``deepest_match``, ``leaf_definition``,
-        ``mode_of_operation``, ``evidence``, ``reason``.
+        ``mode_of_operation``, ``evidence``, ``reason``. Entities the
+        walk refused at Pillar get an all-null level row whose
+        ``reason`` carries the model's own explanation of why no pillar
+        fit (the schemas' ``no_match_reason``).
 
         ``collapsed_df`` has one row per id, with each level rendered as
         a repr-encoded list of unique values per entity, plus the
@@ -1235,6 +1245,13 @@ def map_to_oneearth(
                 read_from_cache=read_from_cache,
                 write_to_cache=write_to_cache,
                 filter_by_model=filter_by_model,
+                # The recovery scope pass runs on recovery_model and takes
+                # its OWN api kwargs (recovery_llm_api_kwargs), inheriting
+                # the walk's when unset. The LLM layer strips `reasoning`
+                # for non-reasoning models, so forwarding is always safe.
+                llm_api_kwargs=(recovery_llm_api_kwargs
+                                if recovery_llm_api_kwargs is not None
+                                else llm_api_kwargs),
             )
 
         if walk_recovered:
