@@ -7,7 +7,6 @@ from vdl_tools.py2mappr._core.config import AttributeConfig, WeightedAttributeCo
 from vdl_tools.py2mappr._builder._utils import md_to_html
 import copy
 
-from vdl_tools.py2mappr._db.geoquery import GeoItem, query_latlon
 
 
 class Datapoint(TypedDict):
@@ -148,6 +147,9 @@ def build_datapoints(
 
     geodata = defaultdict(list)
     if geodata_latlon is not None:
+        # imported here, not at module level: geoquery opens a postgres connection on import,
+        # which only geo layouts need. Keeps `import vdl_tools.py2mappr` working without a [postgres] config.
+        from vdl_tools.py2mappr._db.geoquery import GeoItem, query_latlon
         lat, lon = geodata_latlon
         pts = [GeoItem(key=str(dp['id']), latitude=dp[lat], longitude=dp[lon])
                for _, dp in df_datapoints.iterrows()]

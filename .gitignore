@@ -41,3 +41,6 @@ coverage.xml
 
 # Claude Code worktrees are separate checkouts, never repo content
 .claude/worktrees/
+
+# generated output of the causal_networks example run
+vdl_tools/causal_networks/examples/output/
