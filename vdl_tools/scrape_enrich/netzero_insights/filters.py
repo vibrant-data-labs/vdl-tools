@@ -127,23 +127,8 @@ class MainFilter(BaseModel):
     sorting: Optional[Sorting] = None
 
 
-def create_filter_dict(filter_obj: MainFilter) -> Dict:
-    """Recursively convert a filter object to a dictionary for API requests removing None values"""
-    filter_dict = filter_obj.model_dump()
-    filter_dict = filter_none_values(filter_dict)
-    return filter_dict
-
-
-def filter_none_values(filter_dict: Dict, new_dict: Dict = {}) -> Dict:
-    new_dict = new_dict or {}
-    """Remove None values from a nested dictionary"""
-    for key, value in filter_dict.items():
-        if isinstance(value, dict):
-            filter_none_values(value, new_dict)
-        elif isinstance(value, list):
-            for item in value:
-                if isinstance(item, dict):
-                    filter_none_values(item, new_dict)
-        else:
-            new_dict[key] = value
-    return new_dict
+# `create_filter_dict`/`filter_none_values` were removed: nothing called them,
+# and `filter_none_values` flattened nested filters into a single dict (losing
+# the include/exclude nesting the API requires) while sharing one mutable
+# default dict across calls. `api_v2._prune` does the None-stripping that v2
+# actually needs.

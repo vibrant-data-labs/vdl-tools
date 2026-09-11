@@ -2,6 +2,133 @@
 
 A Python client library for interacting with the NetZero Insights API.
 
+## API versions (read this first)
+
+NZI rewrote their API. Both versions are live:
+
+| | v1 (legacy) | v2 (current) |
+|---|---|---|
+| Host | `api.netzeroinsights.com` | `api-new.netzeroinsights.com` |
+| Auth | `POST /security/formLogin`, `JSESSIONID` cookie, 30-min idle expiry | `POST /auth/login?email=&password=`, JWT bearer, 30-day expiry |
+| Company search | `POST /companies` | `POST /advanced-filters/companies` |
+| Deal search | `POST /fundingRounds` | `POST /advanced-filters/deals` |
+| Investor search | `POST /investors` | `POST /advanced-filters/investors` |
+| Company details | `GET /getStartup/{id}` | `GET /companies/{id}` |
+| Investor details | `GET /getInvestor/{id}` | `GET /investors/{id}` |
+| Company's deals | `GET /fundingRoundsPrints/{id}` | `GET /deals/company/{id}` |
+| Pagination | `limit`/`offset` in the body | `pageNumber`/`pageSize` query params |
+| Sorting | `sorting` object in the body | `sortField`/`sortDirection` query params |
+| Search envelope | `{count, results}` | `{content, totalElements, totalPages, …}` |
+| Entity ID field | `clientID` / `investorID` | `id` |
+
+**NZI supports v1 until 2027-02-28.** This client still defaults to v1 because
+the v2 field mapping has not been checked against live credentials yet.
+
+```python
+# Opt in per client…
+client = NetZeroAPI(username=..., password=..., api_version="v2")
+
+# …or for a whole run
+NZI_API_VERSION=v2 python your_script.py
+```
+
+`config.ini` may also set `api_version` under `[netzero_insights]`.
+
+### What v2 changes for callers
+
+* **Response fields are renamed** (`clientID`→`id`, `lastRoundDate`→
+  `lastDealDate`, flat `city`/`country`→nested `searchableLocation`, and so
+  on). `api_v2.normalize_*` re-adds the legacy names on top of the v2 payload,
+  so `process_nzi` and the Postgres cache keep working and nothing is dropped.
+  Records come back as a **superset** of what the API returned.
+* **Strings became objects.** v1 shipped `roundType: "Late VC"`,
+  `primaryType: "Venture Capital"`, `lastRoundType: "Grant"`; v2 ships
+  `type: {label, id}`, `primaryType: {label, id}`, `lastDealType: {label, id}`.
+  `process_nzi` string-compares these, so the legacy aliases carry the
+  **label**; where v1 and v2 share the key name (`primaryType`,
+  `secondaryTypes`, `fundingTypes`) the label overwrites in place and the
+  objects/IDs are kept under `primaryTypeID`, `secondaryTypeIDs`,
+  `fundingTypeObjects`. The label vocabularies are unchanged — checked against
+  NZI's `DEAL_TYPE` and `INVESTOR_TYPE` lookups (see below).
+* **`taxonomyItems` became `tagIDs`, keyed by `tagID`, not by the taxonomy
+  item's `id`.** Passing the old IDs through raises a `ValueError` naming the
+  replacement rather than silently filtering on the wrong concepts. Translate
+  with `NetZeroAPI.get_taxonomy_item_tag_ids()`.
+* **There is no company-ID search filter.** `ids`, `companyIDs`, `companyIds`
+  and `id` all silently return the full universe — the endpoint drops unknown
+  fields without error (NZI's own MCP server *emulates* `companyIDs`, which is
+  misleading). `ids` raises; fetch by ID with `get_startup_details()` instead.
+* **`investorIDs` only works under `dealInclude`.** `investorInclude.investorIDs`
+  is silently ignored on every search; `dealInclude.investorIDs` narrows a
+  company search correctly. `create_search_filter(include_investors=...)` routes
+  it there. On an *investor* search no spelling works, so that raises.
+* **`wildcards` is a single string and needs `wildcardsFields`.** The docs say
+  *List of string*; a list is an HTTP 500, and so is omitting the fields.
+  Space-joined phrases match any (`"a" "b"` widens), `-"c"` negates, and the
+  literal word `OR` must not be used (it matches almost everything).
+* **`searchableLocationIDs` takes searchable-location entity IDs**, from
+  `lookup_searchable_locations("Germany")` → 817600 — *not* the `country.id`
+  (80) nested in company records, which is silently ignored.
+* **The docs' `includeOtherInvestorTypes` is a no-op**; `includeSecondaryTypes`
+  is the field that works. Mapped accordingly.
+* **`get_funding_round_details()` raises on v2** — NZI documents no
+  deal-by-ID endpoint. Use `get_company_funding_rounds()` or `search_deals()`.
+* **Taxonomy is a different graph on the v2 host.** `POST /taxonomy/graph/{id}`
+  works there (POST, despite the docs' GET), but legacy node IDs such as 660
+  return nothing and the root (`POST /taxonomy/graph`) is a different tree
+  ("Verticals map" / "Horizontals map"). Children keep the legacy
+  `{id, label, description, hasChildren}` keys — recursion via `child["id"]`
+  works — and add `tag`, `companyCount`, `dealCount` and funding totals.
+  `/taxonomy/itemDtos` and `/taxonomy/item/*` do not exist on v2 at all. Use
+  `search_tags(name)` (`GET /tags`) to resolve tag IDs on v2;
+  `get_flat_nzi_taxonomy` stays on v1 until its `ROOT_ID` is remapped.
+
+### Verified against the live v2 REST endpoint (2026-09-11)
+
+Every claim above was checked with a read-only session against
+`api-new.netzeroinsights.com`, and the whole `NetZeroAPI(api_version="v2")`
+client was run end to end (`search_startups`, `get_startup_count`,
+`get_startup_details`, `get_company_funding_rounds`, `get_investor_details`)
+producing legacy-shaped records. Specifically:
+
+* **Auth:** the token arrives in an `access_token` response header with an
+  empty body; `POST /auth/logout` invalidates it (a later call is 403).
+* **No `pageSize` cap at 100** — `pageSize=100` returns 100 rows. The
+  short-page guard stays as insurance.
+* **Entity IDs are unchanged** — company 668 is Sunfire in both versions, so
+  the Postgres cache and every historical join survive the cutover.
+* **Every mapped filter field was tested for whether it actually narrows
+  results** (the endpoint drops unknown fields silently, so a wrong name is
+  invisible). All honoured except the cases called out above.
+* **Vocabularies:** `type.label` on real deals is exactly the v1 strings
+  (`Seed`, `Series A`, `Late VC`, `Debt`, `Grant`, …); `fundingType.label` is
+  `Equity`/`Debt`/`Grant`/`Other`. NZI's `DEAL_TYPE` lookup has every label in
+  `DISCLOSED_STAGES_ORDERED` except `Series I`, `Series J` and
+  `Post IPO - Equity` (v2 has `PIPE`); `INVESTOR_TYPE` has all 33 raw types in
+  the Excel mapping plus a new `Crowdfunding Platform`.
+* **Sorting:** `sortField` must be a v2 enum value (`fundingAmount` is a 400);
+  the client raises on anything it cannot map.
+
+Two NZI-side bugs to be aware of: `dealInclude.equityStageIDs` on a *company*
+search is an HTTP 500 (Hibernate path error; it works on a deal search), and
+malformed request bodies come back as 500 rather than 400, so the client's
+transient-error retry will back off through four attempts before surfacing
+them.
+
+### Before flipping the default to v2
+
+1. **Strict column selection in `process_nzi`.** `filter_format_columns` does
+   `df[keep_columns]`, which raises `KeyError` on any listed column the record
+   lacks. Eight v1 company columns have no v2 equivalent (`directURL`,
+   `eutopiaScore`, `facebookURL`, `infrastructureProjectsCount`,
+   `revenueYear`, `revenuesRange`, `trlFiveYearsPrior`, `trlLastThreeYears`),
+   none of which any analysis reads — but their absence will crash the
+   pipeline until that selection is made lenient or the columns are dropped
+   from `ORIGINAL_COMPANY_DETAILS_COLUMNS`.
+2. Re-run the survival-rate pipeline on a small cohort and diff the stage
+   buckets against a v1 run.
+3. Decide what `get_flat_nzi_taxonomy` does once v1 goes away (2027-02-28).
+
 ## Installation
 
 1. Install the required dependencies:
