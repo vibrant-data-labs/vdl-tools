@@ -58,7 +58,7 @@ def _get_graduation_and_later_stages(graduation_stages, late_venture_cutoff):
     Exit-cohort suppression
     -----------------------
     When ``graduation_stages`` consists entirely of exit types (IPO / SPAC /
-    Post IPO / Post IPO - Equity), as for the ``Late_Exit`` and ``Seed_Exit``
+    Post IPO / Post IPO - Equity / PIPE), as for the ``Late_Exit`` and ``Seed_Exit``
     cohorts, NO catch-all is appended. Late VC and Growth equity are
     late-venture rounds, not exits — appending them to the graduation set of
     an exit cohort would silently classify any company that raised a late
@@ -93,10 +93,10 @@ def _get_graduation_and_later_stages(graduation_stages, late_venture_cutoff):
     Examples
     --------
     >>> _get_graduation_and_later_stages(["Series B"], "Series B")
-    ["Series B", "Series C", ..., "Post IPO - Equity", "Late VC", "Growth equity"]
+    ["Series B", "Series C", ..., "Post IPO - Equity", "PIPE", "Late VC", "Growth equity"]
     >>> _get_graduation_and_later_stages(
     ...     ["IPO", "Post IPO", "Post IPO - Equity", "SPAC"], "Series B")
-    ["IPO", "SPAC", "Post IPO", "Post IPO - Equity"]   # NO catch-all
+    ["IPO", "SPAC", "Post IPO", "Post IPO - Equity", "PIPE"]   # NO catch-all
     """
     earliest_graduation_idx = min(
         DISCLOSED_STAGES_ORDERED.index(stage) for stage in graduation_stages

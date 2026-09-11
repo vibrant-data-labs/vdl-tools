@@ -60,6 +60,23 @@ DEFAULT_SEARCH_CHECKPOINT_DIR = os.environ.get(
 )
 
 
+class SessionSupersededError(RuntimeError):
+    """NZI v2 answered HTTP 409: a newer login with this account revoked the token.
+
+    v2 is single-session per account (confirmed live 2026-09-11: a second
+    login makes the first token answer 409 on every call). Re-logging in here
+    would revoke the other session in turn, so this is deliberately neither
+    retried nor re-authenticated — run one v2 client per account at a time.
+    """
+
+    def __init__(self, endpoint: str):
+        super().__init__(
+            f"NZI v2 session superseded while calling {endpoint}: another login "
+            "with this account revoked this token (HTTP 409). v2 is single-session "
+            "per account — run one v2 client at a time."
+        )
+
+
 def _normalize_deal_list(payload):
     """Normalise `GET /deals/company/{id}`, which returns a bare list."""
     if isinstance(payload, list):
@@ -339,6 +356,9 @@ class NetZeroAPI:
                 # final attempt would refresh the session and then raise without
                 # ever retrying with the fresh cookie.
                 continue
+
+            if self.is_v2 and response.status_code == 409:
+                raise SessionSupersededError(endpoint)
 
             if response.status_code in RETRYABLE_STATUS_CODES and attempt < max_retries - 1:
                 wait = 2 ** attempt + random.random()
@@ -785,6 +805,8 @@ class NetZeroAPI:
                                 auth_state["headers"] = self._auth_headers()
                                 reauthed = True
                                 continue
+                            if self.is_v2 and response.status == 409:
+                                raise SessionSupersededError(f"{endpoint}/{id}")
                             if response.status in RETRYABLE_STATUS_CODES and attempt < max_retries - 1:
                                 wait = 2 ** attempt + random.random()
                                 logger.warning(
@@ -820,6 +842,9 @@ class NetZeroAPI:
                         else:
                             logger.error(f"Failed {endpoint} {id}: {type(e).__name__} after {max_retries} attempts")
                             return id, None
+                    except SessionSupersededError:
+                        # Every remaining entity would fail the same way; stop the batch.
+                        raise
                     except Exception as e:
                         logger.error(f"Failed {endpoint} {id}: {type(e).__name__}: {e}")
                         return id, None

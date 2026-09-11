@@ -609,3 +609,18 @@ def test_normalize_company_aliases_tag_type_names_for_parse_company_tags():
     assert tag["umbrella"] is False
     from vdl_tools.scrape_enrich.netzero_insights.process_nzi.company import parse_company_tags
     assert parse_company_tags(out["tags"], flatten_tags=False) == {"technology_tag_nzi": ["SOEC"]}
+
+
+def test_v2_409_raises_session_superseded_without_retry_or_reauth(api_v2_client, mock_session):
+    # Confirmed live: a second login with the same account makes the first
+    # token answer 409 on every call. Re-logging in would revoke the other
+    # session in turn, so this must fail fast and say why.
+    from vdl_tools.scrape_enrich.netzero_insights.netzero_api import SessionSupersededError
+    mock_session.post.reset_mock()
+    mock_session.request.return_value = _response(status=409)
+
+    with pytest.raises(SessionSupersededError, match="single-session"):
+        api_v2_client._search_entities(operation="search_companies", limit=1)
+
+    assert mock_session.request.call_count == 1   # no retry
+    mock_session.post.assert_not_called()          # no re-login

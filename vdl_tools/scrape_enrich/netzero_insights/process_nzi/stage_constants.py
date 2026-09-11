@@ -48,6 +48,10 @@ DISCLOSED_STAGES_ORDERED = [
     "SPAC",
     "Post IPO",
     "Post IPO - Equity",
+    # PIPE (private investment in public equity) is post-IPO by definition —
+    # the company is already public. NZI's current vocabulary uses "PIPE"
+    # (98 rounds in the cache) where "Post IPO - Equity" occurs once.
+    "PIPE",
 ]
 
 
@@ -115,6 +119,7 @@ EXIT_TYPES = {
     "SPAC",
     "Post IPO",
     "Post IPO - Equity",
+    "PIPE",
     "Merger",
     "Acquisition",
     "Buyout",

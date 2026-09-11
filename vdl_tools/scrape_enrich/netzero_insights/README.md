@@ -34,13 +34,19 @@ NZI_API_VERSION=v2 python your_script.py
 
 `config.ini` may also set `api_version` under `[netzero_insights]`.
 
-### Two v1 facts worth knowing (verified 2026-09-11)
+### Sessions: both versions are single-session per account (verified 2026-09-11)
 
-* **v1 is single-session per user.** A second login as the same account
-  invalidates the first session ("This session has been expired (possibly due
-  to multiple concurrent logins…)"). The client re-authenticates on 401/403,
-  so two v1 clients running at once steal the session back and forth and
-  every in-flight request times out. Run one v1 client at a time.
+* **v1:** a second login as the same account invalidates the first session
+  ("This session has been expired (possibly due to multiple concurrent
+  logins…)"). The client re-authenticates on 401/403, so two v1 clients
+  running at once steal the session back and forth and every in-flight
+  request times out.
+* **v2:** a second login makes the first token answer **HTTP 409** on every
+  call. The client raises `SessionSupersededError` immediately — no retry, no
+  re-login (which would revoke the other session in turn). Two logins within
+  about a second additionally trip a throttle that answers 403 to *every*
+  token for a minute or so.
+* Either way: **run one client per account at a time.**
 * **`GET /fundingRound/prints/{id}` — the path this client calls — works and
   answers in ~1s.** The path the legacy docs give, `fundingRoundsPrints/{id}`,
   is a 404. The earlier audit note that our path "matches neither doc version"
@@ -92,8 +98,12 @@ NZI_API_VERSION=v2 python your_script.py
   `{id, label, description, hasChildren}` keys — recursion via `child["id"]`
   works — and add `tag`, `companyCount`, `dealCount` and funding totals.
   `/taxonomy/itemDtos` and `/taxonomy/item/*` do not exist on v2 at all. Use
-  `search_tags(name)` (`GET /tags`) to resolve tag IDs on v2;
-  `get_flat_nzi_taxonomy` stays on v1 until its `ROOT_ID` is remapped.
+  `search_tags(name)` (`GET /tags`) to resolve tag IDs on v2.
+  `get_flat_nzi_taxonomy` picks its root per version (`ROOT_IDS`): v2 root
+  1823 "Verticals map" has the same ten verticals as v1's 660, label for
+  label. A v2 bonus: the node IDs *are* tag IDs (359 = "Built Environment"),
+  so the flat taxonomy's `id` column feeds a v2 `tagIDs` filter directly —
+  no item→tag translation as on v1.
 
 ### Verified against the live v2 REST endpoint (2026-09-11)
 
@@ -178,16 +188,23 @@ counts): `"Post IPO - Equity"` occurs in **1** round and `"Series I"`/
 neither `EXIT_TYPES` nor `DISCLOSED_STAGES_ORDERED`, so post-IPO equity has
 never counted as an exit on either version. `"Accelerator/Incubator"`
 (capital I) occurs in 967 rounds and falls outside the accelerator bucket,
-which expects the lowercase form; v2 normalises the label. Whether to add
-`PIPE` to `EXIT_TYPES` is an analysis decision, not a migration one.
+which expects the lowercase form; v2 normalises the label. **Decision
+(2026-09-11): `PIPE` is post-IPO by definition — the company is already
+public — so it now sits in `EXIT_TYPES` and after `"Post IPO - Equity"` in
+`DISCLOSED_STAGES_ORDERED`.**
 
-### Remaining before flipping the default to v2
+### Scale check (2026-09-11)
 
-1. Decide whether `PIPE` joins `EXIT_TYPES` (above).
-2. Remap `get_flat_nzi_taxonomy.ROOT_ID` to the v2 tree
-   (`POST /taxonomy/graph` lists its roots).
-3. Flip `DEFAULT_API_VERSION`, run one full refresh, and retire the v1 path
-   before 2027-02-28.
+One v2 login: a 1,000-row company search (10 checkpointed pages, 4 in
+flight) in 6.9s with 1,000 unique IDs; the same search again resumed from
+the checkpoint in 0.1s with identical rows; then details, funding rounds
+and investors for 150 of those companies (150/150, 71/71) in ~4s each, with
+no client errors. Nothing was written to the cache.
+
+### Retiring v1
+
+`DEFAULT_API_VERSION` decides which API `get_netzero_api()` uses. Once it is
+`v2`, run one full refresh and delete the v1 paths before 2027-02-28.
 
 ## Installation
 

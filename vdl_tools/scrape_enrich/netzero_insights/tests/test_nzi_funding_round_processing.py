@@ -663,8 +663,10 @@ def test_early_skips_to_late_with_series_c():
 
     assert early["round_type_nzi"].tolist() == ["Seed", "Series A", "Early VC"]
     assert middle is None
-    assert late["round_type_nzi"].tolist() == ["Series C", "PIPE"]
-    assert exit_rows["round_type_nzi"].tolist() == ["SPAC"]
+    # PIPE is an exit type (the company is already public), so the exit
+    # bucket opens at the PIPE; the same-date SPAC keeps input order after it.
+    assert late["round_type_nzi"].tolist() == ["Series C"]
+    assert exit_rows["round_type_nzi"].tolist() == ["PIPE", "SPAC"]
 
 
 def test_ipo_only_company_with_post_ipo_and_acquisition():
