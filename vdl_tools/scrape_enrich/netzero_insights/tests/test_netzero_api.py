@@ -24,7 +24,8 @@ def netzero_api(mock_session):
     return NetZeroAPI(
         username="test_user",
         password="test_pass",
-        use_sandbox=True
+        use_sandbox=True,
+        api_version="v1",
     )
 
 

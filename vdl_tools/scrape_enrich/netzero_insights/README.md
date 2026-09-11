@@ -21,15 +21,15 @@ NZI rewrote their API. Both versions are live:
 | Search envelope | `{count, results}` | `{content, totalElements, totalPages, …}` |
 | Entity ID field | `clientID` / `investorID` | `id` |
 
-**NZI supports v1 until 2027-02-28.** This client still defaults to v1 because
-the v2 field mapping has not been checked against live credentials yet.
+**This client defaults to v2** (since 2026-09-11). NZI supports v1 until
+2027-02-28, and it stays selectable until then:
 
 ```python
-# Opt in per client…
-client = NetZeroAPI(username=..., password=..., api_version="v2")
+# Pin a client to the legacy API…
+client = NetZeroAPI(username=..., password=..., api_version="v1")
 
-# …or for a whole run
-NZI_API_VERSION=v2 python your_script.py
+# …or a whole run
+NZI_API_VERSION=v1 python your_script.py
 ```
 
 `config.ini` may also set `api_version` under `[netzero_insights]`.
