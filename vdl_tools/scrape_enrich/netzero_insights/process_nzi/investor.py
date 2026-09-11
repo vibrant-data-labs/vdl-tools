@@ -4,7 +4,7 @@ from pathlib import Path
 import pandas as pd
 
 from vdl_tools.shared_tools.tools.falsey_checks import coerced_bool
-from vdl_tools.shared_tools.tools.text_cleaning import camel_to_snake
+from vdl_tools.scrape_enrich.netzero_insights.process_nzi.columns import select_and_rename
 
 
 # ---------------------------------------------------------------------------
@@ -151,19 +151,7 @@ def filter_format_columns(
   investor_df,
   keep_suffix="_nzi",
 ):
-    investor_df = investor_df.copy()
-    keep_columns = [col for col in ORIGINAL_INVESTOR_DETAILS_COLUMNS]
-    for col in investor_df.columns:
-        if col.endswith(keep_suffix):
-            keep_columns.append(col)
-
-    rename_dict = {
-        col: f"{camel_to_snake(col)}{keep_suffix}" for col in ORIGINAL_INVESTOR_DETAILS_COLUMNS
-    }
-
-    investor_df = investor_df[keep_columns]
-    investor_df = investor_df.rename(columns=rename_dict)
-    return investor_df
+    return select_and_rename(investor_df, ORIGINAL_INVESTOR_DETAILS_COLUMNS, keep_suffix, entity="investor")
 
 
 def add_investor_type_flag(

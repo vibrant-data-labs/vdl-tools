@@ -2,7 +2,7 @@ from collections import defaultdict
 
 import pandas as pd
 
-from vdl_tools.shared_tools.tools.text_cleaning import camel_to_snake
+from vdl_tools.scrape_enrich.netzero_insights.process_nzi.columns import select_and_rename
 from vdl_tools.shared_tools.tools.falsey_checks import coerced_bool
 from vdl_tools.scrape_enrich.netzero_insights.process_nzi.funding_round import (
     add_acquisition_indicators,
@@ -193,19 +193,7 @@ def filter_format_columns(
   companies_df,
   keep_suffix="_nzi",
 ):
-    companies_df = companies_df.copy()
-    keep_columns = [col for col in ORIGINAL_COMPANY_DETAILS_COLUMNS]
-    for col in companies_df.columns:
-        if col.endswith(keep_suffix):
-            keep_columns.append(col)
-
-    rename_dict = {
-        col: f"{camel_to_snake(col)}{keep_suffix}" for col in ORIGINAL_COMPANY_DETAILS_COLUMNS
-    }
-
-    companies_df = companies_df[keep_columns]
-    companies_df = companies_df.rename(columns=rename_dict)
-    return companies_df
+    return select_and_rename(companies_df, ORIGINAL_COMPANY_DETAILS_COLUMNS, keep_suffix, entity="company")
 
 
 def add_investor_type_flag(

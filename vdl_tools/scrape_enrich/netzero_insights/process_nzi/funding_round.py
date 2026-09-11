@@ -1,5 +1,5 @@
 import pandas as pd
-from vdl_tools.shared_tools.tools.text_cleaning import camel_to_snake
+from vdl_tools.scrape_enrich.netzero_insights.process_nzi.columns import select_and_rename
 
 from vdl_tools.scrape_enrich.netzero_insights.process_nzi.stage_constants import (
     M_AND_A_NAMES,
@@ -43,19 +43,7 @@ def filter_format_columns(
   funding_round_df,
   keep_suffix="_nzi",
 ):
-    funding_round_df = funding_round_df.copy()
-    keep_columns = [col for col in FUNDING_ROUND_COLUMNS]
-    for col in funding_round_df.columns:
-        if col.endswith(keep_suffix):
-            keep_columns.append(col)
-
-    rename_dict = {
-        col: f"{camel_to_snake(col)}{keep_suffix}" for col in FUNDING_ROUND_COLUMNS
-    }
-
-    funding_round_df = funding_round_df[keep_columns]
-    funding_round_df = funding_round_df.rename(columns=rename_dict)
-    return funding_round_df
+    return select_and_rename(funding_round_df, FUNDING_ROUND_COLUMNS, keep_suffix, entity="funding-round")
 
 
 def add_investor_type_flag(
