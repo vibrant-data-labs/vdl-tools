@@ -1072,6 +1072,10 @@ class PromptResponseCacheSQL():
             read_from_cache, write_to_cache, use_cached_result,
         )
 
+        # Some callers pass n_per_commit=None to mean "use the default"
+        if n_per_commit is None:
+            n_per_commit = 200
+
         if not given_ids_texts:
             logger.warning("No given_ids_texts passed")
             return {}

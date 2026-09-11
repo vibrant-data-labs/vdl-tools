@@ -11,8 +11,8 @@ from vdl_tools.scrape_enrich.combine_crunchbase_candid_linkedin import combine_c
 from vdl_tools.scrape_enrich.scraper.scrape_websites import extract_website_name, scrape_websites_psql
 from vdl_tools.shared_tools import climatebert_adaptation as adp
 from vdl_tools.shared_tools.all_source_organization_summarization import generate_summary_of_summaries, BASE_SUMMARY_OF_SUMMARIES_PROMPT
-from vdl_tools.shared_tools.taxonomy_mapping.oe_hierarchical_taxonomy_mapping import add_one_earth_hierarchical_taxonomy
 from vdl_tools.shared_tools.climate_landscape.diversity_keywords import DIVERSITY_BIPOC_DICT
+from vdl_tools.shared_tools.climate_landscape.venture_backed_flag import add_venture_backed_flag
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 from vdl_tools.shared_tools.geotagging_prompting import geotag_texts_bulk
 from vdl_tools.shared_tools.org_type_classifier import org_type_classifier
@@ -451,13 +451,19 @@ def run_pipeline(
     num_records=None,
     run_process_images=False,
     id_col='id',
-    run_one_earth_taxonomy=True,
     text_fields=TEXT_FIELDS,
     label_override_filepath=None,
     max_workers=MAX_WORKERS,
     n_per_commit=N_PER_COMMIT,
+    funding_rounds_uri=None,
+    venture_backed_org_type_col='OrgType Prediction',
 ):
+    """Pure enrichment: scrape, summarize, classify, geocode, and write the meta artifact.
 
+    When ``funding_rounds_uri`` (the UNFILTERED raw Crunchbase rounds parquet) is
+    set, the ``venture_backed`` flag is attached from it right after the org-type
+    prediction, using ``venture_backed_org_type_col`` for the grant-only rule.
+    """
     log_major_step("loading pre-processed combined crunchbase + candid data")
     if enrich_input_uri:
         df_cb_cd_full = read_dataframe(enrich_input_uri)
@@ -599,26 +605,6 @@ def run_pipeline(
     )
 
 
-    # OneEarth
-    log_major_step("Adding One Earth Taxonomy")
-
-    df_relevant['text_for_one_earth'] = df_relevant.apply(choose_longer_text, axis=1)
-    df_relevant.to_json(paths['results_path'] / "df_relevant_pre_taxonomy.json", orient='records')
-
-    if run_one_earth_taxonomy:
-        df_relevant, _oe_distributed_funding_df = add_one_earth_hierarchical_taxonomy(
-            df_relevant,
-            id_col='id',
-            text_col='text_for_one_earth',
-            # Latest "OE Solutions Terms *VDL.xlsx" next to the pinned taxonomy file
-            taxonomy_dir=paths['one_earth_taxonomy'].parent,
-            results_path=paths.get('one_earth_taxonomy_mapping_results'),
-            distributed_funding_results_path=paths.get('oe_tax_mapping_distributed_funding_results'),
-            emit_per_level=True,
-            read_from_cache=True,
-            max_workers=max_workers,
-        )
-
     # PROCESS DIVERSITY TAGS
     log_major_step("Adding Diversity Tags")
     cf.string2list(df_relevant, ['diversity'])  # format as lists
@@ -697,6 +683,18 @@ def run_pipeline(
     log_major_step("Running Prediction for Organization Type")
     df_relevant = org_type_classifier.predict(df_relevant)
 
+    # Venture-backed flag from the raw rounds (needs the org-type prediction above)
+    if funding_rounds_uri:
+        log_major_step("Adding venture_backed flag from raw Crunchbase funding rounds")
+        df_relevant = add_venture_backed_flag(
+            df_relevant,
+            funding_rounds_uri,
+            id_col=id_col,
+            org_type_col=venture_backed_org_type_col,
+        )
+    else:
+        logger.warning("funding_rounds_uri not set; skipping the venture_backed flag")
+
     if run_process_images:
         # Add Logos
         log_major_step("Adding Logos")
@@ -736,7 +734,12 @@ def run_pipeline(
             meta_output_uri,
             lineage={
                 "source": "enrichment_pipeline.run_pipeline",
+                "enrich_input_uri": enrich_input_uri,
                 "row_count": len(df_relevant),
+                "funding_rounds_uri": funding_rounds_uri,
+                "venture_backed_org_type_col": (
+                    venture_backed_org_type_col if funding_rounds_uri else None
+                ),
             },
         )
 

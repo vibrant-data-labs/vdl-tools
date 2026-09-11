@@ -1,0 +1,174 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Private S3 bucket + CloudFront distribution for a marimo WASM export.
+  The bucket blocks all public access and is reachable only through the
+  distribution (Origin Access Control). A viewer-request function enforces
+  HTTP basic auth before any request reaches S3, and rewrites directory-style
+  URIs onto index.html.
+
+Parameters:
+  AppName:
+    Type: String
+    Description: Short slug identifying the app, e.g. attention-vs-emissions.
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$"
+  BucketName:
+    Type: String
+    Description: Globally unique bucket name.
+  AuthBase64:
+    Type: String
+    NoEcho: true
+    Description: >
+      base64("user:password") for HTTP basic auth. Checked at the edge, so it
+      never reaches the browser and is never part of the published build.
+  DomainName:
+    Type: String
+    Default: ""
+    Description: >
+      Optional custom hostname, e.g. attention.vibrantdatalabs.org. Leave blank
+      to serve from the assigned *.cloudfront.net name.
+  AcmCertificateArn:
+    Type: String
+    Default: ""
+    Description: >
+      ACM certificate ARN covering DomainName. Must be issued in us-east-1 --
+      CloudFront reads certificates only from that region, whatever region the
+      bucket is in. Required whenever DomainName is set.
+
+Conditions:
+  HasCustomDomain: !Not [!Equals [!Ref DomainName, ""]]
+
+Resources:
+  Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AppName}-oac"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # Runs on every viewer request, before CloudFront consults its cache or the
+  # origin. Two jobs: reject unauthenticated requests, and resolve directory
+  # URIs (a REST origin honors DefaultRootObject only at the distribution root,
+  # so subfolder URLs 403 without the rewrite).
+  EdgeFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub "${AppName}-auth-and-index"
+      AutoPublish: true
+      FunctionConfig:
+        Comment: !Sub "Basic auth + index rewrite for ${AppName}"
+        Runtime: cloudfront-js-2.0
+      FunctionCode: !Sub |
+        var EXPECTED = 'Basic ${AuthBase64}';
+
+        function handler(event) {
+            var request = event.request;
+            var auth = request.headers.authorization;
+
+            if (!auth || auth.value !== EXPECTED) {
+                return {
+                    statusCode: 401,
+                    statusDescription: 'Unauthorized',
+                    headers: {
+                        'www-authenticate': { value: 'Basic realm="Restricted"' },
+                        'cache-control': { value: 'no-store' }
+                    }
+                };
+            }
+
+            var uri = request.uri;
+            if (uri.endsWith('/')) {
+                request.uri = uri + 'index.html';
+            } else if (!uri.split('/').pop().includes('.')) {
+                request.uri = uri + '/index.html';
+            }
+
+            return request;
+        }
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "marimo app: ${AppName}"
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        # CloudFront refuses any Host header it has not been told to answer to,
+        # so a DNS record alone is not enough -- the alias must be declared here
+        # and backed by a matching certificate.
+        Aliases: !If [HasCustomDomain, [!Ref DomainName], !Ref "AWS::NoValue"]
+        ViewerCertificate: !If
+          - HasCustomDomain
+          - AcmCertificateArn: !Ref AcmCertificateArn
+            SslSupportMethod: sni-only
+            MinimumProtocolVersion: TLSv1.2_2021
+          - CloudFrontDefaultCertificate: true
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt Bucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt OriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD]
+          CachedMethods: [GET, HEAD]
+          # The main reason to front S3 with a CDN here: a marimo WASM build is
+          # tens of MB of JS and S3 never compresses.
+          Compress: true
+          # Managed-CachingOptimized. Respects the Cache-Control headers the
+          # deploy step stamps on each object.
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt EdgeFunction.FunctionARN
+
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontServicePrincipalReadOnly
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "arn:aws:s3:::${BucketName}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+
+Outputs:
+  BucketURI:
+    Value: !Sub "s3://${BucketName}"
+  DistributionId:
+    Value: !Ref Distribution
+  DistributionDomain:
+    Value: !GetAtt Distribution.DomainName
+  ViewURL:
+    Description: The link to share.
+    Value: !If
+      - HasCustomDomain
+      - !Sub "https://${DomainName}/"
+      - !Sub "https://${Distribution.DomainName}/"
+  CnameTarget:
+    Description: Point the DNS CNAME at this (DNS-only, never proxied).
+    Value: !GetAtt Distribution.DomainName

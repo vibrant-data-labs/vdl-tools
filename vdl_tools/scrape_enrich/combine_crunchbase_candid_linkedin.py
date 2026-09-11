@@ -10,17 +10,31 @@ import pandas as pd
 from vdl_tools.shared_tools import common_functions as cf
 from vdl_tools.linkedin.utils.linkedin_url import extract_linkedin_id
 import vdl_tools.shared_tools.cb_funding_calculations as fcalc
+import vdl_tools.shared_tools.cb_funding_types as ft
 from vdl_tools.shared_tools.tools.falsey_checks import coerced_bool
+from vdl_tools.shared_tools.tools.logger import logger
 
 
 def combine_cb_cd(
     df_cb,  # processed crunchbase data
     df_cd,  # processed candid data
     out_name,  # json filename to write combined results
-    funding_type_map_path  # shared-data path to funding type mapping file
+    funding_type_map_path=None,  # DEPRECATED, ignored: funding types now map in code (cb_funding_types.py)
 ):
+    """Stack the processed Crunchbase and Candid frames, normalize org type,
+    fill the raw funding columns for rows that only carry display values, and
+    add Stage_Category / Philanthropy_vs_Venture. Writes the combined json.
+
+    Funding-type display names are assigned upstream (prepare_crunchbase for
+    Crunchbase rows; the Candid prep writes 'Grant' / 'Philanthropy' directly),
+    so nothing is re-mapped here.
+    """
     ##########################################
     # COMBINE CRUNCHBASE WITH CANDID AND WRITE CLEANED FILE
+
+    if funding_type_map_path is not None:
+        logger.warning("combine_cb_cd: funding_type_map_path is ignored; the funding-type "
+                       "mapping lives in vdl_tools.shared_tools.cb_funding_types")
 
     print("\nCOMBINING CRUNCHBASE and CANDID")
     df_cb_cd = pd.concat([df_cb, df_cd], ignore_index=True)
@@ -36,21 +50,21 @@ def combine_cb_cd(
     cf.add_nodata(df_cb_cd, ['Org Type'])
     df_cb_cd['Org Type'] = df_cb_cd['Org Type'].apply(lambda x: org_type_map[x] if x in org_type_map else x)
 
-    # load manual mappings of raw CB funding types to create mapping dictionaries
-    df_fund_type_mapping = pd.read_excel(funding_type_map_path/"funding_types_mapping.xlsx")
-    funding_dict = dict(zip(df_fund_type_mapping['api_funding_type'],
-                           df_fund_type_mapping['Cleaned_Funding_Type']))  # clean raw CB funding stages
-
-    # cleaned most recent funding stage
-    df_cb_cd['Funding Stage'] = df_cb_cd['Funding Stage'].apply(lambda x: funding_dict.get(x, x))
-
-    # add clean raw funding types
-    df_cb_cd['Funding Types'].fillna('', inplace=True)
+    # Funding Types is always a list (Candid rows may carry a bare string)
     df_cb_cd['Funding Types'] = df_cb_cd['Funding Types'].apply(
-        lambda x: [funding_dict.get(tag.strip(), tag) for tag in (x if isinstance(x, list) else [x])]
-        )
+        lambda x: x if isinstance(x, list) else ([] if x is None or x == '' or x != x else [x])
+    )
 
-    df_cb_cd['Stage_Category'] = df_cb_cd['Funding Stage'] #.map(stageCategoriesDict)  # map stages to broader categories
+    # Rows from sources without raw funding columns (Candid) get them derived
+    # from their display values, so every row has both vocabularies.
+    for raw_col, display_col in [(ft.FUNDING_TYPES_RAW_COL, 'Funding Types'),
+                                 (ft.FUNDING_STAGE_RAW_COL, 'Funding Stage')]:
+        if raw_col not in df_cb_cd.columns:
+            df_cb_cd[raw_col] = None
+        missing = df_cb_cd[raw_col].isna()
+        df_cb_cd.loc[missing, raw_col] = df_cb_cd.loc[missing, display_col].apply(ft.as_raw)
+
+    df_cb_cd['Stage_Category'] = df_cb_cd['Funding Stage']  # same as Funding Stage; kept for downstream readers
     df_cb_cd['Stage_Category'].fillna('', inplace=True)
     # add philanthropy versus venture
     df_cb_cd['Philanthropy_vs_Venture'] = df_cb_cd.apply(lambda x: fcalc.p_vs_venture(company_row=x), axis=1)

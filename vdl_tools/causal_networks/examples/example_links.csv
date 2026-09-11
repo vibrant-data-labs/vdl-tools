@@ -1,0 +1,91 @@
+Source,Target,yes,no
+Funding,Leadership buy-in,0,6
+Funding,Staff capacity,4,0
+Funding,Clear policies,1,2
+Funding,Training programs,4,1
+Funding,Community trust,2,3
+Funding,Data sharing,4,0
+Funding,Service quality,0,4
+Funding,Public awareness,0,6
+Funding,Volunteer retention,0,3
+Leadership buy-in,Funding,0,3
+Leadership buy-in,Staff capacity,4,0
+Leadership buy-in,Clear policies,2,1
+Leadership buy-in,Training programs,0,4
+Leadership buy-in,Community trust,2,2
+Leadership buy-in,Data sharing,3,1
+Leadership buy-in,Service quality,1,5
+Leadership buy-in,Public awareness,1,5
+Leadership buy-in,Volunteer retention,0,6
+Staff capacity,Funding,1,3
+Staff capacity,Leadership buy-in,0,3
+Staff capacity,Clear policies,0,5
+Staff capacity,Training programs,5,0
+Staff capacity,Community trust,2,4
+Staff capacity,Data sharing,1,3
+Staff capacity,Service quality,2,1
+Staff capacity,Public awareness,0,4
+Staff capacity,Volunteer retention,6,0
+Clear policies,Funding,0,5
+Clear policies,Leadership buy-in,2,4
+Clear policies,Staff capacity,0,5
+Clear policies,Training programs,0,5
+Clear policies,Community trust,1,5
+Clear policies,Data sharing,5,1
+Clear policies,Service quality,4,2
+Clear policies,Public awareness,0,3
+Clear policies,Volunteer retention,2,3
+Training programs,Funding,2,2
+Training programs,Leadership buy-in,0,3
+Training programs,Staff capacity,4,2
+Training programs,Clear policies,1,4
+Training programs,Community trust,1,5
+Training programs,Data sharing,1,3
+Training programs,Service quality,2,1
+Training programs,Public awareness,2,3
+Training programs,Volunteer retention,2,1
+Community trust,Funding,3,3
+Community trust,Leadership buy-in,2,4
+Community trust,Staff capacity,2,1
+Community trust,Clear policies,2,2
+Community trust,Training programs,1,3
+Community trust,Data sharing,0,3
+Community trust,Service quality,2,4
+Community trust,Public awareness,1,5
+Community trust,Volunteer retention,3,2
+Data sharing,Funding,1,4
+Data sharing,Leadership buy-in,0,3
+Data sharing,Staff capacity,0,6
+Data sharing,Clear policies,0,3
+Data sharing,Training programs,0,6
+Data sharing,Community trust,0,4
+Data sharing,Service quality,5,0
+Data sharing,Public awareness,1,5
+Data sharing,Volunteer retention,0,6
+Service quality,Funding,0,3
+Service quality,Leadership buy-in,0,3
+Service quality,Staff capacity,1,5
+Service quality,Clear policies,1,5
+Service quality,Training programs,0,4
+Service quality,Community trust,3,1
+Service quality,Data sharing,0,5
+Service quality,Public awareness,3,0
+Service quality,Volunteer retention,0,3
+Public awareness,Funding,2,4
+Public awareness,Leadership buy-in,2,4
+Public awareness,Staff capacity,2,4
+Public awareness,Clear policies,0,3
+Public awareness,Training programs,1,2
+Public awareness,Community trust,4,1
+Public awareness,Data sharing,0,5
+Public awareness,Service quality,0,3
+Public awareness,Volunteer retention,0,4
+Volunteer retention,Funding,2,2
+Volunteer retention,Leadership buy-in,0,5
+Volunteer retention,Staff capacity,2,4
+Volunteer retention,Clear policies,1,4
+Volunteer retention,Training programs,3,2
+Volunteer retention,Community trust,0,5
+Volunteer retention,Data sharing,1,3
+Volunteer retention,Service quality,2,2
+Volunteer retention,Public awareness,1,4
