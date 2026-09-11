@@ -624,3 +624,12 @@ def test_v2_409_raises_session_superseded_without_retry_or_reauth(api_v2_client,
 
     assert mock_session.request.call_count == 1   # no retry
     mock_session.post.assert_not_called()          # no re-login
+
+
+def test_default_api_version_is_v2(mock_session):
+    import os
+    from vdl_tools.scrape_enrich.netzero_insights import netzero_api
+    # NZI_API_VERSION still overrides; absent it, new clients are v2.
+    assert netzero_api.DEFAULT_API_VERSION == os.environ.get("NZI_API_VERSION", "v2")
+    if "NZI_API_VERSION" not in os.environ:
+        assert NetZeroAPI("user@example.com", "pw").api_version == "v2"

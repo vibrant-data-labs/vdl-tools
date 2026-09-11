@@ -41,10 +41,13 @@ SANDBOX_BASE_URL = "https://20.108.20.67"
 PROD_BASE_URL_V2 = api_v2.PROD_BASE_URL_V2
 SANDBOX_BASE_URL_V2 = api_v2.STAGE_BASE_URL_V2
 
-# Default API version for new clients. Still "v1" because the legacy API is
-# supported until 2027-02-28 and the v2 response mapping has not yet been
-# checked against live credentials — see README before flipping this.
-DEFAULT_API_VERSION = os.environ.get("NZI_API_VERSION", "v1")
+# Default API version for new clients. "v2" since 2026-09-11: the v2 client
+# was verified field by field against the live endpoint, the pipeline
+# produced identical survival classifications on a v1-cache-vs-v2-live
+# cohort, and a 1,000-row checkpointed search plus 150-company detail fetch
+# ran clean. The legacy "v1" stays selectable (api_version="v1" or
+# NZI_API_VERSION=v1) until NZI retires it on 2027-02-28.
+DEFAULT_API_VERSION = os.environ.get("NZI_API_VERSION", "v2")
 
 RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 # v1 expired *session cookies* could surface as either 401 or 403, so both
@@ -173,9 +176,9 @@ class NetZeroAPI:
                 batch. Note that stages fetched in parallel (e.g. startup
                 details + funding rounds) each get their own cap, so peak
                 concurrency against the API can be a small multiple of this.
-            api_version: ``"v1"`` for the legacy cookie-authenticated API
-                (default, supported by NZI until 2027-02-28) or ``"v2"`` for
-                the current bearer-token API.
+            api_version: ``"v2"`` (default) for the current bearer-token
+                API, or ``"v1"`` for the legacy cookie-authenticated API,
+                which NZI supports until 2027-02-28.
         """
         api_version = (api_version or DEFAULT_API_VERSION).lower()
         if api_version not in ("v1", "v2"):

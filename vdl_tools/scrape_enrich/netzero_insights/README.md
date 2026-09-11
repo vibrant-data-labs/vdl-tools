@@ -21,15 +21,15 @@ NZI rewrote their API. Both versions are live:
 | Search envelope | `{count, results}` | `{content, totalElements, totalPages, …}` |
 | Entity ID field | `clientID` / `investorID` | `id` |
 
-**NZI supports v1 until 2027-02-28.** This client still defaults to v1 because
-the v2 field mapping has not been checked against live credentials yet.
+**This client defaults to v2** (since 2026-09-11). NZI supports v1 until
+2027-02-28, and it stays selectable until then:
 
 ```python
-# Opt in per client…
-client = NetZeroAPI(username=..., password=..., api_version="v2")
+# Pin a client to the legacy API…
+client = NetZeroAPI(username=..., password=..., api_version="v1")
 
-# …or for a whole run
-NZI_API_VERSION=v2 python your_script.py
+# …or a whole run
+NZI_API_VERSION=v1 python your_script.py
 ```
 
 `config.ini` may also set `api_version` under `[netzero_insights]`.
@@ -46,7 +46,9 @@ NZI_API_VERSION=v2 python your_script.py
   re-login (which would revoke the other session in turn). Two logins within
   about a second additionally trip a throttle that answers 403 to *every*
   token for a minute or so.
-* Either way: **run one client per account at a time.**
+* Either way: **run one client per account at a time.** Calls through NZI's
+  own MCP server do *not* revoke a REST token (checked: a held token answered
+  200 before and after an MCP call), so the MCP can be used alongside a run.
 * **`GET /fundingRound/prints/{id}` — the path this client calls — works and
   answers in ~1s.** The path the legacy docs give, `fundingRoundsPrints/{id}`,
   is a 404. The earlier audit note that our path "matches neither doc version"
@@ -66,8 +68,10 @@ NZI_API_VERSION=v2 python your_script.py
   **label**; where v1 and v2 share the key name (`primaryType`,
   `secondaryTypes`, `fundingTypes`) the label overwrites in place and the
   objects/IDs are kept under `primaryTypeID`, `secondaryTypeIDs`,
-  `fundingTypeObjects`. The label vocabularies are unchanged — checked against
-  NZI's `DEAL_TYPE` and `INVESTOR_TYPE` lookups (see below).
+  `fundingTypeObjects`. An untyped investor's `primaryType` is `null` on both
+  versions (28 of a 300-investor sample) and passes through as such. The
+  label vocabularies are unchanged — checked against NZI's `DEAL_TYPE` and
+  `INVESTOR_TYPE` lookups (see below).
 * **`taxonomyItems` became `tagIDs`, keyed by `tagID`, not by the taxonomy
   item's `id`.** Passing the old IDs through raises a `ValueError` naming the
   replacement rather than silently filtering on the wrong concepts. Translate
