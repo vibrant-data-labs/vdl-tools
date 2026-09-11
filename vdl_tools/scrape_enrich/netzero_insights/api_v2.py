@@ -103,9 +103,6 @@ SORT_FIELDS_V2 = {
 # Legacy StartupFilter field -> v2 Company Filter field.
 COMPANY_FILTER_MAP_V2 = {
     "name": "name",
-    # Not in the published v2 docs, but present in NZI's own MCP filter schema
-    # and confirmed live (companyIDs=[668] -> Sunfire).
-    "ids": "companyIDs",
     "searchableLocations": "searchableLocationIDs",
     "financialStageIDs": "financialStageIDs",
     "trls": "trlIDs",
@@ -171,13 +168,16 @@ DEAL_FILTER_MAP_V2 = {
 
 # Legacy InvestorFilter field -> v2 Investor Filter field.
 INVESTOR_FILTER_MAP_V2 = {
-    # Not in the published v2 docs, but in NZI's MCP filter schema and
-    # confirmed live (investorIDs=[716] on a company search -> EIB's portfolio).
+    # Translated per operation in `to_v2_payload`: the REST endpoint silently
+    # ignores `investorIDs` under investorInclude and honours it only under
+    # dealInclude (confirmed live 2026-09-11).
     "investorIDs": "investorIDs",
     "investorTypeIDs": "typeIDs",
-    # The docs call this `includeOtherInvestorTypes`; NZI's MCP schema calls it
-    # `includeSecondaryTypes`. Unused by our callers; docs spelling kept.
-    "includeOtherInvestorTypes": "includeOtherInvestorTypes",
+    # The docs call this `includeOtherInvestorTypes`, which the endpoint
+    # silently ignores; `includeSecondaryTypes` (the spelling in NZI's MCP
+    # schema) is the one that changes the count — typeIDs=[1] gives 222
+    # without it and 252 with it. Confirmed live.
+    "includeOtherInvestorTypes": "includeSecondaryTypes",
     "investorDealsFrom": "numberOfDealsFrom",
     "investorDealsTo": "numberOfDealsTo",
     "investorSearchableLocations": "searchableLocationIDs",
@@ -192,6 +192,15 @@ INVESTOR_FILTER_MAP_V2 = {
 # these silently would widen a search without the caller noticing, so
 # `to_v2_payload` raises instead.
 UNSUPPORTED_COMPANY_FILTERS_V2 = {
+    # The REST endpoint has no company-ID predicate. `ids`, `companyIDs`,
+    # `companyIds` and `id` all return the full universe (confirmed live).
+    # NZI's own MCP server *appears* to support `companyIDs`, but it emulates
+    # it client-side; the endpoint itself silently drops unknown fields.
+    "ids": (
+        "v2 has no company-ID search filter — the endpoint silently ignores "
+        "every spelling. Fetch the companies directly via "
+        "get_startup_details(ids) instead of filtering a search by ID."
+    ),
     # v2 folded taxonomy items into tags, but the IDs are NOT interchangeable:
     # /taxonomy/itemDtos returns both an item `id` and a separate `tagID`.
     "taxonomyItems": (
@@ -207,9 +216,22 @@ UNSUPPORTED_COMPANY_FILTERS_V2 = {
     "sustainabilities": "v2's Company Filter has no sustainability predicate.",
     "patentSearch": "v2's Company Filter has no patent predicates.",
     "investors": (
-        "v2 filters companies by investor through `investorInclude.investorIDs`; "
-        "pass include_investors=... instead."
+        "v2 filters companies by investor through `dealInclude.investorIDs`; "
+        "pass include_investors=... which is routed there."
     ),
+}
+
+
+# Value coercions applied after a key is mapped. v1 documented `wildcards` and
+# `regexps` as lists and accepted them; v2's docs still say "List of string"
+# but the endpoint deserialises a single String — a list is an HTTP 500
+# ("Cannot deserialize value of type `java.lang.String` from Array value").
+# Confirmed against the live REST endpoint 2026-09-11. `create_search_filter`
+# builds a one-element list whose element is already the space-joined query,
+# so joining is lossless for every caller in this repo.
+V2_VALUE_COERCIONS = {
+    "wildcards": lambda v: " ".join(v) if isinstance(v, list) else v,
+    "regexps": lambda v: " ".join(v) if isinstance(v, list) else v,
 }
 
 
@@ -241,12 +263,20 @@ def translate_company_filter(startup_filter) -> Dict[str, Any]:
                 f"{UNSUPPORTED_COMPANY_FILTERS_V2[key]}"
             )
         if key in COMPANY_FILTER_MAP_V2:
-            translated[COMPANY_FILTER_MAP_V2[key]] = value
+            v2_key = COMPANY_FILTER_MAP_V2[key]
+            translated[v2_key] = V2_VALUE_COERCIONS.get(v2_key, lambda v: v)(value)
         else:
             logger.warning(
                 "NZI v2: dropping unmapped company filter `%s` — it has no "
                 "documented v2 equivalent", key,
             )
+    if "wildcards" in translated and not translated.get("wildcardsFields"):
+        # The endpoint answers HTTP 500 ("wildcardFields is null") rather than
+        # defaulting the fields, so fail here with a message that says why.
+        raise ValueError(
+            "NZI v2 requires `wildcardsFields` alongside `wildcards`. Valid "
+            "fields: pitchLine, description, websiteContent."
+        )
     return translated
 
 
@@ -301,6 +331,28 @@ def to_v2_payload(operation: str, main_filter: Optional[MainFilter]) -> Dict[str
         translated = translate(source.get(legacy_key))
         if translated or v2_key in (include_key, exclude_key):
             body[v2_key] = translated
+
+    # `investorIDs` has exactly one working home on the REST endpoint:
+    # `dealInclude`/`dealExclude`. Confirmed live: investorInclude.investorIDs
+    # is silently ignored on every search, while dealInclude.investorIDs=[716]
+    # narrows a company search to EIB's 183 portfolio companies — the number
+    # NZI's MCP reports, because the MCP performs this same translation. On
+    # an investor search there is no working predicate at all, so that raises
+    # rather than returning the whole universe.
+    for investor_key, deal_key in (("investorInclude", "dealInclude"),
+                                   ("investorExclude", "dealExclude")):
+        investor_ids = body.get(investor_key, {}).pop("investorIDs", None)
+        if not investor_ids:
+            continue
+        if operation == "search_investors":
+            raise ValueError(
+                "Filter `investorIDs` is not supported by the NZI v2 investor "
+                "search — the endpoint ignores it. Fetch investors by ID with "
+                "get_investor_details() instead."
+            )
+        body.setdefault(deal_key, {})["investorIDs"] = investor_ids
+        if not body[investor_key] and investor_key not in (include_key, exclude_key):
+            del body[investor_key]
     return body
 
 
@@ -321,11 +373,15 @@ def to_v2_query_params(
 
     sort_field = SORT_FIELDS_V2.get(sorting.field)
     if sort_field is None:
-        logger.warning(
-            "NZI v2: no documented sortField for `%s` — passing it through "
-            "unchanged; v2 may reject it", sorting.field,
-        )
-        sort_field = sorting.field
+        if sorting.field in SORT_FIELDS_V2.values():
+            sort_field = sorting.field  # already a v2 enum value
+        else:
+            # The endpoint answers HTTP 400 for anything outside its enum.
+            raise ValueError(
+                f"Unknown NZI v2 sort field {sorting.field!r}. Use a legacy name "
+                f"{sorted(SORT_FIELDS_V2)} or a v2 value "
+                f"{sorted(set(SORT_FIELDS_V2.values()))}."
+            )
     params["sortField"] = sort_field
     params["sortDirection"] = "DESC" if str(sorting.order).lower().startswith("desc") else "ASC"
     return params

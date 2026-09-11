@@ -1018,7 +1018,40 @@ class NetZeroAPI:
         item ``id``s, while v2's replacement ``tagIDs`` filter takes ``tagID``s.
         Use :meth:`get_taxonomy_item_tag_ids` to translate between them.
         """
+        if self.is_v2:
+            raise NotImplementedError(
+                "GET /taxonomy/itemDtos does not exist on the v2 host (route not "
+                "found — confirmed live 2026-09-11). Resolve tag IDs with "
+                "search_tags(name) on v2, or use a v1 client for the item->tagID map."
+            )
         return self._get(endpoint="taxonomy/itemDtos")
+
+    def search_tags(self, name: str = None, page_size: int = 50, page_number: int = 0) -> Dict:
+        """Search tags by name (``GET /tags``) — the v2 way to resolve the
+        ``tagIDs`` a company filter takes.
+
+        Returns the paginated ``{content, totalElements, ...}`` envelope; each
+        tag carries ``id``, ``label`` and ``tagType``. v2 only.
+        """
+        if not self.is_v2:
+            raise NotImplementedError("GET /tags is a v2 endpoint; on v1 use get_all_taxonomy_items().")
+        params = {"pageSize": page_size, "pageNumber": page_number}
+        if name:
+            params["name"] = name
+        return self._get(endpoint="tags", params=params)
+
+    def lookup_searchable_locations(self, location: str) -> Dict:
+        """Resolve a place name to the IDs ``searchableLocationIDs`` accepts.
+
+        Those are searchable-location *entity* IDs (Germany -> 817600,
+        Dresden -> 814818), not the ``country.id`` / ``continent.id`` nested
+        inside company records — passing 80 (Germany's ``country.id``) is
+        silently ignored by the endpoint. Confirmed live 2026-09-11. Returns
+        ``{continents, regions, countries, admins, cities}``.
+        """
+        if self.is_v2:
+            return self._get(endpoint="searchable-locations", params={"location": location})
+        return self._get(endpoint=f"searchLocation/{location}")
 
     def get_taxonomy_item_tag_ids(self) -> Dict[int, int]:
         """Map taxonomy item ``id`` -> ``tagID`` for v1 -> v2 filter translation."""
@@ -1029,15 +1062,21 @@ class NetZeroAPI:
         }
 
     def get_taxonomy_children(self, parent_id: int) -> List[Dict]:
-        """Get taxonomy for a specific parent ID.
+        """Get the children of a taxonomy graph node.
 
-        NZI documents this as ``GET /taxonomy/graph/{parentID}`` and has not
-        republished the taxonomy endpoints under the v2 host, so v2 clients
-        issue the documented GET. v1 keeps the POST-with-body form that is
-        already in production use here.
+        NZI documents this as ``GET /taxonomy/graph/{parentID}``, but both
+        hosts actually serve it as POST (the v2 host answers GET with "Request
+        method 'GET' is not supported" — confirmed live 2026-09-11), so the
+        POST-with-body form already in production use here is kept for both.
+
+        On v2 the graph itself differs: legacy node IDs such as 660 return no
+        children and the root (``POST /taxonomy/graph``) is a different tree
+        ("Verticals map" / "Horizontals map"). Children keep the legacy
+        ``{id, label, description, hasChildren}`` keys — recursion via
+        ``child["id"]`` works — and add ``tag``, ``companyCount``,
+        ``dealCount`` and funding totals. `get_flat_nzi_taxonomy` stays on v1
+        until its ``ROOT_ID`` is remapped to the v2 tree.
         """
-        if self.is_v2:
-            return self._get(endpoint=f"taxonomy/graph/{parent_id}")
         payload = {
             'onlyVisible': True,
             'onlyAdvancedFilters': False,

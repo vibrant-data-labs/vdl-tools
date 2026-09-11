@@ -231,18 +231,32 @@ def test_company_filter_is_renamed_and_renested():
         "searchableLocationIDs": [226],
         "totalFundingAmountFrom": 1_000_000,
         "numberOfDealsFrom": 2,
-        "wildcards": ['"ocean"'],
+        # v2 deserialises a single String here; a list is an HTTP 500.
+        "wildcards": '"ocean"',
         "wildcardsFields": ["pitchLine"],
     }
     assert body["companyExclude"] == {}
 
 
-def test_company_ids_translate_to_companyids():
-    # Absent from the published docs, present in NZI's MCP filter schema, and
-    # confirmed live: companyIDs=[668] returns Sunfire.
-    main_filter = MainFilter(include=StartupFilter(ids=[1, 2, 3]))
+def test_wildcards_list_is_joined_to_the_string_v2_requires():
+    # Confirmed live: ["\"x\""] -> 500 "Cannot deserialize String from Array";
+    # "\"x\"" -> 200. create_search_filter emits a one-element list.
+    fields = ["pitchLine", "description"]
+    main_filter = MainFilter(include=StartupFilter(wildcards=['"ocean" -"marine"'], wildcardsFields=fields))
     body = api_v2.to_v2_payload("search_companies", main_filter)
-    assert body["companyInclude"] == {"companyIDs": [1, 2, 3]}
+    assert body["companyInclude"]["wildcards"] == '"ocean" -"marine"'
+    # A pre-joined string (only reachable via a raw dict — StartupFilter types
+    # wildcards as a list) passes through untouched.
+    main_filter = MainFilter(include={"wildcards": '"ocean"', "wildcardsFields": fields})
+    assert api_v2.to_v2_payload("search_companies", main_filter)["companyInclude"]["wildcards"] == '"ocean"'
+
+
+def test_company_id_filter_raises_rather_than_silently_widening():
+    # Confirmed live: ids / companyIDs / companyIds / id all return the full
+    # 151,846-company universe — the endpoint drops unknown fields silently.
+    main_filter = MainFilter(include=StartupFilter(ids=[1, 2, 3]))
+    with pytest.raises(ValueError, match="no company-ID search filter"):
+        api_v2.to_v2_payload("search_companies", main_filter)
 
 
 def test_taxonomy_items_filter_raises_with_tagid_guidance():
@@ -257,16 +271,51 @@ def test_tags_filter_translates_to_tag_ids():
     assert body["companyInclude"] == {"tagIDs": [995], "tagsConceptsMode": "OR"}
 
 
-def test_investor_ids_stay_on_the_investor_filter():
-    # v2's composite filter accepts investorInclude on a company search;
-    # confirmed live (investorIDs=[716] -> EIB's 183 portfolio companies).
+def test_investor_ids_are_rerouted_onto_the_deal_filter():
+    # Confirmed live: investorInclude.investorIDs=[716] is ignored (151,846);
+    # dealInclude.investorIDs=[716] narrows to EIB's 183 portfolio companies.
     main_filter = MainFilter(investorInclude=InvestorFilter(investorIDs=[9156]))
 
     body = api_v2.to_v2_payload("search_companies", main_filter)
 
-    assert body["investorInclude"] == {"investorIDs": [9156]}
+    assert body["dealInclude"] == {"investorIDs": [9156]}
     assert body["companyInclude"] == {}
-    assert "dealInclude" not in body
+    # Nothing is left under investorInclude, so the key is dropped entirely.
+    assert "investorInclude" not in body
+
+
+def test_investor_ids_on_an_investor_search_raise():
+    # No spelling filters an investor search by ID on the endpoint; returning
+    # all 50,493 investors would be the silent failure mode.
+    main_filter = MainFilter(investorInclude=InvestorFilter(investorIDs=[716]))
+    with pytest.raises(ValueError, match="not supported by the NZI v2 investor search"):
+        api_v2.to_v2_payload("search_investors", main_filter)
+
+
+def test_include_other_investor_types_maps_to_the_spelling_that_works():
+    # Docs say includeOtherInvestorTypes; the endpoint ignores that and honours
+    # includeSecondaryTypes (typeIDs=[1]: 222 without, 252 with). Confirmed live.
+    main_filter = MainFilter(
+        investorInclude=InvestorFilter(investorTypeIDs=[1], includeOtherInvestorTypes=True),
+    )
+    body = api_v2.to_v2_payload("search_investors", main_filter)
+    assert body["investorInclude"] == {"typeIDs": [1], "includeSecondaryTypes": True}
+
+
+def test_wildcards_without_fields_raises():
+    # The endpoint answers HTTP 500 "wildcardFields is null" instead of
+    # defaulting them. Confirmed live.
+    main_filter = MainFilter(include=StartupFilter(wildcards=['"ocean"']))
+    with pytest.raises(ValueError, match="requires `wildcardsFields`"):
+        api_v2.to_v2_payload("search_companies", main_filter)
+
+
+def test_unknown_sort_field_raises_and_enum_values_pass_through():
+    # sortField=fundingAmount is HTTP 400 on the endpoint; TOTAL_FUNDING_AMOUNT works.
+    with pytest.raises(ValueError, match="Unknown NZI v2 sort field"):
+        api_v2.to_v2_query_params(0, 10, Sorting(field="bogus", order="desc"))
+    params = api_v2.to_v2_query_params(0, 10, Sorting(field="TOTAL_FUNDING_AMOUNT", order="desc"))
+    assert params["sortField"] == "TOTAL_FUNDING_AMOUNT"
 
 
 def test_investor_search_filter_is_translated():
@@ -418,8 +467,8 @@ def test_deal_filter_still_applies_on_a_company_search():
     )
     body = api_v2.to_v2_payload("search_companies", main_filter)
     assert body["companyInclude"] == {"name": "Solar"}
-    assert body["dealInclude"] == {"amountFrom": 500_000}
-    assert body["investorInclude"] == {"investorIDs": [9156]}
+    assert body["dealInclude"] == {"amountFrom": 500_000, "investorIDs": [9156]}
+    assert "investorInclude" not in body
 
 
 def test_normalize_investor_collapses_type_objects_to_labels():
@@ -491,3 +540,50 @@ def test_v2_final_short_page_is_not_an_error(api_v2_client, mock_session):
         operation="search_companies", page_size=10, checkpoint_dir=None,
     )
     assert result["count"] == 25
+
+
+# --------------------------------------------------------------------------
+# Taxonomy / lookups on the v2 host
+# --------------------------------------------------------------------------
+
+def test_v2_taxonomy_children_uses_post(api_v2_client, mock_session):
+    # Documented as GET; the v2 host answers GET with "method not supported"
+    # and serves POST (any body). Confirmed live.
+    mock_session.request.return_value = _response([{"tag": {"label": "x", "id": 1}}])
+
+    out = api_v2_client.get_taxonomy_children(359)
+
+    args, kwargs = mock_session.request.call_args
+    assert args[0] == "POST"
+    assert args[1] == "https://api-new.netzeroinsights.com/taxonomy/graph/359"
+    assert out == [{"tag": {"label": "x", "id": 1}}]
+
+
+def test_v2_all_taxonomy_items_raises(api_v2_client):
+    # /taxonomy/itemDtos is not routed on the v2 host. Confirmed live.
+    with pytest.raises(NotImplementedError, match="does not exist on the v2 host"):
+        api_v2_client.get_all_taxonomy_items()
+
+
+def test_v2_search_tags_hits_tags_endpoint(api_v2_client, mock_session):
+    mock_session.request.return_value = _response({"content": [{"id": 212, "label": "Hydrogen"}], "totalElements": 1})
+
+    out = api_v2_client.search_tags("hydrogen", page_size=5)
+
+    args, kwargs = mock_session.request.call_args
+    assert args[0] == "GET"
+    assert args[1] == "https://api-new.netzeroinsights.com/tags"
+    assert kwargs["params"] == {"pageSize": 5, "pageNumber": 0, "name": "hydrogen"}
+    assert out["content"][0]["id"] == 212
+
+
+def test_v2_lookup_searchable_locations(api_v2_client, mock_session):
+    mock_session.request.return_value = _response({"countries": [{"id": 817600}], "cities": []})
+
+    out = api_v2_client.lookup_searchable_locations("Germany")
+
+    args, kwargs = mock_session.request.call_args
+    assert args[0] == "GET"
+    assert args[1] == "https://api-new.netzeroinsights.com/searchable-locations"
+    assert kwargs["params"] == {"location": "Germany"}
+    assert out["countries"][0]["id"] == 817600
