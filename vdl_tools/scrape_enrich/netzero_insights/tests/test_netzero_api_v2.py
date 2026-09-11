@@ -237,10 +237,12 @@ def test_company_filter_is_renamed_and_renested():
     assert body["companyExclude"] == {}
 
 
-def test_company_id_filter_raises_rather_than_silently_widening():
+def test_company_ids_translate_to_companyids():
+    # Absent from the published docs, present in NZI's MCP filter schema, and
+    # confirmed live: companyIDs=[668] returns Sunfire.
     main_filter = MainFilter(include=StartupFilter(ids=[1, 2, 3]))
-    with pytest.raises(ValueError, match="no company-ID filter"):
-        api_v2.to_v2_payload("search_companies", main_filter)
+    body = api_v2.to_v2_payload("search_companies", main_filter)
+    assert body["companyInclude"] == {"companyIDs": [1, 2, 3]}
 
 
 def test_taxonomy_items_filter_raises_with_tagid_guidance():
@@ -255,15 +257,16 @@ def test_tags_filter_translates_to_tag_ids():
     assert body["companyInclude"] == {"tagIDs": [995], "tagsConceptsMode": "OR"}
 
 
-def test_investor_ids_are_rerouted_onto_the_deal_filter():
-    # v2's Investor Filter has no ID predicate; the equivalent lives on the
-    # deal filter.
+def test_investor_ids_stay_on_the_investor_filter():
+    # v2's composite filter accepts investorInclude on a company search;
+    # confirmed live (investorIDs=[716] -> EIB's 183 portfolio companies).
     main_filter = MainFilter(investorInclude=InvestorFilter(investorIDs=[9156]))
 
     body = api_v2.to_v2_payload("search_companies", main_filter)
 
-    assert body["dealInclude"] == {"investorIDs": [9156]}
-    assert "investorIDs" not in body["companyInclude"]
+    assert body["investorInclude"] == {"investorIDs": [9156]}
+    assert body["companyInclude"] == {}
+    assert "dealInclude" not in body
 
 
 def test_investor_search_filter_is_translated():
@@ -341,7 +344,14 @@ def test_normalize_deal_derives_round_investor_ids():
         "dealDate": "2026-06-01",
         "amountUSD": 500_000,
         "company": {"id": 16441},
-        "investors": [{"id": 11, "name": "A"}, {"id": 22, "name": "B"}],
+        # REST docs spell the embedded investor id `id`; NZI's MCP view spells
+        # it `investorID`. Both must yield an ID.
+        "investors": [{"id": 11, "name": "A"}, {"investorID": 22, "name": "B"}],
+        "type": {"label": "Series A", "filterable": False, "id": 91},
+        "fundingType": {"label": "Equity", "id": 1},
+        "equityStage": {"label": "Early stage", "id": 3},
+        "exitStage": {"label": "Venture", "id": 1},
+        "connectedToInfrastructure": "NO",
     }
 
     out = api_v2.normalize_deal(deal)
@@ -351,6 +361,16 @@ def test_normalize_deal_derives_round_investor_ids():
     assert out["clientId"] == 16441
     assert out["roundDate"] == "2026-06-01"
     assert out["roundAmountUSD"] == 500_000
+    # v1 shipped bare strings here and process_nzi string-compares them
+    # (`round_type_nzi.isin(DISCLOSED_STAGES_ORDERED)`, `== "Equity"`).
+    assert out["roundType"] == "Series A"
+    assert out["financingType"] == "Equity"
+    assert out["equityStageID"] == 3
+    assert out["exitStageID"] == 1
+    # "NO" is a truthy string; the legacy alias must be a real bool.
+    assert out["connectedToInfrastructureDeal"] is False
+    # The v2 objects are kept intact for audit.
+    assert out["type"] == {"label": "Series A", "filterable": False, "id": 91}
 
 
 def test_normalize_investor_aliases_id():
@@ -398,4 +418,76 @@ def test_deal_filter_still_applies_on_a_company_search():
     )
     body = api_v2.to_v2_payload("search_companies", main_filter)
     assert body["companyInclude"] == {"name": "Solar"}
-    assert body["dealInclude"] == {"amountFrom": 500_000, "investorIDs": [9156]}
+    assert body["dealInclude"] == {"amountFrom": 500_000}
+    assert body["investorInclude"] == {"investorIDs": [9156]}
+
+
+def test_normalize_investor_collapses_type_objects_to_labels():
+    # v1: primaryType "Venture Capital", secondaryTypes ["..."]. v2 wraps both
+    # in {label, id}. process_nzi.investor does `primaryType in source_types`
+    # and `set(secondaryTypes) & source_types` — objects would silently miss
+    # the first and raise (unhashable dict) on the second.
+    out = api_v2.normalize_investor({
+        "id": 10393,
+        "primaryType": {"label": "Venture Capital", "id": 10},
+        "secondaryTypes": [{"label": "Academic/Research Institutions", "id": 75}],
+        "isStrategic": True,
+        "isGrowthInvestor": False,
+        "growthInvestmentCount": 4,
+        "dealsCount": 18,
+        "linkedinUrl": "https://linkedin.com/company/x",
+    })
+    assert out["primaryType"] == "Venture Capital"
+    assert out["primaryTypeID"] == 10
+    assert out["secondaryTypes"] == ["Academic/Research Institutions"]
+    assert out["secondaryTypeIDs"] == [75]
+    assert out["investorType"] == "Venture Capital"
+    # v1's bare names for the flags/counts process_nzi.investor lists.
+    assert out["strategic"] is True
+    assert out["growthInvestor"] is False
+    assert out["growthDealsCount"] == 4
+    assert out["numberOfDeals"] == 18
+    assert out["linkedInURL"] == "https://linkedin.com/company/x"
+
+
+def test_normalize_company_collapses_type_objects_to_labels():
+    out = api_v2.normalize_company({
+        "id": 668,
+        "lastDealType": {"label": "Grant", "id": 79},
+        "fundingTypes": [{"label": "Equity", "id": 1}, {"label": "Grant", "id": 3}],
+        "foundedYear": 2010,
+    })
+    assert out["lastRoundType"] == "Grant"
+    assert out["fundingTypes"] == ["Equity", "Grant"]
+    assert out["fundingTypeObjects"] == [{"label": "Equity", "id": 1}, {"label": "Grant", "id": 3}]
+    # v1 `foundedDate` was already the integer year, so this is exact.
+    assert out["foundedDate"] == 2010
+
+
+def test_v2_token_read_from_any_token_like_header(mock_session):
+    # The docs never name the header, only that the token is "in the headers".
+    mock_session.post.return_value = _response(payload=None, headers={"X-Access-Token": TOKEN})
+    client = NetZeroAPI("user@example.com", "pw", api_version="v2")
+    assert client._access_token == TOKEN
+
+
+def test_v2_short_page_with_rows_remaining_raises(api_v2_client, mock_session):
+    # The server clamped pageSize=100 down to 10 while 100 rows exist. Paging
+    # on with page_number*100 offsets would silently skip rows 10-99, 110-199…
+    mock_session.request.return_value = _response({
+        "content": [{"id": i} for i in range(10)],
+        "totalElements": 100, "pageSize": 10, "pageNumber": 0,
+    })
+    with pytest.raises(ValueError, match="clamps page size"):
+        api_v2_client._search_entities(
+            operation="search_companies", page_size=100, checkpoint_dir=None,
+        )
+
+
+def test_v2_final_short_page_is_not_an_error(api_v2_client, mock_session):
+    # A short LAST page is normal: 25 rows, page_size 10 -> pages of 10/10/5.
+    mock_session.request.side_effect = _page_responder(total=25)
+    result = api_v2_client._search_entities(
+        operation="search_companies", page_size=10, checkpoint_dir=None,
+    )
+    assert result["count"] == 25

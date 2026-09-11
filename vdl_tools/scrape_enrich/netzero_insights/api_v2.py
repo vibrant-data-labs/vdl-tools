@@ -22,9 +22,17 @@ a normalised record is a superset of what the API returned: nothing is dropped,
 `process_nzi` keeps finding the names it expects, and the raw v2 payload stays
 available for audit. Aliases are only written when the legacy key is absent.
 
-Mappings marked ``# UNVERIFIED`` below are inferred from the published docs and
-have not been checked against a live v2 response — see README for the
-verification checklist.
+A v2 subtlety that bites downstream: fields v1 exposed as bare strings
+(``roundType: "Late VC"``, ``primaryType: "Venture Capital"``) are
+``{label, id}`` objects in v2. `process_nzi` compares these as strings, so the
+legacy aliases hold the ``label`` and the object is kept under its v2 name (or
+an ``…ID`` alias where v1 also had one).
+
+Verified against NZI's own MCP server (which proxies the v2 API): entity IDs
+are unchanged between versions, the deal-type and investor-type vocabularies,
+the ``companyIDs`` / ``investorIDs`` filters, and the search envelope. Not yet
+verified against the raw REST endpoint: whether ``wildcards`` is a list (docs)
+or a string (MCP schema), and the maximum ``pageSize`` — see README.
 """
 
 from typing import Any, Dict, List, Optional
@@ -95,6 +103,9 @@ SORT_FIELDS_V2 = {
 # Legacy StartupFilter field -> v2 Company Filter field.
 COMPANY_FILTER_MAP_V2 = {
     "name": "name",
+    # Not in the published v2 docs, but present in NZI's own MCP filter schema
+    # and confirmed live (companyIDs=[668] -> Sunfire).
+    "ids": "companyIDs",
     "searchableLocations": "searchableLocationIDs",
     "financialStageIDs": "financialStageIDs",
     "trls": "trlIDs",
@@ -160,7 +171,12 @@ DEAL_FILTER_MAP_V2 = {
 
 # Legacy InvestorFilter field -> v2 Investor Filter field.
 INVESTOR_FILTER_MAP_V2 = {
+    # Not in the published v2 docs, but in NZI's MCP filter schema and
+    # confirmed live (investorIDs=[716] on a company search -> EIB's portfolio).
+    "investorIDs": "investorIDs",
     "investorTypeIDs": "typeIDs",
+    # The docs call this `includeOtherInvestorTypes`; NZI's MCP schema calls it
+    # `includeSecondaryTypes`. Unused by our callers; docs spelling kept.
     "includeOtherInvestorTypes": "includeOtherInvestorTypes",
     "investorDealsFrom": "numberOfDealsFrom",
     "investorDealsTo": "numberOfDealsTo",
@@ -176,11 +192,6 @@ INVESTOR_FILTER_MAP_V2 = {
 # these silently would widen a search without the caller noticing, so
 # `to_v2_payload` raises instead.
 UNSUPPORTED_COMPANY_FILTERS_V2 = {
-    # v2's Company Filter has no company-ID predicate at all.
-    "ids": (
-        "v2 has no company-ID filter. Fetch the companies directly via "
-        "get_startup_details(ids) instead of filtering a search by ID."
-    ),
     # v2 folded taxonomy items into tags, but the IDs are NOT interchangeable:
     # /taxonomy/itemDtos returns both an item `id` and a separate `tagID`.
     "taxonomyItems": (
@@ -196,8 +207,8 @@ UNSUPPORTED_COMPANY_FILTERS_V2 = {
     "sustainabilities": "v2's Company Filter has no sustainability predicate.",
     "patentSearch": "v2's Company Filter has no patent predicates.",
     "investors": (
-        "v2 filters companies by investor through `dealInclude.investorIDs`; "
-        "pass include_investors=... which is routed to the deal filter."
+        "v2 filters companies by investor through `investorInclude.investorIDs`; "
+        "pass include_investors=... instead."
     ),
 }
 
@@ -244,11 +255,6 @@ def translate_investor_filter(investor_filter) -> Dict[str, Any]:
     source = _prune(_as_dict(investor_filter))
     translated = {}
     for key, value in source.items():
-        if key == "investorIDs":
-            # v2's Investor Filter has no investorIDs; the caller-facing
-            # meaning ("companies backed by these investors") lives on the
-            # deal filter in v2. Handled by to_v2_payload, not here.
-            continue
         if key in INVESTOR_FILTER_MAP_V2:
             translated[INVESTOR_FILTER_MAP_V2[key]] = value
         else:
@@ -273,43 +279,28 @@ def translate_deal_filter(deal_filter) -> Dict[str, Any]:
 def to_v2_payload(operation: str, main_filter: Optional[MainFilter]) -> Dict[str, Any]:
     """Build the v2 request body for a search operation.
 
-    ``investorIDs`` is rerouted onto ``dealInclude``/``dealExclude``: in v1 an
-    investor-ID predicate on a company search lived under ``investorInclude``,
-    but v2's Investor Filter has no ID predicate and the equivalent is
-    ``dealInclude.investorIDs``.
+    The v2 filter is composite: every search accepts all six of
+    ``companyInclude/Exclude``, ``investorInclude/Exclude`` and
+    ``dealInclude/Exclude`` (confirmed against NZI's MCP schema), so each
+    legacy section is translated to its v2 counterpart. The operation's own
+    pair is always present, even when empty; the others only when non-empty.
     """
     include_key, exclude_key = FILTER_KEYS_V2[operation]
-    main_filter = main_filter or MainFilter()
-    source = _as_dict(main_filter)
+    source = _as_dict(main_filter or MainFilter())
 
-    body: Dict[str, Any] = {include_key: {}, exclude_key: {}}
-
-    if operation == "search_companies":
-        body[include_key] = translate_company_filter(source.get("include"))
-        body[exclude_key] = translate_company_filter(source.get("exclude"))
-    elif operation == "search_investors":
-        body[include_key] = translate_investor_filter(source.get("investorInclude"))
-        body[exclude_key] = translate_investor_filter(source.get("investorExclude"))
-    elif operation == "search_deals":
-        body[include_key] = translate_deal_filter(source.get("fundingRoundInclude"))
-        body[exclude_key] = translate_deal_filter(source.get("fundingRoundExclude"))
-
-    # A deal-scoped filter still applies when searching companies: v2 keeps
-    # `dealInclude`/`dealExclude` alongside `companyInclude`/`companyExclude`.
-    if operation != "search_deals":
-        for legacy_key, v2_key in (("fundingRoundInclude", "dealInclude"),
-                                   ("fundingRoundExclude", "dealExclude")):
-            translated = translate_deal_filter(source.get(legacy_key))
-            if translated:
-                body.setdefault(v2_key, {}).update(translated)
-
-    # Investor-ID predicates ride on the deal filter in v2.
-    for legacy_key, v2_key in (("investorInclude", "dealInclude"),
-                               ("investorExclude", "dealExclude")):
-        investor_ids = _prune(_as_dict(source.get(legacy_key))).get("investorIDs")
-        if investor_ids:
-            body.setdefault(v2_key, {})["investorIDs"] = investor_ids
-
+    sections = (
+        ("include", "companyInclude", translate_company_filter),
+        ("exclude", "companyExclude", translate_company_filter),
+        ("investorInclude", "investorInclude", translate_investor_filter),
+        ("investorExclude", "investorExclude", translate_investor_filter),
+        ("fundingRoundInclude", "dealInclude", translate_deal_filter),
+        ("fundingRoundExclude", "dealExclude", translate_deal_filter),
+    )
+    body: Dict[str, Any] = {}
+    for legacy_key, v2_key, translate in sections:
+        translated = translate(source.get(legacy_key))
+        if translated or v2_key in (include_key, exclude_key):
+            body[v2_key] = translated
     return body
 
 
@@ -355,6 +346,28 @@ def _dig(record: Dict[str, Any], *path: str) -> Any:
     return current
 
 
+def _label(value: Any) -> Any:
+    """Collapse a v2 ``{label, id}`` object to its label; pass strings through.
+
+    v1 exposed these as bare strings and downstream compares them as strings
+    (``round_type_nzi.isin([...])``, ``primaryType in source_types``), so the
+    legacy alias must carry the label, never the object.
+    """
+    if isinstance(value, dict):
+        return value.get("label")
+    return value
+
+
+def _id_of(value: Any) -> Any:
+    return value.get("id") if isinstance(value, dict) else None
+
+
+def _labels(values: Any) -> Any:
+    if isinstance(values, list):
+        return [_label(v) for v in values]
+    return values
+
+
 def normalize_company(company: Dict[str, Any]) -> Dict[str, Any]:
     """Add legacy field aliases to a v2 company record.
 
@@ -376,7 +389,8 @@ def normalize_company(company: Dict[str, Any]) -> Dict[str, Any]:
     _alias(out, "lastRoundAmountString", out.get("lastDealAmountStringEUR"))
     _alias(out, "lastRoundAmountStringUSD", out.get("lastDealAmountStringUSD"))
     _alias(out, "lastRoundDate", out.get("lastDealDate"))
-    _alias(out, "lastRoundType", out.get("lastDealType"))
+    # v1: "Grant"; v2: {label: "Grant", id: 79}
+    _alias(out, "lastRoundType", _label(out.get("lastDealType")))
     _alias(out, "roundCount", out.get("dealCount"))
     _alias(out, "numberOfEquityRounds", out.get("numberOfEquityDeals"))
     _alias(out, "numberOfGrants", out.get("numberOfGrantDeals"))
@@ -390,10 +404,16 @@ def normalize_company(company: Dict[str, Any]) -> Dict[str, Any]:
     _alias(out, "champion", out.get("isChampion"))
     _alias(out, "emerging", out.get("isEmerging"))
     _alias(out, "newEntrant", out.get("isNewEntrant"))
-    # NOTE: type change — v1 `foundedDate` was a date string, v2 `foundedYear`
-    # is an integer year. Downstream code that parses this as a date must be
-    # updated; we alias it so the column exists, not because it is equivalent.
+    # Despite the name, v1 `foundedDate` was already the integer year
+    # (e.g. 2010), so this alias is exact.
     _alias(out, "foundedDate", out.get("foundedYear"))
+    # v1: ["Grant"]; v2: [{label: "Grant", id: 79}]. Same key in both
+    # versions, so the labels overwrite in place and the objects are kept.
+    if isinstance(out.get("fundingTypes"), list) and any(
+        isinstance(v, dict) for v in out["fundingTypes"]
+    ):
+        out["fundingTypeObjects"] = out["fundingTypes"]
+        out["fundingTypes"] = _labels(out["fundingTypes"])
 
     # v2 nests what v1 kept flat.
     _alias(out, "city", _dig(out, "searchableLocation", "cityName"))
@@ -423,21 +443,36 @@ def normalize_deal(deal: Dict[str, Any], company_id: Optional[int] = None) -> Di
     _alias(out, "coFundingRoundID", out.get("id"))
     _alias(out, "clientId", company_id if company_id is not None else _dig(out, "company", "id"))
     _alias(out, "roundDate", out.get("dealDate"))
-    _alias(out, "roundType", out.get("type"))
-    _alias(out, "financingType", out.get("fundingType"))  # UNVERIFIED
+    # v1: roundType "Late VC", financingType "Equity" — bare strings that
+    # `process_nzi` matches against DISCLOSED_STAGES_ORDERED / "Equity".
+    # v2: type {label: "Late VC", id: 83}, fundingType {label: "Equity", id: 1}.
+    # The label vocabulary is unchanged (checked against NZI's DEAL_TYPE and
+    # FUNDING_TYPE lookups), so the alias carries the label.
+    _alias(out, "roundType", _label(out.get("type")))
+    _alias(out, "financingType", _label(out.get("fundingType")))
+    # v1 exposed the stage IDs; v2 nests them.
+    _alias(out, "equityStageID", _id_of(out.get("equityStage")))
+    _alias(out, "exitStageID", _id_of(out.get("exitStage")))
     _alias(out, "roundAmount", out.get("amountEUR"))
     _alias(out, "roundAmountUSD", out.get("amountUSD"))
     _alias(out, "roundInvestors", out.get("investors"))
     _alias(out, "roundNews", out.get("news"))
-    _alias(out, "connectedToInfrastructureDeal", out.get("connectedToInfrastructure"))
+    # v2 returns a "YES"/"NO" string; a bare "NO" would be truthy downstream.
+    connected = out.get("connectedToInfrastructure")
+    if isinstance(connected, str):
+        connected = connected.strip().upper() == "YES"
+    _alias(out, "connectedToInfrastructureDeal", connected)
 
     investors = out.get("investors")
     if isinstance(investors, list) and "roundInvestorIDs" not in out:
-        out["roundInvestorIDs"] = [
-            investor.get("id")
+        # Embedded investor objects carry `id` per the REST docs; NZI's MCP
+        # view spells it `investorID`. Accept either.
+        ids = [
+            investor.get("id", investor.get("investorID"))
             for investor in investors
-            if isinstance(investor, dict) and investor.get("id") is not None
+            if isinstance(investor, dict)
         ]
+        out["roundInvestorIDs"] = [i for i in ids if i is not None]
 
     return out
 
@@ -450,8 +485,44 @@ def normalize_investor(investor: Dict[str, Any]) -> Dict[str, Any]:
 
     _alias(out, "investorID", out.get("id"))
     _alias(out, "logoURL", out.get("logoUrl"))
+    _alias(out, "linkedInURL", out.get("linkedinUrl"))  # v1 capitalised the I
+    _alias(out, "numberOfDeals", out.get("dealsCount"))
+
+    # v1: primaryType "Venture Capital", primaryTypeID 10, secondaryTypes [...].
+    # v2: primaryType {label, id}, secondaryTypes [{label, id}]. Same keys,
+    # different types — and `process_nzi.investor` does
+    # `primaryType in source_types` and `set(secondaryTypes) & source_types`,
+    # which would silently miss (or raise on unhashable dicts). The labels go
+    # back under the v1 names; the IDs under the v1 `…ID` names.
+    primary = out.get("primaryType")
+    if isinstance(primary, dict):
+        out["primaryType"] = _label(primary)
+        _alias(out, "primaryTypeID", _id_of(primary))
+    secondary = out.get("secondaryTypes")
+    if isinstance(secondary, list) and any(isinstance(v, dict) for v in secondary):
+        out["secondaryTypeIDs"] = [_id_of(v) for v in secondary]
+        out["secondaryTypes"] = _labels(secondary)
     # v1 exposed both `investorType` and `primaryType`; v2 keeps only the latter.
     _alias(out, "investorType", out.get("primaryType"))
+
+    # v1's bare boolean/count names -> v2's `is…` / `…InvestmentCount` names.
+    for legacy, v2 in (
+        ("acquirer", "isAcquirer"),
+        ("strategic", "isStrategic"),
+        ("buyoutInvestor", "isBuyoutInvestor"),
+        ("equityInvestor", "isEquityInvestor"),
+        ("growthInvestor", "isGrowthInvestor"),
+        ("ventureInvestor", "isVentureInvestor"),
+        ("financialInvestor", "isFinancialInvestor"),
+        ("infrastructureInvestor", "isInfrastructureInvestor"),
+        ("commercialBuyer", "isCommercialBuyer"),
+        ("commercialPartner", "isCommercialPartner"),
+        ("limitedPartner", "isLimitedPartner"),
+        ("growthDealsCount", "growthInvestmentCount"),
+        ("ventureDealsCount", "ventureInvestmentCount"),
+        ("infrastructureDealsCount", "infrastructureInvestmentCount"),
+    ):
+        _alias(out, legacy, out.get(v2))
     return out
 
 

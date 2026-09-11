@@ -201,10 +201,12 @@ class NetZeroAPI:
         ``-v`` flag in their curl example is for), but the JSON body carries it
         too on some deployments, so both are checked.
         """
-        for header in ("access_token", "Access-Token", "Authorization", "authorization"):
-            value = response.headers.get(header)
-            if value:
-                return value.replace("Bearer ", "").strip()
+        # The docs never name the header, so scan for one that looks like a
+        # token rather than guessing a spelling.
+        for name, value in response.headers.items():
+            lowered = name.lower()
+            if value and ("token" in lowered or lowered == "authorization"):
+                return str(value).replace("Bearer ", "").strip()
         try:
             body = response.json()
         except ValueError:
@@ -458,11 +460,21 @@ class NetZeroAPI:
                     headers={"Content-Type": "application/json"},
                     params=api_v2.to_v2_query_params(page_number, size, sorting),
                 )
+                content = data.get("content") or []
+                total = data.get("totalElements", 0)
+                # NZI's MCP caps pageSize at 50 and the REST docs state no
+                # maximum. If the server clamps a larger request, every later
+                # page_number lands short and rows between pages are silently
+                # skipped — so a short page with more rows remaining is fatal.
+                if len(content) < size and page_number * size + len(content) < total:
+                    raise ValueError(
+                        f"NZI v2 returned {len(content)} rows for pageSize={size} "
+                        f"with {total} total — the server clamps page size. "
+                        f"Re-run with page_size<={data.get('pageSize', len(content))}."
+                    )
                 return {
-                    "count": data.get("totalElements", 0),
-                    "results": api_v2.normalize_search_results(
-                        operation, data.get("content") or [],
-                    ),
+                    "count": total,
+                    "results": api_v2.normalize_search_results(operation, content),
                 }
             data = self._post(
                 endpoint=endpoint,

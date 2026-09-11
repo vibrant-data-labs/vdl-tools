@@ -41,34 +41,67 @@ NZI_API_VERSION=v2 python your_script.py
   on). `api_v2.normalize_*` re-adds the legacy names on top of the v2 payload,
   so `process_nzi` and the Postgres cache keep working and nothing is dropped.
   Records come back as a **superset** of what the API returned.
-* **`foundedDate` changed type.** v1 returned a date, v2 returns an integer
-  `foundedYear`. The alias exists so the column is present, not because the
-  values are interchangeable — check any code that parses it as a date.
-* **Some filters are gone.** Filtering a search by company ID (`ids`) has no v2
-  equivalent, and `taxonomyItems` became `tagIDs` **keyed by `tagID`, not by
-  the taxonomy item's `id`**. Both raise a `ValueError` explaining the
-  replacement rather than silently returning a wider result set. Translate
-  taxonomy item IDs with `NetZeroAPI.get_taxonomy_item_tag_ids()`.
-* **`investorIDs` moved.** On a company search it is now a deal-filter
-  predicate; `create_search_filter(include_investors=...)` handles this.
+* **Strings became objects.** v1 shipped `roundType: "Late VC"`,
+  `primaryType: "Venture Capital"`, `lastRoundType: "Grant"`; v2 ships
+  `type: {label, id}`, `primaryType: {label, id}`, `lastDealType: {label, id}`.
+  `process_nzi` string-compares these, so the legacy aliases carry the
+  **label**; where v1 and v2 share the key name (`primaryType`,
+  `secondaryTypes`, `fundingTypes`) the label overwrites in place and the
+  objects/IDs are kept under `primaryTypeID`, `secondaryTypeIDs`,
+  `fundingTypeObjects`. The label vocabularies are unchanged — checked against
+  NZI's `DEAL_TYPE` and `INVESTOR_TYPE` lookups (see below).
+* **`taxonomyItems` became `tagIDs`, keyed by `tagID`, not by the taxonomy
+  item's `id`.** Passing the old IDs through raises a `ValueError` naming the
+  replacement rather than silently filtering on the wrong concepts. Translate
+  with `NetZeroAPI.get_taxonomy_item_tag_ids()`.
+* **Two filters the docs omit do exist:** `companyIDs` (our `ids`) and
+  `investorInclude.investorIDs`. Both are in NZI's own MCP filter schema and
+  both were confirmed live.
 * **`get_funding_round_details()` raises on v2** — NZI documents no
   deal-by-ID endpoint. Use `get_company_funding_rounds()` or `search_deals()`.
 * **Taxonomy endpoints were not republished under the v2 host.** They are still
   documented against `api.netzeroinsights.com` only.
 
-### Before flipping the default to v2
+### What has been verified against the live v2 API
 
-Nothing below has been run against the live v2 API yet:
+Checked through NZI's own MCP server (which proxies the v2 API) on
+2026-09-11:
 
-1. Confirm `POST /auth/login` returns a token for our account, and whether it
-   arrives in the response header or body (`_extract_access_token` reads both).
-2. Compare one company, one investor and one company's deals fetched both ways
-   and diff the normalised records.
-3. Confirm the `roundType` / `financingType` deal mappings — these are marked
-   `# UNVERIFIED` in `api_v2.py` because v2 exposes `type`, `fundingType`,
-   `equityStage`, `exitStage` and `capitalStage` where v1 had two fields.
-4. Re-run the `process_nzi` survival-rate pipeline on a small cohort and check
-   the stage buckets match a v1 run.
+* **Entity IDs are unchanged** — company 668 is Sunfire in both versions, so
+  the Postgres cache and every historical join survive the cutover.
+* **Our account has v2 access** (subscription to 2027-05-18).
+* **The deal-type vocabulary** contains every label in
+  `stage_constants.DISCLOSED_STAGES_ORDERED` except `"Series I"`, `"Series J"`
+  and `"Post IPO - Equity"`; v2 has `"PIPE"` where v1 had the last of those.
+  `fundingType` labels are `Equity` / `Debt` / `Grant` / `Other`, matching
+  what `split_early_late_funding_rounds` compares against.
+* **The investor-type vocabulary** contains all 33 raw types in
+  `investor_type_mappings_definitions.xlsx`, plus one new one
+  (`Crowdfunding Platform`) that currently maps to nothing.
+* `companyIDs` and `investorIDs` filters; the
+  `{content, totalElements, …}` envelope; the nested `searchableLocation`.
+
+### Still unverified against the raw REST endpoint
+
+1. **`wildcards` type.** The docs say *List of string*; NZI's MCP schema says
+   *string*. Keyword search is our main use, so test one search each way.
+2. **Maximum `pageSize`.** The MCP caps it at 50; the REST docs give no
+   maximum. The client raises if the server returns a short page with rows
+   remaining, rather than silently skipping rows — if that fires, lower
+   `page_size`.
+3. **Where the login token lands.** The docs say "in the headers" without
+   naming one; `_extract_access_token` scans for any token-like header, then
+   the body.
+4. **Strict column selection in `process_nzi`.** `filter_format_columns` does
+   `df[keep_columns]`, which raises `KeyError` on any listed column the record
+   lacks. Eight v1 company columns have no v2 equivalent (`directURL`,
+   `eutopiaScore`, `facebookURL`, `infrastructureProjectsCount`,
+   `revenueYear`, `revenuesRange`, `trlFiveYearsPrior`, `trlLastThreeYears`),
+   none of which any analysis reads — but their absence will crash the
+   pipeline until that selection is made lenient or the columns are dropped
+   from `ORIGINAL_COMPANY_DETAILS_COLUMNS`.
+5. Re-run the survival-rate pipeline on a small cohort and diff the stage
+   buckets against a v1 run.
 
 ## Installation
 
