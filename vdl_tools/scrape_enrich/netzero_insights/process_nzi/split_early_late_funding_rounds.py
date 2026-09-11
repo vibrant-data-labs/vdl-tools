@@ -151,7 +151,16 @@ def divide_funding_rows(
 
     company_funding_rows = company_funding_rows.copy()
     company_funding_rows = company_funding_rows[company_funding_rows['round_date_nzi'].notna()]
-    company_funding_rows = company_funding_rows.sort_values(by='round_date_nzi', ascending=True)
+    # Tie-break same-date rounds on the NZI round ID so the split does not
+    # depend on the order rounds arrived in: the v1 cache and the v2 API
+    # deliver same-date rounds in different orders, which moved a $375M PIPE
+    # between `late_to_exit` and `exit` for the same company (see
+    # tests/test_split_round_order_determinism.py). The stable sort keeps
+    # input order for any remaining ties, e.g. frames without an ID column.
+    sort_keys = ['round_date_nzi']
+    if 'co_funding_round_id_nzi' in company_funding_rows.columns:
+        sort_keys.append('co_funding_round_id_nzi')
+    company_funding_rows = company_funding_rows.sort_values(by=sort_keys, ascending=True, kind='mergesort')
     company_funding_rows = company_funding_rows.reset_index(drop=True)
 
     if len(company_funding_rows) == 0:

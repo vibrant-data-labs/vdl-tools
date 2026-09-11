@@ -28,11 +28,11 @@ A v2 subtlety that bites downstream: fields v1 exposed as bare strings
 legacy aliases hold the ``label`` and the object is kept under its v2 name (or
 an ``…ID`` alias where v1 also had one).
 
-Verified against NZI's own MCP server (which proxies the v2 API): entity IDs
-are unchanged between versions, the deal-type and investor-type vocabularies,
-the ``companyIDs`` / ``investorIDs`` filters, and the search envelope. Not yet
-verified against the raw REST endpoint: whether ``wildcards`` is a list (docs)
-or a string (MCP schema), and the maximum ``pageSize`` — see README.
+Every mapping here was verified against the live v2 REST endpoint on
+2026-09-11 (auth, envelope, each filter field's effect on ``totalElements``,
+entity shapes, vocabularies), and the client was run end to end. Where the
+published docs or NZI's MCP server disagree with the endpoint, the endpoint
+wins and the discrepancy is noted inline. See the module README.
 """
 
 from typing import Any, Dict, List, Optional
@@ -78,9 +78,9 @@ FILTER_KEYS_V2 = {
     "search_investors": ("investorInclude", "investorExclude"),
 }
 
-# Legacy ``Sorting.field`` values -> v2 ``sortField`` enum. v2 rejects
-# unknown sort fields, so anything not listed here is passed through with a
-# warning rather than silently dropped.
+# Legacy ``Sorting.field`` values -> v2 ``sortField`` enum. The endpoint
+# answers HTTP 400 for anything outside its enum, so `to_v2_query_params`
+# raises on a field it cannot map (a v2 enum value passes through).
 SORT_FIELDS_V2 = {
     "name": "NAME",
     "website": "WEBSITE",
@@ -482,7 +482,35 @@ def normalize_company(company: Dict[str, Any]) -> Dict[str, Any]:
     _alias(out, "stage", _dig(out, "growthStage", "label"))
     _alias(out, "stageID", _dig(out, "growthStage", "id"))
 
+    # Tags: v1 nested the type name under the same key as the object —
+    # tagType: {tagType: "technology", tagFamily: {tagFamily: "Solutions"}} —
+    # and `process_nzi.company.parse_company_tags` reads exactly that path.
+    # v2 uses `label` at both levels. Alias inside each tag so the parser
+    # works unchanged; the tag objects themselves are otherwise kept as-is.
+    tags = out.get("tags")
+    if isinstance(tags, list):
+        out["tags"] = [_normalize_tag(tag) for tag in tags]
+
     return out
+
+
+def _normalize_tag(tag: Any) -> Any:
+    if not isinstance(tag, dict):
+        return tag
+    tag = dict(tag)
+    tag_type = tag.get("tagType")
+    if isinstance(tag_type, dict):
+        tag_type = dict(tag_type)
+        _alias(tag_type, "tagType", tag_type.get("label"))
+        family = tag_type.get("tagFamily")
+        if isinstance(family, dict):
+            family = dict(family)
+            _alias(family, "tagFamily", family.get("label"))
+            tag_type["tagFamily"] = family
+        tag["tagType"] = tag_type
+        _alias(tag, "tagTypeId", tag_type.get("id"))
+    _alias(tag, "umbrella", tag.get("isUmbrella"))
+    return tag
 
 
 def normalize_deal(deal: Dict[str, Any], company_id: Optional[int] = None) -> Dict[str, Any]:
@@ -513,11 +541,10 @@ def normalize_deal(deal: Dict[str, Any], company_id: Optional[int] = None) -> Di
     _alias(out, "roundAmountUSD", out.get("amountUSD"))
     _alias(out, "roundInvestors", out.get("investors"))
     _alias(out, "roundNews", out.get("news"))
-    # v2 returns a "YES"/"NO" string; a bare "NO" would be truthy downstream.
-    connected = out.get("connectedToInfrastructure")
-    if isinstance(connected, str):
-        connected = connected.strip().upper() == "YES"
-    _alias(out, "connectedToInfrastructureDeal", connected)
+    # Both versions ship this as a "YES"/"NO" string (v1 records in the
+    # Postgres cache carry "NO" verbatim), so it passes through unchanged —
+    # coercing it to a bool here would make v2 records differ from v1.
+    _alias(out, "connectedToInfrastructureDeal", out.get("connectedToInfrastructure"))
 
     investors = out.get("investors")
     if isinstance(investors, list) and "roundInvestorIDs" not in out:
@@ -543,6 +570,12 @@ def normalize_investor(investor: Dict[str, Any]) -> Dict[str, Any]:
     _alias(out, "logoURL", out.get("logoUrl"))
     _alias(out, "linkedInURL", out.get("linkedinUrl"))  # v1 capitalised the I
     _alias(out, "numberOfDeals", out.get("dealsCount"))
+    _alias(out, "isLP", out.get("isLimitedPartner"))
+    # Present on investor list rows and on investors embedded in deals; the
+    # details endpoint may omit it, in which case these stay absent.
+    _alias(out, "city", _dig(out, "searchableLocation", "cityName"))
+    _alias(out, "country", _dig(out, "searchableLocation", "country", "name"))
+    _alias(out, "continent", _dig(out, "searchableLocation", "continent", "name"))
 
     # v1: primaryType "Venture Capital", primaryTypeID 10, secondaryTypes [...].
     # v2: primaryType {label, id}, secondaryTypes [{label, id}]. Same keys,

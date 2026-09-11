@@ -34,6 +34,24 @@ NZI_API_VERSION=v2 python your_script.py
 
 `config.ini` may also set `api_version` under `[netzero_insights]`.
 
+### Sessions: both versions are single-session per account (verified 2026-09-11)
+
+* **v1:** a second login as the same account invalidates the first session
+  ("This session has been expired (possibly due to multiple concurrent
+  logins…)"). The client re-authenticates on 401/403, so two v1 clients
+  running at once steal the session back and forth and every in-flight
+  request times out.
+* **v2:** a second login makes the first token answer **HTTP 409** on every
+  call. The client raises `SessionSupersededError` immediately — no retry, no
+  re-login (which would revoke the other session in turn). Two logins within
+  about a second additionally trip a throttle that answers 403 to *every*
+  token for a minute or so.
+* Either way: **run one client per account at a time.**
+* **`GET /fundingRound/prints/{id}` — the path this client calls — works and
+  answers in ~1s.** The path the legacy docs give, `fundingRoundsPrints/{id}`,
+  is a 404. The earlier audit note that our path "matches neither doc version"
+  was true but misleading: ours is the one that exists.
+
 ### What v2 changes for callers
 
 * **Response fields are renamed** (`clientID`→`id`, `lastRoundDate`→
@@ -80,8 +98,12 @@ NZI_API_VERSION=v2 python your_script.py
   `{id, label, description, hasChildren}` keys — recursion via `child["id"]`
   works — and add `tag`, `companyCount`, `dealCount` and funding totals.
   `/taxonomy/itemDtos` and `/taxonomy/item/*` do not exist on v2 at all. Use
-  `search_tags(name)` (`GET /tags`) to resolve tag IDs on v2;
-  `get_flat_nzi_taxonomy` stays on v1 until its `ROOT_ID` is remapped.
+  `search_tags(name)` (`GET /tags`) to resolve tag IDs on v2.
+  `get_flat_nzi_taxonomy` picks its root per version (`ROOT_IDS`): v2 root
+  1823 "Verticals map" has the same ten verticals as v1's 660, label for
+  label. A v2 bonus: the node IDs *are* tag IDs (359 = "Built Environment"),
+  so the flat taxonomy's `id` column feeds a v2 `tagIDs` filter directly —
+  no item→tag translation as on v1.
 
 ### Verified against the live v2 REST endpoint (2026-09-11)
 
@@ -115,19 +137,74 @@ malformed request bodies come back as 500 rather than 400, so the client's
 transient-error retry will back off through four attempts before surfacing
 them.
 
-### Before flipping the default to v2
+### `process_nzi` on v2: cohort comparison (2026-09-11)
 
-1. **Strict column selection in `process_nzi`.** `filter_format_columns` does
-   `df[keep_columns]`, which raises `KeyError` on any listed column the record
-   lacks. Eight v1 company columns have no v2 equivalent (`directURL`,
-   `eutopiaScore`, `facebookURL`, `infrastructureProjectsCount`,
-   `revenueYear`, `revenuesRange`, `trlFiveYearsPrior`, `trlLastThreeYears`),
-   none of which any analysis reads — but their absence will crash the
-   pipeline until that selection is made lenient or the columns are dropped
-   from `ORIGINAL_COMPANY_DETAILS_COLUMNS`.
-2. Re-run the survival-rate pipeline on a small cohort and diff the stage
-   buckets against a v1 run.
-3. Decide what `get_flat_nzi_taxonomy` does once v1 goes away (2027-02-28).
+**Method.** 40 companies present in the v1 Postgres cache with 5–40 rounds
+(ordered by client ID). The v1 side is the cache — the only v1 rounds the
+pipeline has ever consumed, and therefore "what we have done"; the v2 side is
+fetched live with the cache disabled, so nothing is written. Both go through
+the identical chain — `process_nzi_investors` → `process_nzi_funding_rounds`
+→ `process_nzi_companies_details` → `divided_funding_rows_and_flatten` →
+`precompute_survival_classifications` (with a constant operating status, so
+the classification depends only on rounds). Every bucket/survival difference
+is attributed to **drift** (the company's rounds or its investors' types
+changed since the cache was written), **tie** (same-date rounds delivered in
+a different order), or **mapping** (same inputs, different output — the thing
+being tested). Reproduce with:
+
+```bash
+VDL_GLOBAL_CONFIG_PATH=/path/to/config.ini python -m vdl_tools.scrape_enrich.netzero_insights.scripts.compare_v1_cache_v2_live --n 40 --out /tmp/nzi_v1_v2
+```
+
+**Results.**
+
+* All five stages run on v2 records. This needed `process_nzi`'s column
+  selection to become lenient (`process_nzi/columns.py`): it did
+  `df[keep_columns]`, which raised `KeyError` on any listed field a record
+  lacks. Missing fields are now NA and logged. On v2 that is `direct_url`,
+  `eutopia_score`, `revenues_range` (companies) and
+  `commercial_agreements_count`, `infrastructure_projects_count` (investors)
+  — none read by any analysis.
+* **Survival classifications are identical for 40/40 companies** at Seed,
+  Series A and Series B, and so is every company's current stage.
+* **No derived stage-bucket field differs for mapping reasons.** 7 companies
+  differ through drift (one new round, 8 rounds whose dates NZI nulled,
+  investors re-typed — e.g. EIB `Bank` → `Investment Bank` — and deal counts
+  that grew). One company differed through tie order: a SPAC and a PIPE on
+  the same date arrived in opposite order from the two sources and
+  `divide_funding_rows` sorted by date only, moving $375M between
+  `late_to_exit` and `exit`. It now tie-breaks on the round ID, which is
+  identical across versions (`tests/test_split_round_order_determinism.py`).
+* Two encoding differences are real but benign, and v1 was itself
+  inconsistent on both (cache-wide counts over 117,911 rounds): undisclosed
+  amounts are `null` on v2 where v1 stored `0.0` (v1: 29,934 null vs 18,628
+  zero — the pipeline already NaN-guards); `connectedToInfrastructureDeal`
+  is `"NO"` on v2 where v1 stored `null` (v1: 82,161 null / 35,299 `NO` /
+  366 `YES`). Neither is coerced.
+
+**Vocabulary reality check against `stage_constants`** (same cache-wide
+counts): `"Post IPO - Equity"` occurs in **1** round and `"Series I"`/
+`"Series J"` in none — dead entries. `"PIPE"` occurs in 98 rounds and is in
+neither `EXIT_TYPES` nor `DISCLOSED_STAGES_ORDERED`, so post-IPO equity has
+never counted as an exit on either version. `"Accelerator/Incubator"`
+(capital I) occurs in 967 rounds and falls outside the accelerator bucket,
+which expects the lowercase form; v2 normalises the label. **Decision
+(2026-09-11): `PIPE` is post-IPO by definition — the company is already
+public — so it now sits in `EXIT_TYPES` and after `"Post IPO - Equity"` in
+`DISCLOSED_STAGES_ORDERED`.**
+
+### Scale check (2026-09-11)
+
+One v2 login: a 1,000-row company search (10 checkpointed pages, 4 in
+flight) in 6.9s with 1,000 unique IDs; the same search again resumed from
+the checkpoint in 0.1s with identical rows; then details, funding rounds
+and investors for 150 of those companies (150/150, 71/71) in ~4s each, with
+no client errors. Nothing was written to the cache.
+
+### Retiring v1
+
+`DEFAULT_API_VERSION` decides which API `get_netzero_api()` uses. Once it is
+`v2`, run one full refresh and delete the v1 paths before 2027-02-28.
 
 ## Installation
 

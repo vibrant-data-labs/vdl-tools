@@ -6,30 +6,22 @@ from vdl_tools.scrape_enrich.netzero_insights.search_netzero_api import get_netz
 
 api_client = get_netzero_api(use_sandbox=False)
 
-ROOT_ID = 660
+# The "Verticals map" root — the same ten verticals (Energy, Transport,
+# Industry, …) on both API versions, under different node IDs. Verified live
+# 2026-09-11: v2 root 1823's children match v1 root 660's label for label.
+# On v2 the node IDs *are* NZI tag IDs (e.g. 359 = "Built Environment"), so
+# the `id` column of the flat taxonomy is directly usable as `tagIDs` in a v2
+# company search; on v1 they were taxonomy-item IDs that needed translating.
+ROOT_IDS = {"v1": 660, "v2": 1823}
+ROOT_ID = ROOT_IDS[api_client.api_version]
 ROOT_NAME = 'Vertical'
 
 
 def get_taxonomy_children(parent_id: int):
-    """Get taxonomy for a specific parent ID."""
-    payload = {
-        'onlyVisible': True,
-        'onlyAdvancedFilters': False,
-        'mainFilter': {
-            'include': {},
-            'exclude': {},
-            'fundingRoundInclude': {},
-            'fundingRoundExclude': {},
-            'investorInclude': {},
-            'investorExclude': {},
-        },
-        'onlySearchable': True
-    }
+    """Get the children of a taxonomy node (delegates to the client, which
+    issues the POST both hosts actually serve)."""
     print(f"Getting children for {parent_id}")
-    return api_client._post(
-        endpoint=f"taxonomy/graph/{parent_id}",
-        payload=payload
-    )
+    return api_client.get_taxonomy_children(parent_id)
 
 def get_taxonomy_children_recursive(parent_id: int, limit: int = 10, current_depth: int = 0) :
     """Get taxonomy for a specific parent ID and all its children."""
