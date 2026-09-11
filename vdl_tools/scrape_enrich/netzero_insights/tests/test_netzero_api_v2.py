@@ -416,8 +416,9 @@ def test_normalize_deal_derives_round_investor_ids():
     assert out["financingType"] == "Equity"
     assert out["equityStageID"] == 3
     assert out["exitStageID"] == 1
-    # "NO" is a truthy string; the legacy alias must be a real bool.
-    assert out["connectedToInfrastructureDeal"] is False
+    # v1 shipped the same "YES"/"NO" string (verified in the Postgres cache),
+    # so it passes through rather than being coerced to a bool.
+    assert out["connectedToInfrastructureDeal"] == "NO"
     # The v2 objects are kept intact for audit.
     assert out["type"] == {"label": "Series A", "filterable": False, "id": 91}
 
@@ -587,3 +588,24 @@ def test_v2_lookup_searchable_locations(api_v2_client, mock_session):
     assert args[1] == "https://api-new.netzeroinsights.com/searchable-locations"
     assert kwargs["params"] == {"location": "Germany"}
     assert out["countries"][0]["id"] == 817600
+
+
+def test_normalize_company_aliases_tag_type_names_for_parse_company_tags():
+    # v1: tagType: {tagType: "technology", tagFamily: {tagFamily: "Solutions"}}
+    # v2: tagType: {label: "technology", tagFamily: {label: "Solutions"}}
+    # process_nzi.company.parse_company_tags reads tag["tagType"]["tagType"].
+    out = api_v2.normalize_company({
+        "id": 668,
+        "tags": [{
+            "id": 511, "label": "SOEC", "isUmbrella": False,
+            "tagType": {"id": 3, "label": "technology", "tagFamily": {"id": 2, "label": "Solutions"}},
+        }],
+    })
+    tag = out["tags"][0]
+    assert tag["tagType"]["tagType"] == "technology"
+    assert tag["tagType"]["label"] == "technology"          # v2 field kept
+    assert tag["tagType"]["tagFamily"]["tagFamily"] == "Solutions"
+    assert tag["tagTypeId"] == 3
+    assert tag["umbrella"] is False
+    from vdl_tools.scrape_enrich.netzero_insights.process_nzi.company import parse_company_tags
+    assert parse_company_tags(out["tags"], flatten_tags=False) == {"technology_tag_nzi": ["SOEC"]}
