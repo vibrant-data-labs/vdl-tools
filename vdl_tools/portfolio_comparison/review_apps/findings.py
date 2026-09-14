@@ -51,8 +51,8 @@ def _():
     # The customer's own dollars ride along, summed per org.
     amounts = load_portfolio_amounts(config, R)
     enriched[AMOUNT_COL] = enriched["customer_row_id"].map(amounts)
-    port = dedupe_portfolio(enriched)
-    port = port[port["level0_one_earth_category"].notna()]
+    orgs = dedupe_portfolio(enriched)
+    port = orgs[orgs["level0_one_earth_category"].notna()]
     FOREST, MOSS, GOLD, LIGHT = "#2C5F2D", "#97BC62", "#D9A21B", "#D5DFD2"
     return (
         AMOUNT_COL,
@@ -61,11 +61,10 @@ def _():
         GOLD,
         LIGHT,
         MOSS,
-        R,
         alt,
         eco,
-        enriched,
         mo,
+        orgs,
         pd,
         port,
         window,
@@ -442,50 +441,31 @@ def _(FOREST, LIGHT, alt, conv, conv_fp, conv_np, mo):
 
 
 @app.cell
-def _(R, enriched, mo, pd):
-    # What didn't map — adjudicated numbers (see nomatch_analysis.md; the
-    # review pool is exhausted: 7 corrections applied, 11 proposals rejected).
-    _no_pillar = enriched[enriched["level0_one_earth_category"].isna()]
-    _ask = pd.read_excel(sorted(R.glob("customer_review_*.xlsx"))[-1])
-    _n_ask = len(
-        set(_ask["ID (do not edit)"]) & set(_no_pillar["customer_row_id"])
-    )
-    _n_text = int(_no_pillar["text_for_taxonomy"].notna().sum())
+def _(mo, orgs):
+    # What didn't map — counts computed here; the adjudication (which
+    # refusals are genuinely out of scope vs walk misses vs taxonomy gaps)
+    # lives in data/results/nomatch_analysis.md, and every correction that
+    # survived the adversarial gate is in taxonomy_overrides.json.
+    _no_pillar = orgs[orgs["level0_one_earth_category"].isna()]
+    _no_text = int(_no_pillar["text_for_taxonomy"].isna().sum())
+    _cust = orgs["status"] == "unmatched_final"
     mo.md(f"""
-    ## What didn't map, and why — {len(_no_pillar)} orgs, mostly signal
+    ## What didn't map — {len(_no_pillar)} orgs, mostly signal
 
-    - **{_n_ask} have no usable text** — fiscally sponsored projects,
-      Indigenous-led and international orgs that never file US tax forms under
-      their own names, plus dead/unreadable sites. *The {len(_ask)}-row customer
-      ask covers these.*
-    - **Of the {_n_text} with text: 52 are verifiably not climate** (reviewed
-      against pillar definitions) — 36 of them passed deals: a finding about
-      OSP's deal sources, not an error.
-    - **7 are too vague to map**; the rest were reviewed and rejected, or await
-      One Earth taxonomy amendments (adaptation & resilience, water supply,
-      Indigenous biocultural stewardship). Every corrected placement lives in
-      `taxonomy_overrides.json`; full evidence in `data/results/nomatch_analysis.md`.
-    """)
-    return
+    - **{_no_text} have no usable text** even after the customer round-trip.
+    - **{len(_no_pillar) - _no_text} had text and were refused** by the walk.
+      Two review rounds (Run B: 74 rows; customer-text batch: 28 rows) found the
+      large majority genuinely outside the solutions taxonomy — humanitarian,
+      health, cultural and Indigenous-sovereignty work, non-climate businesses
+      among passed deals — with walk misses corrected via the overrides file and
+      a residue of taxonomy gaps (water access, adaptation & resilience,
+      Indigenous biocultural stewardship).
+    - **{int(_cust.sum())} orgs were invisible to standard data sources**; OSP's
+      own descriptions placed {int((_cust & orgs['level0_one_earth_category'].notna()).sum())}
+      of them (incl. the six P1-ruling placements).
 
-
-@app.cell
-def _(mo):
-    mo.md("""
-    ## Key findings
-    1. **For-profit and nonprofit climate are opposite worlds** — companies are
-       63.5% Energy Transition, nonprofits 63.2% Nature Conservation. Against the
-       investable (for-profit) universe, OSP's deal flow is energy-light and
-       nature-heavy — the reverse of the blended-ecosystem read.
-    2. **Conversion tells the strategy**: nature deals convert several times
-       more often than energy deals — a nature-conviction investor swimming in
-       energy deal flow.
-    3. **46 portfolio orgs are invisible to standard data infrastructure** —
-       mapping them requires OSP's own words (ask is out).
-    4. **The taxonomy has blind spots OSP's portfolio exposes**: adaptation,
-       water supply, Indigenous biocultural work.
-
-    *Next: sub-pillar drill-downs · dashboard + written report.*
+    Row-level evidence: `data/results/nomatch_analysis.md`. The customer-facing
+    narrative is `notebooks/report.py` in the engagement repo.
     """)
     return
 
