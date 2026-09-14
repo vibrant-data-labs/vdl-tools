@@ -50,6 +50,15 @@ class EngagementConfig:
     #     vintage as the baseline run, so portfolio and ecosystem taxonomies
     #     stay comparable)
     enrichment: dict = field(default_factory=dict)
+    # Optional funding-weighted comparison settings (compare stage):
+    #   portfolio_amounts: {input_label: [customer column, ...]} — the
+    #     customer's own dollars per row, summed across the listed columns
+    #     (e.g. per-year grant columns). Files not listed contribute no
+    #     dollars: their rows count in org shares, never in dollar shares.
+    #   ecosystem_window: [first_year, last_year] — sum the baseline's
+    #     Funding_<year> columns over this window instead of Total_Funding_$,
+    #     so ecosystem dollars cover the same period as the customer's.
+    funding: dict = field(default_factory=dict)
     root: Path = field(default_factory=Path.cwd)
 
     @classmethod
@@ -68,6 +77,7 @@ class EngagementConfig:
                 confidentiality=eng.get("confidentiality", {}),
                 intake=eng.get("intake", {}),
                 enrichment=eng.get("enrichment", {}),
+                funding=eng.get("funding", {}),
                 root=path.parent,
             )
         except (KeyError, TypeError) as exc:
@@ -89,6 +99,19 @@ class EngagementConfig:
             )
         if not self.inputs:
             problems.append("inputs is empty — at least one customer file is required")
+        for label, cols in (self.funding.get("portfolio_amounts") or {}).items():
+            if label not in self.inputs:
+                problems.append(f"funding.portfolio_amounts.{label}: no such input")
+            elif not isinstance(cols, list) or not cols:
+                problems.append(
+                    f"funding.portfolio_amounts.{label}: must list the amount columns")
+        window = self.funding.get("ecosystem_window")
+        if window is not None and not (
+            isinstance(window, list) and len(window) == 2
+            and all(isinstance(y, int) for y in window) and window[0] <= window[1]
+        ):
+            problems.append(
+                f"funding.ecosystem_window must be [first_year, last_year], got {window!r}")
         if problems:
             raise ValueError("engagement.yaml invalid: " + "; ".join(problems))
 
