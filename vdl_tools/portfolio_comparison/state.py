@@ -65,9 +65,13 @@ class PipelineState:
     def record_stage(self, stage: str, status: str = "completed", **details):
         if stage not in STAGES:
             raise ValueError(f"unknown stage {stage!r}; expected one of {STAGES}")
+        # Every stage carries the code it ran with; the top-level line
+        # refreshes too, so a later engine pull never leaves it stale.
+        versions = self.record_code_versions(save=False)
         self.data["stages"][stage] = {
             "status": status,
             "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "code": ",".join(f"{k}@{(v or 'unknown')[:9]}" for k, v in versions.items()),
             **details,
         }
         self.save()
@@ -81,16 +85,18 @@ class PipelineState:
         }
         self.save()
 
-    def record_code_versions(self, engagement_repo: Path | None = None):
+    def record_code_versions(self, engagement_repo: Path | None = None,
+                             save: bool = True) -> dict:
         import vdl_tools
 
         versions = {}
         vdl_tools_dir = Path(vdl_tools.__file__).resolve().parent.parent
         versions["vdl_tools"] = _git_sha(vdl_tools_dir)
-        if engagement_repo is not None:
-            versions["engagement_repo"] = _git_sha(Path(engagement_repo))
+        versions["engagement_repo"] = _git_sha(Path(engagement_repo or self.root))
         self.data["code_versions"].update(versions)
-        self.save()
+        if save:
+            self.save()
+        return versions
 
     def render_status(self) -> str:
         lines = ["Engagement pipeline status", "=" * 26]
