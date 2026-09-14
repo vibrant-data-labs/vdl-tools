@@ -5,7 +5,7 @@ import json
 import pandas as pd
 import pytest
 
-from vdl_tools.portfolio_comparison.comparison import run_compare
+from vdl_tools.portfolio_comparison.comparison import NO_SUBPILLAR, run_compare
 from vdl_tools.portfolio_comparison.intake import profile_inputs as pi
 
 ENGAGEMENT_YAML = (
@@ -23,17 +23,18 @@ ENERGY, NATURE = "Energy Transition", "Nature Conservation"
 
 def _write_baseline(results):
     # Ecosystem: 2 Energy for-profits (repr-list encoded), 2 Nature
-    # nonprofits; all-time dollars 100/300/50/50, windowed 10/10/50/40.
+    # nonprofits (one placed at pillar depth only); all-time dollars
+    # 100/300/50/50, windowed 10/10/50/40.
     rows = [
         (ENERGY, "Renewable Power", "For Profit", 100, 10, 0),
         (ENERGY, "Energy Efficiency", "For Profit", 300, 0, 10),
         (NATURE, "Land Conservation", "Non Profit", 50, 50, 0),
-        (NATURE, "Land Conservation", "Non Profit", 50, 0, 40),
+        (NATURE, None, "Non Profit", 50, 0, 40),
     ]
     eco = pd.DataFrame([
         {"uid": f"u{i}", "Org Type": org_type,
          "level0_one_earth_category": f"['{lvl0}']",
-         "level1_one_earth_category": f"['{lvl1}']",
+         "level1_one_earth_category": f"['{lvl1}']" if lvl1 else "[]",
          "Total_Funding_$": usd, "Funding_2021": y1, "Funding_2022": y2}
         for i, (lvl0, lvl1, org_type, usd, y1, y2) in enumerate(rows)])
     (results / "baseline").mkdir(parents=True)
@@ -84,8 +85,12 @@ def test_compare_shares_tilt_and_conversion(engagement):
     assert conv.at[ENERGY, "conversion_rate"] == 0.667
     assert conv.at[NATURE, "conversion_rate"] == 1.0
 
+    # Sub-pillar shares keep the pillar-placed denominator: the pillar-only
+    # ecosystem org is an explicit remainder row, not a silent drop.
     sub = tables["comparison_subpillar"]
-    assert sub.at["Land Conservation", "ecosystem_pct"] == 50.0
+    assert sub.at["Land Conservation", "ecosystem_pct"] == 25.0
+    assert sub.at[NO_SUBPILLAR, "n_ecosystem"] == 1
+    assert sub["ecosystem_pct"].sum() == 100.0
 
     state = json.loads((engagement / "pipeline_state.json").read_text())
     assert state["stages"]["compare"]["n_portfolio_with_pillar"] == 5
@@ -145,7 +150,7 @@ def funded_engagement(tmp_path):
         _port_row(rid[1], "nonprofit", None, "invested", ENERGY, "Energy Efficiency"),
         _port_row(rid[2], "nonprofit", "mG", "invested", ENERGY, "Energy Efficiency"),
         _port_row(rid[3], "nonprofit", "mG", "invested", ENERGY, "Energy Efficiency"),
-        _port_row(rid[4], "nonprofit", None, "passed", NATURE, "Land Conservation"),
+        _port_row(rid[4], "nonprofit", None, "passed", NATURE, None),  # pillar only
     ])
     port.to_parquet(results / "enriched_portfolio.parquet")
     return tmp_path
@@ -171,8 +176,12 @@ def test_funding_weighted_shares(funded_engagement):
 
     counts = tables["comparison_pillar"]
     assert counts.at[NATURE, "n_portfolio"] == 2  # Delta still counted as an org
+    assert tables["comparison_subpillar_nonprofit"].at[NO_SUBPILLAR, "n_portfolio"] == 1
     sub = tables["comparison_subpillar_funding_nonprofit"]
     assert sub.at["Land Conservation", "portfolio_funding_pct"] == 75.0
+    # Ecosystem nonprofit window dollars 90 = Land Conservation 50 + pillar-only 40.
+    assert sub.at["Land Conservation", "ecosystem_funding_pct"] == 55.6
+    assert sub.at[NO_SUBPILLAR, "ecosystem_funding_pct"] == 44.4
 
     funded = pd.read_csv(funded_engagement / "data/results/portfolio_funding.csv")
     assert len(funded) == 3 and funded["customer_amount_usd"].sum() == 4000

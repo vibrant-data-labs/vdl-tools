@@ -46,6 +46,10 @@ CONVERSION_BASENAME = "comparison_conversion"
 FUNDING_SUFFIX = "_funding"
 PORTFOLIO_FUNDING_BASENAME = "portfolio_funding"
 ECO_USD = "_usd"
+# Sub-pillar tables keep the pillar-placed denominator: an org placed at
+# pillar depth only shows up in this explicit row instead of silently
+# leaving the population — the two sides lose different amounts otherwise.
+NO_SUBPILLAR = "(no sub-pillar)"
 
 
 def _primary(value):
@@ -91,6 +95,22 @@ def dedupe_portfolio(port: pd.DataFrame) -> pd.DataFrame:
 
 def _pct(series: pd.Series) -> pd.Series:
     return (series.value_counts(normalize=True) * 100).round(1)
+
+
+def _eco_level(eco_df: pd.DataFrame, lvl: str) -> pd.Series:
+    """Ecosystem category series for a depth; sub-pillar keeps pillar-placed
+    orgs (NO_SUBPILLAR) and drops only orgs with no pillar at all."""
+    s = eco_df[lvl]
+    if lvl == "_lvl1":
+        s = s.where(eco_df["_lvl0"].isna(), s.fillna(NO_SUBPILLAR))
+    return s.dropna()
+
+
+def _port_level(port_df: pd.DataFrame, level_col: str) -> pd.DataFrame:
+    """Portfolio rows (already pillar-placed) with the sub-pillar remainder named."""
+    if level_col.startswith("level1"):
+        return port_df.assign(**{level_col: port_df[level_col].fillna(NO_SUBPILLAR)})
+    return port_df
 
 
 def _share_table(eco_series, port_df, level_col) -> pd.DataFrame:
@@ -197,25 +217,26 @@ def run_compare(engagement_root: str | Path) -> dict[str, pd.DataFrame]:
     tables = {}
     for suffix, (eco_seg, port_seg) in segments.items():
         for name, eco_lvl, port_lvl in levels:
-            port_lvl_seg = port_seg[port_seg[port_lvl].notna()]
-            tables[name + suffix] = _share_table(
-                eco_seg[eco_lvl].dropna(), port_lvl_seg, port_lvl)
+            eco_cat = _eco_level(eco_seg, eco_lvl)
+            port_cat = _port_level(port_seg, port_lvl)
+            tables[name + suffix] = _share_table(eco_cat, port_cat, port_lvl)
             if with_funding:
                 tables[name + FUNDING_SUFFIX + suffix] = _funding_table(
-                    eco_seg[[eco_lvl, ECO_USD]].rename(columns={eco_lvl: port_lvl}),
-                    port_lvl_seg, port_lvl)
+                    pd.DataFrame({port_lvl: eco_cat, ECO_USD: eco_seg.loc[eco_cat.index, ECO_USD]}),
+                    port_cat, port_lvl)
         tables[CONVERSION_BASENAME + suffix] = _conversion(port_seg)
     # The blended tables also carry the ecosystem org-type split columns
     # (used by the blended chart's 4-series view).
     for label, key in (("forprofit", "For Profit"), ("nonprofit", "Non Profit")):
         eco_side = eco[eco["_org_type"] == key]
         for name, lvl, _ in levels:
-            _s = eco_side[lvl].dropna()
+            _s = _eco_level(eco_side, lvl)
             tables[name][f"eco_{label}_pct"] = _pct(_s)
             tables[name][f"n_eco_{label}"] = _s.value_counts()
             tables[name] = tables[name].fillna(0)
             if with_funding:
-                usd, pct = _usd_share(eco_side[eco_side[lvl].notna()], lvl, ECO_USD)
+                usd, pct = _usd_share(
+                    pd.DataFrame({lvl: _s, ECO_USD: eco_side.loc[_s.index, ECO_USD]}), lvl, ECO_USD)
                 t = tables[name + FUNDING_SUFFIX]
                 t[f"eco_{label}_usd"] = usd
                 t[f"eco_{label}_funding_pct"] = pct
