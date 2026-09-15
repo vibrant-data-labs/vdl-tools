@@ -7,8 +7,8 @@ organizations become ordinary members of that build. This stage only prepares
 the input — one row per landscape organization in the pinned universe plus one
 row per customer organization not already in it — and tags every customer row:
 
-- ``OSP Portfolio``-style tag list (name from ``mapping.portfolio_tag``, default
-  ``"<Customer> Portfolio"``): the umbrella tag on every customer organization,
+- ``<Customer> Portfolio`` tag list (name from ``mapping.portfolio_tag``): the
+  umbrella tag on every customer organization,
   plus ``"Funded by <Customer>"`` or ``"Evaluated by <Customer>, passed"``.
 - ``<Customer> Grant $``: the customer's own grant dollars (funded nonprofits).
 
