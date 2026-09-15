@@ -105,6 +105,19 @@ Must be **403**. That is the proof the bucket is private and the only route in
 is CloudFront. Then open the view URL, confirm the browser asks for credentials,
 and confirm the app renders after signing in.
 
+A republish must show the new version on a normal reload; if it doesn't, the
+objects are missing `Cache-Control: no-cache`. Check the origin, not the browser:
+
+```bash
+aws s3api head-object --bucket vdl-<app-name> --key public/<file> --query CacheControl
+```
+
+`deploy` stamps every object (`no-cache`; content-hashed `assets/` immutable)
+and re-running it on an existing bucket re-stamps them. If an export has to go
+to some other bucket by hand, upload it with
+`deploy <app-name> --src <export> --dest s3://bucket/prefix --apply`, never a
+bare `aws s3 cp` — the header is the fix.
+
 ## Optional: custom domain
 
 Default is the assigned `dxxxx.cloudfront.net` hostname, which is fine for
