@@ -40,6 +40,7 @@ def _():
 
     R = Path.cwd() / "data" / "results"
     config = EngagementConfig.from_yaml(Path.cwd() / "engagement.yaml")
+    CUSTOMER = config.mapping.get("customer_label") or config.customer.replace("-", " ").title()
     enriched = pd.read_parquet(R / "enriched_portfolio.parquet")
     # Raw comparison inputs — the tables are computed in the next cell so the
     # math is visible and extensible here.
@@ -56,6 +57,7 @@ def _():
     FOREST, MOSS, GOLD, LIGHT = "#2C5F2D", "#97BC62", "#D9A21B", "#D5DFD2"
     return (
         AMOUNT_COL,
+        CUSTOMER,
         ECO_USD,
         FOREST,
         GOLD,
@@ -181,9 +183,9 @@ def _(AMOUNT_COL, ECO_USD, eco, pd, port):
 
 
 @app.cell
-def _(mo):
+def _(CUSTOMER, mo):
     mo.md(f"""
-    # One Small Planet vs. the US climate ecosystem
+    # {CUSTOMER} vs. the US climate ecosystem
     """)
     return
 
@@ -220,7 +222,7 @@ def _(FOREST, GOLD, MOSS, SLATE, fund, pillar_chart, window):
 
 
 @app.cell
-def _(FOREST, GOLD, MOSS, alt, mo, pillar, pillar_fp, pillar_np):
+def _(CUSTOMER, FOREST, GOLD, MOSS, alt, mo, pillar, pillar_fp, pillar_np):
     def pillar_chart(df, series, colors, title, ylabel="% of orgs with a pillar"):
         """Grouped bars per pillar; series = {csv_column: display name}."""
         _long = df.reset_index().melt(
@@ -262,13 +264,13 @@ def _(FOREST, GOLD, MOSS, alt, mo, pillar, pillar_fp, pillar_np):
     SLATE = "#50808E"
     mo.vstack(
         [
-            mo.md("## Where OSP sits in the landscape"),
+            mo.md(f"## Where {CUSTOMER} sits in the landscape"),
             pillar_chart(
                 pillar,
                 {
                     "ecosystem_pct": "Ecosystem",
-                    "portfolio_pct": "OSP full deal flow",
-                    "invested_pct": "OSP 'invested' only",
+                    "portfolio_pct": f"{CUSTOMER} full deal flow",
+                    "invested_pct": f"{CUSTOMER} 'invested' only",
                 },
                 [MOSS, SLATE, GOLD, FOREST],
                 "Full Ecosystem",
@@ -277,8 +279,8 @@ def _(FOREST, GOLD, MOSS, alt, mo, pillar, pillar_fp, pillar_np):
                 pillar_fp,
                 {
                     "ecosystem_pct": "Ecosystem for-profits",
-                    "portfolio_pct": "OSP companies: deal flow",
-                    "invested_pct": "OSP companies: invested",
+                    "portfolio_pct": f"{CUSTOMER} companies: deal flow",
+                    "invested_pct": f"{CUSTOMER} companies: invested",
                 },
                 [MOSS, GOLD, FOREST],
                 "For-profits only",
@@ -287,8 +289,8 @@ def _(FOREST, GOLD, MOSS, alt, mo, pillar, pillar_fp, pillar_np):
                 pillar_np,
                 {
                     "ecosystem_pct": "Ecosystem nonprofits",
-                    "portfolio_pct": "OSP grants: deal flow",
-                    "invested_pct": "OSP grants: invested",
+                    "portfolio_pct": f"{CUSTOMER} grants: deal flow",
+                    "invested_pct": f"{CUSTOMER} grants: invested",
                 },
                 [SLATE, GOLD, FOREST],
                 "Nonprofits only",
@@ -299,13 +301,13 @@ def _(FOREST, GOLD, MOSS, alt, mo, pillar, pillar_fp, pillar_np):
 
 
 @app.cell
-def _(FOREST, GOLD, MOSS, SLATE, alt, fund_np, fund_np_sub, mo, pillar_chart, window):
-    # ---- Dollar-weighted view. OSP's own dollars exist only for grants (the
-    # for-profit sheet carries no check sizes), so this is the nonprofit
-    # segment: OSP grant dollars vs Candid-recorded grant dollars received by
-    # ecosystem nonprofits, same years.
+def _(CUSTOMER, FOREST, GOLD, MOSS, SLATE, alt, fund_np, fund_np_sub, mo, pillar_chart, window):
+    # ---- Dollar-weighted view: the customer's own dollars (funding.portfolio_amounts —
+    # typically grants only) vs Candid-recorded grant dollars received by ecosystem
+    # nonprofits, same years. Companies are compared by count unless the customer
+    # supplied investment amounts.
     _years = f"{window[0]}–{window[1]}" if window else "all-time"
-    _osp_total = fund_np["portfolio_usd"].sum()
+    _cust_total = fund_np["portfolio_usd"].sum()
     _n_funded = int(fund_np["n_portfolio_with_amount"].sum())
 
     def usd_sub_chart(df, title, top=10):
@@ -324,7 +326,7 @@ def _(FOREST, GOLD, MOSS, SLATE, alt, fund_np, fund_np_sub, mo, pillar_chart, wi
         _long["series"] = _long["series"].map(
             {
                 "ecosystem_funding_pct": f"Ecosystem nonprofit dollars ({_years})",
-                "portfolio_funding_pct": f"OSP grant dollars ({_years})",
+                "portfolio_funding_pct": f"{CUSTOMER} grant dollars ({_years})",
             }
         )
         _order = _keep.sort_values("portfolio_funding_pct", ascending=False).index.tolist()
@@ -354,8 +356,8 @@ def _(FOREST, GOLD, MOSS, SLATE, alt, fund_np, fund_np_sub, mo, pillar_chart, wi
                 {
                     "ecosystem_pct": "Ecosystem nonprofits (orgs)",
                     "ecosystem_funding_pct": f"Ecosystem nonprofit dollars ({_years})",
-                    "portfolio_pct": "OSP grantees (orgs)",
-                    "portfolio_funding_pct": f"OSP grant dollars ({_years})",
+                    "portfolio_pct": f"{CUSTOMER} grantees (orgs)",
+                    "portfolio_funding_pct": f"{CUSTOMER} grant dollars ({_years})",
                 },
                 [MOSS, SLATE, GOLD, FOREST],
                 "Nonprofits: orgs vs dollars, by pillar",
@@ -363,10 +365,10 @@ def _(FOREST, GOLD, MOSS, SLATE, alt, fund_np, fund_np_sub, mo, pillar_chart, wi
             ),
             usd_sub_chart(fund_np_sub, "Nonprofits: dollar share by sub-pillar"),
             mo.md(
-                f"*OSP grant dollars: ${_osp_total / 1e6:,.1f}M across {_n_funded} "
+                f"*{CUSTOMER} grant dollars: ${_cust_total / 1e6:,.1f}M across {_n_funded} "
                 f"mapped grantees ({_years}). Ecosystem nonprofit dollars = grants "
-                f"received as recorded by Candid. Companies are not dollar-weighted: "
-                f"OSP's investment amounts are not in the source data.*"
+                f"received as recorded by Candid. Companies are dollar-weighted only "
+                f"if the customer supplied investment amounts.*"
             ),
         ]
     )
@@ -427,7 +429,7 @@ def _(FOREST, LIGHT, alt, conv, conv_fp, conv_np, mo):
     mo.vstack(
         [
             mo.md("## Deals seen vs deals done"),
-            conv_chart(conv, "Blended: OSP passes on energy, converts on nature"),
+            conv_chart(conv, "Blended: invested vs passed, by pillar"),
             conv_chart(conv_fp, "Companies only"),
             conv_chart(conv_np, "Nonprofit grants only"),
             mo.md(
@@ -441,7 +443,7 @@ def _(FOREST, LIGHT, alt, conv, conv_fp, conv_np, mo):
 
 
 @app.cell
-def _(mo, orgs):
+def _(CUSTOMER, mo, orgs):
     # What didn't map — counts computed here; the adjudication (which
     # refusals are genuinely out of scope vs walk misses vs taxonomy gaps)
     # lives in data/results/nomatch_analysis.md, and every correction that
@@ -454,15 +456,12 @@ def _(mo, orgs):
 
     - **{_no_text} have no usable text** even after the customer round-trip.
     - **{len(_no_pillar) - _no_text} had text and were refused** by the walk.
-      Two review rounds (Run B: 74 rows; customer-text batch: 28 rows) found the
-      large majority genuinely outside the solutions taxonomy — humanitarian,
-      health, cultural and Indigenous-sovereignty work, non-climate businesses
-      among passed deals — with walk misses corrected via the overrides file and
-      a residue of taxonomy gaps (water access, adaptation & resilience,
-      Indigenous biocultural stewardship).
-    - **{int(_cust.sum())} orgs were invisible to standard data sources**; OSP's
+      The /review-taxonomy loop adjudicates these (genuinely out of scope vs walk
+      miss vs taxonomy gap vs thin text); walk misses that survive the adversarial
+      gate land in `taxonomy_overrides.json`.
+    - **{int(_cust.sum())} orgs were invisible to standard data sources**; {CUSTOMER}'s
       own descriptions placed {int((_cust & orgs['level0_one_earth_category'].notna()).sum())}
-      of them (incl. the six P1-ruling placements).
+      of them.
 
     Row-level evidence: `data/results/nomatch_analysis.md`. The customer-facing
     narrative is `notebooks/report.py` in the engagement repo.
