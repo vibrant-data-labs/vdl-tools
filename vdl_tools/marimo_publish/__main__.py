@@ -19,6 +19,7 @@ import ast
 import base64
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -488,7 +489,37 @@ def cmd_provision(args) -> int:
 
 # ---------------------------------------------------------------- deploy ----
 
+# Every object is uploaded with an explicit Cache-Control. S3 sends none by
+# default, and browsers then cache heuristically -- yet a WASM export fetches
+# index.html (which embeds the notebook code) and public/* at fixed URLs on every
+# load. Without the header a republish shows a stale notebook against stale
+# data: on 2026-09-15 two sections of a report silently vanished because new
+# cells read new keys from a public/report_stats.json the browser had cached,
+# while the bucket held the right file.
+NO_CACHE = "no-cache"
+# marimo's build (Vite) names every file under assets/ <stem>-<8-char hash>.<ext>
+# and index.html links each one by that name, so a changed asset is a new URL
+# and the old one can be cached indefinitely. A file not named that way is not
+# content-addressed and must not be.
 IMMUTABLE = "public,max-age=31536000,immutable"
+HASHED_NAME = re.compile(r".+-[A-Za-z0-9_-]{8}\.[A-Za-z0-9]+$")
+
+# In the export but not part of the app: CLAUDE.md is marimo's generic agent
+# prompt copied in from its _static/, .nojekyll a GitHub Pages marker.
+UPLOAD_EXCLUDES = ("CLAUDE.md", ".nojekyll")
+
+
+def assets_cache_control(assets: Path) -> tuple[str, list[str]]:
+    """IMMUTABLE when every file under assets/ carries a content hash, else NO_CACHE.
+
+    Also returns the files that are not content-hashed, so deploy can say why.
+    """
+    unhashed = sorted(
+        str(f.relative_to(assets))
+        for f in assets.rglob("*")
+        if f.is_file() and not HASHED_NAME.match(f.name)
+    )
+    return (NO_CACHE if unhashed else IMMUTABLE), unhashed
 
 
 def cmd_deploy(args) -> int:
@@ -498,70 +529,82 @@ def cmd_deploy(args) -> int:
         die(f"{src}/index.html missing -- run export first")
     aws = need("aws")
 
-    dest = args.dest or stack_output(app, "BucketURI")
+    dest = (args.dest or stack_output(app, "BucketURI")).rstrip("/")
     if not dest:
         die(f"no bucket for {app!r} -- run provision first, or pass --dest")
     dry = [] if args.apply else ["--dryrun"]
-    prune = ["--delete"] if args.prune else []
+    excludes = [arg for name in ("index.html", *UPLOAD_EXCLUDES) for arg in ("--exclude", name)]
+
+    assets = src / "assets"
+    assets_cc, unhashed = assets_cache_control(assets) if assets.is_dir() else (NO_CACHE, [])
 
     print(f"{src} -> {dest}")
+    if assets_cc == IMMUTABLE:
+        n = sum(1 for f in assets.rglob("*") if f.is_file())
+        print(f"  Cache-Control: {NO_CACHE} on every object; assets/ {IMMUTABLE}")
+        print(f"    ({n} content-hashed files, linked from index.html by name)")
+    else:
+        print(f"  Cache-Control: {NO_CACHE} on every object")
+        if unhashed:
+            print(f"    assets/ is not cached long: {len(unhashed)} file(s) carry no content hash")
+            for name in unhashed[:10]:
+                print(f"      {name}")
 
-    # Content-hashed asset filenames, so they can be cached indefinitely.
+    # `cp --recursive`, not `sync`: sync skips a file whose size and mtime match
+    # the object already in S3, and a skipped object keeps whatever Cache-Control
+    # it was first uploaded with -- none, if it was put there by hand. Every
+    # deploy must leave every object stamped; re-sending tens of MB is cheap.
     run(
         [
             aws,
             "s3",
-            "sync",
+            "cp",
+            "--recursive",
             f"{src}/",
             f"{dest}/",
             *dry,
-            *prune,
+            *excludes,
             "--exclude",
-            "index.html",
-            "--exclude",
-            "public/*",
-            "--exclude",
-            "CLAUDE.md",
-            "--exclude",
-            ".nojekyll",
+            "assets/*",
             "--cache-control",
-            IMMUTABLE,
+            NO_CACHE,
         ]
     )
 
-    # Belt and braces: some CLI builds guess binary/octet-stream for .wasm, and
-    # WebAssembly.instantiateStreaming rejects a non-application/wasm response.
-    for wasm in sorted((src / "assets").glob("*.wasm")):
+    if assets.is_dir():
         run(
             [
                 aws,
                 "s3",
                 "cp",
-                str(wasm),
-                f"{dest}/{wasm.relative_to(src)}",
-                *dry,
-                "--content-type",
-                "application/wasm",
-                "--cache-control",
-                IMMUTABLE,
-            ]
-        )
-
-    if (src / "public").is_dir():
-        run(
-            [
-                aws,
-                "s3",
-                "sync",
-                f"{src}/public/",
-                f"{dest}/public/",
+                "--recursive",
+                f"{assets}/",
+                f"{dest}/assets/",
                 *dry,
                 "--cache-control",
-                "public,max-age=300",
+                assets_cc,
             ]
         )
+        # Belt and braces: some CLI builds guess binary/octet-stream for .wasm,
+        # and WebAssembly.instantiateStreaming rejects a non-application/wasm
+        # response.
+        for wasm in sorted(assets.glob("*.wasm")):
+            run(
+                [
+                    aws,
+                    "s3",
+                    "cp",
+                    str(wasm),
+                    f"{dest}/{wasm.relative_to(src)}",
+                    *dry,
+                    "--content-type",
+                    "application/wasm",
+                    "--cache-control",
+                    assets_cc,
+                ]
+            )
 
-    # index.html last and uncached, so a partial sync is never the live page.
+    # index.html last, so a partial upload is never the live page.
     run(
         [
             aws,
@@ -573,9 +616,30 @@ def cmd_deploy(args) -> int:
             "--content-type",
             "text/html; charset=utf-8",
             "--cache-control",
-            "no-cache",
+            NO_CACHE,
         ]
     )
+
+    if args.prune:
+        # Only once the new index.html is live: until then the old one still
+        # links the previous build's assets. Everything above is already
+        # uploaded and stamped, so this pass exists to delete, not to upload;
+        # --size-only keeps it from re-sending files on mtime rounding.
+        run(
+            [
+                aws,
+                "s3",
+                "sync",
+                f"{src}/",
+                f"{dest}/",
+                *dry,
+                "--delete",
+                "--size-only",
+                *excludes,
+                "--cache-control",
+                NO_CACHE,
+            ]
+        )
 
     if args.apply:
         dist = stack_output(app, "DistributionId")
