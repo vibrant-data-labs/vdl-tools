@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import time
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 TEMPLATE = Path(__file__).parent / "infra.yaml"
@@ -45,6 +46,23 @@ PATH_READERS = {
     "scan_csv",
     "scan_parquet",
     "open",
+}
+
+# Filesystem methods that raise on what mo.notebook_location() returns in a WASM
+# build: a marimo URLPath, not a pathlib.Path. Locally it IS a Path, so all of
+# these work under `python notebook.py` and `marimo edit` and only fail in the
+# browser. Builtin open() on such a value is flagged too. pd.read_csv(str(path))
+# is fine -- pandas fetches the URL itself.
+URL_UNSAFE_METHODS = {
+    "read_text",
+    "read_bytes",
+    "open",
+    "exists",
+    "is_file",
+    "is_dir",
+    "iterdir",
+    "glob",
+    "rglob",
 }
 
 
@@ -124,6 +142,140 @@ def _app_title(tree: ast.AST) -> str | None:
     return None
 
 
+# Calls and methods that hand a notebook_location() value back still pointing at
+# the same place, as a path or as its string form.
+_PATH_WRAPPERS = {"str", "fspath", "Path", "PurePath", "PurePosixPath"}
+_PATH_METHODS = {"joinpath", "with_name", "with_suffix", "with_stem", "resolve", "absolute"}
+# A string containing one of these in an `if` test means the branches already
+# tell a URL from a local file, e.g. `if s.startswith(("http://", "https://")):`.
+_URL_GUARD_MARKERS = ("http", "emscripten", "pyodide")
+
+
+@dataclass(frozen=True)
+class _Scope:
+    cell: ast.AST | None  # top-level def enclosing the node (a marimo cell)
+    func: ast.AST | None  # nearest enclosing def
+    shadowed: frozenset[str]  # parameters of enclosing helper (non-cell) functions
+    guarded: bool  # inside an if/else that branches on URL vs local file
+
+
+def _call_name(fn: ast.expr) -> str | None:
+    return fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
+
+
+def _is_cell(fn: ast.AST) -> bool:
+    """Decorated @app.cell / @app.cell(...): its parameters are notebook globals."""
+    return any(
+        _call_name(d.func if isinstance(d, ast.Call) else d) == "cell"
+        for d in getattr(fn, "decorator_list", [])
+    )
+
+
+def _is_url_guard(test: ast.expr) -> bool:
+    return any(
+        isinstance(n, ast.Constant)
+        and isinstance(n.value, str)
+        and any(m in n.value for m in _URL_GUARD_MARKERS)
+        for n in ast.walk(test)
+    )
+
+
+def _walk_scoped(node: ast.AST, scope: _Scope):
+    yield node, scope
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        a = node.args
+        params = [*a.posonlyargs, *a.args, *a.kwonlyargs, a.vararg, a.kwarg]
+        scope = replace(
+            scope,
+            cell=scope.cell or node,
+            func=scope.func if isinstance(node, ast.Lambda) else node,
+            shadowed=scope.shadowed
+            if _is_cell(node)
+            else scope.shadowed | {p.arg for p in params if p},
+        )
+    for field, value in ast.iter_fields(node):
+        child_scope = scope
+        if (
+            isinstance(node, (ast.If, ast.IfExp))
+            and field in ("body", "orelse")
+            and _is_url_guard(node.test)
+        ):
+            child_scope = replace(scope, guarded=True)
+        for child in value if isinstance(value, list) else [value]:
+            if isinstance(child, ast.AST):
+                yield from _walk_scoped(child, child_scope)
+
+
+def _location_fs_calls(tree: ast.Module) -> list[tuple[int, str]]:
+    """Filesystem calls on values derived from mo.notebook_location().
+
+    Taint follows names: anything assigned from (or returned by a helper as) an
+    expression that resolves to notebook_location() -- directly, through `/`,
+    str(), Path(), .parent, an f-string, or another tainted name. marimo makes
+    `_`-prefixed names private to their cell, so those are tracked per cell;
+    other names are notebook globals and carry across cells.
+
+    Calls inside an if/else whose test checks for a URL (the read-through-URL
+    pattern the audit recommends) are not flagged.
+    """
+    nodes = list(_walk_scoped(tree, _Scope(None, None, frozenset(), False)))
+    tainted: set[tuple[ast.AST | None, str]] = set()
+
+    def key(name: str, scope: _Scope):
+        return (scope.cell if name.startswith("_") else None, name)
+
+    def derived(e: ast.expr, scope: _Scope) -> bool:
+        if isinstance(e, ast.Name):
+            return e.id not in scope.shadowed and key(e.id, scope) in tainted
+        if isinstance(e, ast.BinOp) and isinstance(e.op, (ast.Div, ast.Add)):
+            return derived(e.left, scope) or derived(e.right, scope)
+        if isinstance(e, ast.JoinedStr):
+            return any(
+                derived(v.value, scope) for v in e.values if isinstance(v, ast.FormattedValue)
+            )
+        if isinstance(e, ast.Attribute):
+            return e.attr == "parent" and derived(e.value, scope)
+        if isinstance(e, ast.Call):
+            name = _call_name(e.func)
+            if name == "notebook_location":
+                return True
+            if name in _PATH_METHODS and isinstance(e.func, ast.Attribute):
+                return derived(e.func.value, scope)
+            if name in _PATH_WRAPPERS:
+                return any(derived(arg, scope) for arg in e.args)
+            # A helper function that returns a notebook_location() path.
+            return isinstance(e.func, ast.Name) and derived(e.func, scope)
+        return False
+
+    # Cells can appear in any order in the file, so propagate to a fixed point.
+    while True:
+        before = len(tainted)
+        for node, scope in nodes:
+            if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+                if node.value is not None and derived(node.value, scope):
+                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                    tainted.update(key(t.id, scope) for t in targets if isinstance(t, ast.Name))
+            elif isinstance(node, ast.Return) and node.value is not None:
+                fn = scope.func
+                if fn is not None and not _is_cell(fn) and derived(node.value, scope):
+                    tainted.add(key(fn.name, scope))
+        if len(tainted) == before:
+            break
+
+    hits = []
+    for node, scope in nodes:
+        if not isinstance(node, ast.Call) or scope.guarded:
+            continue
+        fn = node.func
+        if isinstance(fn, ast.Attribute) and fn.attr in URL_UNSAFE_METHODS:
+            if derived(fn.value, scope):
+                hits.append((node.lineno, f".{fn.attr}()"))
+        elif isinstance(fn, ast.Name) and fn.id == "open" and node.args:
+            if derived(node.args[0], scope):
+                hits.append((node.lineno, "open()"))
+    return hits
+
+
 def cmd_audit(args) -> int:
     nb = Path(args.notebook).resolve()
     if not nb.is_file():
@@ -132,6 +284,7 @@ def cmd_audit(args) -> int:
     tree = ast.parse(src)
 
     hardcoded = _literal_path_calls(tree)
+    location_fs = _location_fs_calls(tree)
     uses_location = "notebook_location" in src
     public_dir = nb.parent / "public"
     title = _app_title(tree)
@@ -159,6 +312,27 @@ def cmd_audit(args) -> int:
     else:
         print("No hardcoded data paths found.")
 
+    if location_fs:
+        lines = src.splitlines()
+        print()
+        print(
+            f"{len(location_fs)} filesystem call(s) on mo.notebook_location() paths"
+            " -- these WILL fail in WASM:"
+        )
+        for lineno, call in location_fs:
+            print(f"  {nb.name}:{lineno}  {call}  {lines[lineno - 1].strip()}")
+        print()
+        print("  notebook_location() is a pathlib.Path locally but a URLPath in the WASM")
+        print("  export, so a local run passes and the browser raises (AttributeError:")
+        print("  'URLPath' object has no attribute 'read_text'). pd.read_csv(str(path))")
+        print("  is fine -- pandas fetches the URL. Anything else must read through it:")
+        print("    s = str(path)")
+        print('    if s.startswith(("http://", "https://")):')
+        print("        text = urllib.request.urlopen(s).read().decode()")
+        print("    else:")
+        print("        with open(s) as f:")
+        print("            text = f.read()")
+
     if public_dir.is_dir():
         total = sum(f.stat().st_size for f in public_dir.rglob("*") if f.is_file())
         print()
@@ -171,7 +345,7 @@ def cmd_audit(args) -> int:
             print("  Over 10 MB. Pyodide downloads and parses this in the browser --")
             print("  check whether the notebook reads every column before shipping it.")
 
-    return 1 if (hardcoded and not uses_location) else 0
+    return 1 if (hardcoded and not uses_location) or location_fs else 0
 
 
 # ----------------------------------------------------------- credentials ----
@@ -263,6 +437,12 @@ def cmd_export(args) -> int:
     )
     if not (out / "index.html").is_file():
         die("export produced no index.html")
+    # Deleted here, not only excluded by deploy, so a folder uploaded by hand
+    # cannot ship them either.
+    for name in UPLOAD_EXCLUDES:
+        if (out / name).is_file():
+            (out / name).unlink()
+            print(f"  removed {name} (written by marimo, not part of the app)")
     files = sum(1 for f in out.rglob("*") if f.is_file())
     size = sum(f.stat().st_size for f in out.rglob("*") if f.is_file())
     print(f"  {files} files, {size / 1e6:.1f} MB")

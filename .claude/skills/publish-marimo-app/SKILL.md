@@ -44,6 +44,23 @@ pd.read_csv(str(mo.notebook_location() / "public" / "data.csv"))
 Prefer one `data_url()` helper cell over repeating the expression. Rename files
 to URL-safe names — spaces need percent-encoding and will bite.
 
+`mo.notebook_location()` is a `pathlib.Path` locally but a marimo `URLPath` in
+the export, so **only pass it through `str()` to a reader that fetches URLs**
+(pandas does). `.read_text()`, `.read_bytes()`, `.open()`, `.exists()`,
+`.iterdir()`, `.glob()` and `open(...)` on it all work locally and raise in the
+browser — `AttributeError: 'URLPath' object has no attribute 'read_text'` — and
+every downstream cell then fails with "An ancestor raised an exception". The
+audit flags these. Read anything that is not a pandas table through the URL:
+
+```python
+s = str(mo.notebook_location() / "public" / "stats.json")
+if s.startswith(("http://", "https://")):
+    stats = json.loads(urllib.request.urlopen(s).read().decode())
+else:
+    with open(s) as f:
+        stats = json.load(f)
+```
+
 **Do not skip this because the notebook runs locally.** Local success proves
 nothing about WASM; the filesystems are unrelated.
 
@@ -72,7 +89,29 @@ Confirm the notebook still runs end to end afterwards:
 python <notebook.py>
 ```
 
-## 4. Credentials
+That proves the Python is sound, not that the export works — see step 4.
+
+## 4. Smoke-test the export in a browser
+
+A local `python notebook.py` run cannot catch WASM-only failures, and the audit
+only catches the patterns it knows. Before publishing, run the export itself:
+
+```bash
+python -m vdl_tools.marimo_publish export <notebook.py> --out /tmp/<app>_export
+```
+
+```bash
+python -m http.server 8000 --directory /tmp/<app>_export
+```
+
+Open `http://localhost:8000/`, wait for Pyodide to finish loading (tens of seconds
+on a cold load), and open the browser console. Any `[STDERR]` line with a
+`Traceback` is a failure that will ship. In run mode a failing cell renders
+**blank**, and so does everything downstream of it — a page that looks merely
+sparse can be a page that crashed, so read the console rather than the page.
+Fix, re-export, re-check; publish only with a clean console.
+
+## 5. Credentials
 
 ```bash
 python -m vdl_tools.marimo_publish credentials <app-name> --quiet
@@ -86,7 +125,7 @@ permanently. Tell the user to read the file themselves and put it in 1Password.
 Never paste a password into a file in the repo, and never echo one the user gave
 you back into the transcript.
 
-## 5. Publish
+## 6. Publish
 
 ```bash
 python -m vdl_tools.marimo_publish publish <notebook.py> --app <app-name> --apply
@@ -95,7 +134,7 @@ python -m vdl_tools.marimo_publish publish <notebook.py> --app <app-name> --appl
 Export → provision → deploy. The first run creates a CloudFront distribution and
 takes 5–15 minutes; later runs are fast. Drop `--apply` to dry-run the upload.
 
-## 6. Verify — do not skip
+## 7. Verify — do not skip
 
 ```bash
 curl -sI https://vdl-<app-name>.s3.amazonaws.com/index.html | head -1

@@ -44,7 +44,7 @@ while iterating.
 |---|---|
 | `audit` | Reports what stops a notebook working in WASM. Non-zero exit if it cannot. |
 | `credentials` | Creates or rotates basic-auth credentials in `~/.vdl/marimo-publish/`. |
-| `export` | Builds the WASM export. |
+| `export` | Builds the WASM export, removing marimo's `CLAUDE.md` and `.nojekyll`, which are not part of the app. |
 | `provision` | Creates/updates the bucket, distribution, OAC, edge function, bucket policy. |
 | `deploy` | Uploads an export and invalidates the CDN. |
 | `publish` | All three. |
@@ -68,6 +68,23 @@ the served URL:
 pd.read_csv(str(mo.notebook_location() / "public" / "data.csv"))
 ```
 
+That `str()` matters: `notebook_location()` is a `pathlib.Path` locally but a
+marimo `URLPath` in the export. pandas fetches the URL string; filesystem calls
+do not. `audit` flags `.read_text()`, `.read_bytes()`, `.open()`, `.exists()`,
+`.iterdir()`, `.glob()` and `open(...)` on any value derived from
+`notebook_location()` — each passes `python notebook.py` and raises in the
+browser (`AttributeError: 'URLPath' object has no attribute 'read_text'`).
+Read non-table files through the URL instead:
+
+```python
+s = str(mo.notebook_location() / "public" / "stats.json")
+if s.startswith(("http://", "https://")):
+    text = urllib.request.urlopen(s).read().decode()
+else:
+    with open(s) as f:
+        text = f.read()
+```
+
 `audit` also reports the browser tab title, which marimo derives from the
 **filename** unless the notebook sets `app_title` on `marimo.App(...)` — so
 `molab_version.py` ships as "molab version" in the tab and in link previews.
@@ -76,6 +93,19 @@ This is invisible locally: the notebook runs fine under `marimo edit` and dies
 in the browser. `audit` AST-walks for it, and also reports the `public/` payload
 size, because Pyodide downloads *and parses* that in the browser on every cold
 load. Ship the columns the notebook renders, not whatever the pipeline emitted.
+
+## Smoke-test the export before publishing
+
+`audit` catches known patterns; only the export itself proves the app runs.
+
+```bash
+python -m vdl_tools.marimo_publish export notebook.py --out /tmp/app_export
+python -m http.server 8000 --directory /tmp/app_export
+```
+
+Open `http://localhost:8000/`, let Pyodide load, and check the browser console
+for `[STDERR]` lines with a `Traceback`. In run mode a failing cell — and every
+cell downstream of it — renders blank, so the page alone will not tell you.
 
 ## What provision creates
 
