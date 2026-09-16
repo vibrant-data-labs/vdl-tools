@@ -63,6 +63,9 @@ class EngagementConfig:
     # sub_pillars that seed the solution set from the customer's own
     # investments, exclude_solutions, min_backer_companies, min_backer_share.
     sourcing: dict = field(default_factory=dict)
+    # Optional map-input settings (see mapping.py): customer_label (defaults
+    # to the customer slug, title-cased), portfolio_tag, data_source_label.
+    mapping: dict = field(default_factory=dict)
     root: Path = field(default_factory=Path.cwd)
 
     @classmethod
@@ -83,6 +86,7 @@ class EngagementConfig:
                 enrichment=eng.get("enrichment", {}),
                 funding=eng.get("funding", {}),
                 sourcing=eng.get("sourcing", {}),
+                mapping=eng.get("mapping", {}),
                 root=path.parent,
             )
         except (KeyError, TypeError) as exc:
