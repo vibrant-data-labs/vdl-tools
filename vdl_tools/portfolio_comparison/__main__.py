@@ -19,7 +19,7 @@ def main():
         "stage",
         choices=["pin-baseline", "intake", "match", "status",
                  "export-customer", "import-customer", "set-id", "finalize",
-                 "compare", "enrich", "enrich-acquire", "enrich-scrape", "enrich-summarize"],
+                 "compare", "sourcing", "map-input", "enrich", "enrich-acquire", "enrich-scrape", "enrich-summarize"],
     )
     parser.add_argument(
         "--root", default=".", help="engagement repo root (default: cwd)"
@@ -95,6 +95,16 @@ def main():
 
         tables = run_compare(root)
         print(tables["comparison_pillar"].to_string())
+    elif args.stage == "sourcing":
+        from vdl_tools.portfolio_comparison.sourcing import run_sourcing
+
+        out = run_sourcing(root)
+        print(out["sourcing_backers"].head(20).to_string(index=False))
+    elif args.stage == "map-input":
+        from vdl_tools.portfolio_comparison.mapping import build_map_input
+
+        df = build_map_input(root)
+        print(f"map input: {len(df)} rows -> data/results/map_input.json")
     elif args.stage == "enrich":
         from vdl_tools.portfolio_comparison.enrichment.pipeline import run_enrich
 

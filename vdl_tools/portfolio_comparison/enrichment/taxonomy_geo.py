@@ -57,7 +57,7 @@ def _default_taxonomy_mapper(df, taxonomy_path, results_dir, recovery=False,
         ),
         # enrichment.recovery in engagement.yaml: a second-chance scope pass
         # for walk-refused orgs; in-scope ones re-walk and land at least at
-        # pillar depth (OSP: recovered 40 of 91).
+        # pillar depth (pilot engagement: recovered 40 of 91).
         recover_unmatched=recovery,
         walk_recovered=recovery,
         **kwargs,

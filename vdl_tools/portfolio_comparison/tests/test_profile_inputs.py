@@ -37,7 +37,7 @@ def test_overrides_clear_disposition_blocking():
 
 
 def test_token_fallback_maps_compound_headers_but_not_sponsor_columns():
-    # Real OSP grants file shape: the project-name header only matches via
+    # Real customer grants-file shape: the project-name header only matches via
     # token fallback, and "Fiscal Sponsor Name" must NOT claim `name`.
     mapping = propose_column_mapping([
         "EIN", "Organization / Project Name", "Website",

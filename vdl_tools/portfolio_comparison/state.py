@@ -26,6 +26,9 @@ STAGES = [
     "enrich_geocode",
     # Phase 3
     "compare",
+    "sourcing",
+    "map_input",
+    "map",
 ]
 
 STATE_FILENAME = "pipeline_state.json"

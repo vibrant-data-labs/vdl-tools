@@ -44,7 +44,7 @@ while iterating.
 |---|---|
 | `audit` | Reports what stops a notebook working in WASM. Non-zero exit if it cannot. |
 | `credentials` | Creates or rotates basic-auth credentials in `~/.vdl/marimo-publish/`. |
-| `export` | Builds the WASM export, removing the `CLAUDE.md` marimo copies in so it never reaches a bucket. |
+| `export` | Builds the WASM export, removing marimo's `CLAUDE.md` and `.nojekyll`, which are not part of the app. |
 | `provision` | Creates/updates the bucket, distribution, OAC, edge function, bucket policy. |
 | `deploy` | Uploads an export and invalidates the CDN. |
 | `publish` | All three. |
@@ -119,6 +119,37 @@ Free at normal usage: CloudFront's perpetual free tier covers 1 TB egress,
 10M requests and 2M function invocations per month, and the S3 storage for a
 ~30 MB build rounds to a tenth of a cent.
 
+## Caching
+
+`deploy` stamps every object with an explicit `Cache-Control`. S3 sends none by
+default, so browsers cache heuristically — and a WASM export fetches
+`index.html` (which embeds the notebook code) and `public/*` at fixed URLs on
+every load. Without the header a republish shows a stale notebook against stale
+data; on 2026-09-15 two sections of a report silently vanished because new cells
+read new keys from a `public/report_stats.json` the browser had cached, while
+the bucket held the right file.
+
+| Objects | `Cache-Control` |
+|---|---|
+| `index.html`, `public/*`, everything else | `no-cache` — revalidated on every load |
+| `assets/*`, when every file there is named `<stem>-<hash>.<ext>` | `public,max-age=31536000,immutable` |
+
+`assets/` is marimo's Vite build: each file is content-addressed and linked from
+`index.html` by that name, so a changed file is a new URL. If any file there is
+not named that way the whole folder falls back to `no-cache`, and `deploy` says
+which files caused it.
+
+Uploads use `aws s3 cp --recursive`, not `sync`. `sync` skips files whose size
+and mtime match S3, and a skipped object keeps whatever header it was first
+uploaded with — none, if it was put there by hand. So re-running `deploy`
+against an existing bucket re-stamps every object. CloudFront's cache policy
+honours these headers, and `deploy --apply` still invalidates `/*` afterwards.
+
+If an export has to go to some other bucket by hand, upload it with
+`deploy <app> --src <export> --dest s3://bucket/prefix --apply` rather than a
+bare `aws s3 cp`, so the headers are set. Without a stack the CloudFront
+invalidation is simply skipped.
+
 ## Security
 
 Auth runs at the edge on every viewer request, before anything reaches S3, so
@@ -133,6 +164,14 @@ Verify after any deploy — this is the check that matters:
 ```bash
 curl -sI https://<bucket>.s3.amazonaws.com/index.html | head -1   # expect 403
 curl -sI https://<dist>.cloudfront.net/public/<file>.csv | head -1 # expect 401
+```
+
+A republish must show the new version on a normal reload. If it does not, the
+objects are missing `Cache-Control: no-cache` — check the origin, not the
+browser:
+
+```bash
+aws s3api head-object --bucket <bucket> --key public/<file> --query CacheControl
 ```
 
 Basic auth is one shared credential: no per-person access, no selective

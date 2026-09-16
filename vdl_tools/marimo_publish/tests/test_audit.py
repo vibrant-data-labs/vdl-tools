@@ -141,7 +141,7 @@ def test_not_flagged(src):
     assert _hits(src) == []
 
 
-def test_export_removes_marimo_claude_md(tmp_path, monkeypatch):
+def test_export_removes_marimo_files_not_in_the_app(tmp_path, monkeypatch):
     nb = tmp_path / "nb.py"
     nb.write_text("import marimo\napp = marimo.App()\n")
     out = tmp_path / "nb_export"
@@ -150,8 +150,10 @@ def test_export_removes_marimo_claude_md(tmp_path, monkeypatch):
         out.mkdir()
         (out / "index.html").write_text("<html></html>")
         (out / "CLAUDE.md").write_text("# Marimo notebook assistant\n")
+        (out / ".nojekyll").write_text("")
 
     monkeypatch.setattr(mp, "run", fake_export)
     mp.cmd_export(argparse.Namespace(notebook=str(nb), out=str(out), mode="run"))
     assert (out / "index.html").is_file()
     assert not (out / "CLAUDE.md").exists()
+    assert not (out / ".nojekyll").exists()
