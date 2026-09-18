@@ -53,6 +53,45 @@ def _git_sha(repo_dir: Path) -> str | None:
         return None
 
 
+def _git_code_version(repo_dir: Path, exclude: tuple[str, ...] = ()) -> str | None:
+    """HEAD's SHA, suffixed ``+dirty.<hash8>`` when tracked files differ from HEAD.
+
+    A stage that runs on uncommitted edits did not run on HEAD, so the stamp
+    says so; ``<hash8>`` is a SHA-256 prefix of ``git diff HEAD``, which tells
+    two dirty runs apart. Untracked files don't count — a new module shows up
+    once it is ``git add``-ed. ``exclude`` lists paths (relative to
+    ``repo_dir``) left out of the check: the ledger, which ``record_stage``
+    itself rewrites. If the check fails, the stamp says ``+dirty`` rather than
+    claim a clean HEAD nobody verified.
+    """
+    sha = _git_sha(repo_dir)
+    if sha is None:
+        return None
+    pathspec = ["--", ":/", *(f":(exclude){p}" for p in exclude)]
+    try:
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no", *pathspec],
+            cwd=repo_dir, capture_output=True, check=True,
+        ).stdout
+        if not status.strip():
+            return sha
+        diff = subprocess.run(
+            ["git", "diff", "HEAD", "--binary", "--no-color", "--no-ext-diff", *pathspec],
+            cwd=repo_dir, capture_output=True, check=True,
+        ).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return f"{sha}+dirty"
+    return f"{sha}+dirty.{hashlib.sha256(diff).hexdigest()[:8]}"
+
+
+def _short(version: str | None) -> str:
+    """``<sha9>`` plus any ``+dirty…`` marker; ``unknown`` outside git."""
+    if not version:
+        return "unknown"
+    sha, plus, marker = version.partition("+")
+    return sha[:9] + plus + marker
+
+
 class PipelineState:
     def __init__(self, engagement_root: str | Path):
         self.root = Path(engagement_root)
@@ -74,7 +113,7 @@ class PipelineState:
         self.data["stages"][stage] = {
             "status": status,
             "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "code": ",".join(f"{k}@{(v or 'unknown')[:9]}" for k, v in versions.items()),
+            "code": ",".join(f"{k}@{_short(v)}" for k, v in versions.items()),
             **details,
         }
         self.save()
@@ -94,8 +133,10 @@ class PipelineState:
 
         versions = {}
         vdl_tools_dir = Path(vdl_tools.__file__).resolve().parent.parent
-        versions["vdl_tools"] = _git_sha(vdl_tools_dir)
-        versions["engagement_repo"] = _git_sha(Path(engagement_repo or self.root))
+        versions["vdl_tools"] = _git_code_version(vdl_tools_dir)
+        versions["engagement_repo"] = _git_code_version(
+            Path(engagement_repo or self.root), exclude=(STATE_FILENAME,),
+        )
         self.data["code_versions"].update(versions)
         if save:
             self.save()
@@ -121,7 +162,7 @@ class PipelineState:
                 lines.append(f"  {name}: {art['path']} sha256={art['sha256'][:12]}…")
         if self.data["code_versions"]:
             versions = ", ".join(
-                f"{k}@{(v or 'unknown')[:9]}" for k, v in self.data["code_versions"].items()
+                f"{k}@{_short(v)}" for k, v in self.data["code_versions"].items()
             )
             lines.append(f"code: {versions}")
         return "\n".join(lines)
