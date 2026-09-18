@@ -14,8 +14,8 @@ CB_UUID = "151d5f17-1348-4f5d-91ee-e28da195b1ec"
 
 def base_final():
     return pd.DataFrame([
-        {"customer_row_id": "r1", "customer_name": "Aquila",
-         "customer_url": "https://aquila.space", "customer_ein": pd.NA,
+        {"customer_row_id": "r1", "customer_name": "Contoso",
+         "customer_url": "https://contoso.space", "customer_ein": pd.NA,
          "customer_description": pd.NA, "entity_type": "for_profit",
          "cb_id": CB_UUID, "nzi_id": "108278",
          "matched_id": "108278", "matched_source": "nzi"},
@@ -35,11 +35,11 @@ def base_final():
 def fake_cb(ids):
     assert ids == [CB_UUID]
     return pd.DataFrame([{
-        "uuid": CB_UUID, "name": "Aquila",
+        "uuid": CB_UUID, "name": "Contoso",
         "description": "Long light-based energy network description.",
         "short_description": "Light-based energy network.",
-        "website_url": "https://www.aquila.earth",
-        "linkedin": {"value": "https://www.linkedin.com/company/aquila-earth"},
+        "website_url": "https://www.contoso.earth",
+        "linkedin": {"value": "https://www.linkedin.com/company/contoso-earth"},
         "status": "operating",
         "location_identifiers": [
             {"value": "Boulder", "location_type": "city"},
@@ -51,10 +51,10 @@ def fake_cb(ids):
 def fake_nzi(ids):
     assert ids == [108278]
     return pd.DataFrame([{
-        "clientID": 108278, "name": "Aquila",
+        "clientID": 108278, "name": "Contoso",
         "description": "NZI long description.", "pitchLine": "Flexible energy.",
-        "website": "https://www.aquila.earth",
-        "linkedinURL": "https://www.linkedin.com/company/aquila-earth",
+        "website": "https://www.contoso.earth",
+        "linkedinURL": "https://www.linkedin.com/company/contoso-earth",
         "city": "Boulder", "country": "United States",
     }])
 
@@ -101,10 +101,10 @@ def test_acquisition_attaches_all_sources(tmp_path):
                           cb_fetch=fake_cb, nzi_fetch=fake_nzi, gt_client=FakeGT())
     r1 = out[out["customer_row_id"] == "r1"].iloc[0]
     assert r1["cb_description"].startswith("Long light-based")
-    assert r1["cb_linkedin"] == "https://www.linkedin.com/company/aquila-earth"
+    assert r1["cb_linkedin"] == "https://www.linkedin.com/company/contoso-earth"
     assert r1["cb_location"] == "Boulder, United States"
     assert r1["nzi_pitchline"] == "Flexible energy."
-    assert r1["nzi_website"] == "https://www.aquila.earth"
+    assert r1["nzi_website"] == "https://www.contoso.earth"
 
     r2 = out[out["customer_row_id"] == "r2"].iloc[0]
     assert r2["gt_unique_text"].startswith("990 narrative")

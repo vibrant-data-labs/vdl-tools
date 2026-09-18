@@ -4,7 +4,7 @@ Bug this pins down: sites rendered entirely client-side (React/Vue shells)
 return HTTP 200 with a body that is just a mount-point div plus <script> tags.
 The old flow only fell back to Playwright on HTTP-level failures (JS walls,
 403s), so these "successful" responses were cached with empty extracted text
-and never retried. Pilot examples: emboamed.com, evergrow.app, aquila.space.
+and never retried. Pilot examples: lucernemed.com, proseware.app, contoso.space.
 
 Two layers guard against this now:
 1. AsyncScraper.scrape_url retries via browser when the HTTP body *looks like*
@@ -69,7 +69,7 @@ STATIC_HTML = (
 
 def _shell_scrape_result(**overrides):
     result = {
-        "url": "https://emboamed.com/",
+        "url": "https://lucernemed.com/",
         "content": JS_SHELL_HTML,
         "status_code": 200,
         "method": "http",
@@ -138,8 +138,8 @@ def test_scrape_url_retries_js_shell_via_browser():
     scraper, browser_calls = _make_scraper(
         (JS_SHELL_HTML, FailureReason.NONE, 200), RENDERED_HTML
     )
-    result = asyncio.run(scraper.scrape_url("https://emboamed.com/"))
-    assert browser_calls == ["https://emboamed.com/"]
+    result = asyncio.run(scraper.scrape_url("https://lucernemed.com/"))
+    assert browser_calls == ["https://lucernemed.com/"]
     assert result["content"] == RENDERED_HTML
     assert result["method"] == "browser"
     assert result["success"] is True
@@ -150,8 +150,8 @@ def test_scrape_url_keeps_shell_when_browser_fails():
     scraper, browser_calls = _make_scraper(
         (JS_SHELL_HTML, FailureReason.NONE, 200), None
     )
-    result = asyncio.run(scraper.scrape_url("https://emboamed.com/"))
-    assert browser_calls == ["https://emboamed.com/"]
+    result = asyncio.run(scraper.scrape_url("https://lucernemed.com/"))
+    assert browser_calls == ["https://lucernemed.com/"]
     # raw shell HTML is preserved for diagnosis rather than dropped
     assert result["content"] == JS_SHELL_HTML
     assert result["method"] == "http"
@@ -212,13 +212,13 @@ def test_process_retry_reprocesses_with_rendered_html():
         _process_scraped_with_browser_retry(
             stub,
             _shell_scrape_result(),
-            cache_id="emboamed.com",
+            cache_id="lucernemed.com",
             data_type=PageType.INDEX,
-            root_path="https://emboamed.com/",
+            root_path="https://lucernemed.com/",
             return_raw_html=True,
         )
     )
-    assert stub.browser_calls == ["https://emboamed.com/"]
+    assert stub.browser_calls == ["https://lucernemed.com/"]
     assert result["method"] == "browser"
     assert result["content"] == RENDERED_HTML
     assert len(rows) == 1
@@ -234,13 +234,13 @@ def test_process_retry_keeps_original_rows_when_browser_fails():
         _process_scraped_with_browser_retry(
             stub,
             _shell_scrape_result(),
-            cache_id="emboamed.com",
+            cache_id="lucernemed.com",
             data_type=PageType.INDEX,
-            root_path="https://emboamed.com/",
+            root_path="https://lucernemed.com/",
             return_raw_html=True,
         )
     )
-    assert stub.browser_calls == ["https://emboamed.com/"]
+    assert stub.browser_calls == ["https://lucernemed.com/"]
     assert result["method"] == "http"
     assert len(rows) == 1
     assert not rows[0]["parsed_html"].strip()

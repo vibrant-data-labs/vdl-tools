@@ -12,8 +12,8 @@ LONG = "Detailed climate org text. " * 10  # > MIN_TEXT_CHARS
 
 def scraped_frame():
     return pd.DataFrame([
-        {"customer_row_id": "r1", "customer_domain": "aquila.space",
-         "source_domain": "aquila.earth",
+        {"customer_row_id": "r1", "customer_domain": "contoso.space",
+         "source_domain": "contoso.earth",
          "scraped_text_customer_url": LONG + "space site",
          "scraped_text_source_url": LONG + "earth site", "text_quality": "ok"},
         {"customer_row_id": "r2", "customer_domain": "solo.com",
@@ -32,8 +32,8 @@ def acquired_frame():
         "cb_description", "cb_short_description", "gt_unique_text",
         "gt_grant_purposes")}
     return pd.DataFrame([
-        {"customer_row_id": "r1", "customer_name": "Aquila", **base,
-         "nzi_description": "NZI describes Aquila's light-based energy work in detail here."},
+        {"customer_row_id": "r1", "customer_name": "Contoso", **base,
+         "nzi_description": "NZI describes Contoso's light-based energy work in detail here."},
         {"customer_row_id": "r2", "customer_name": "Solo Co", **base,
          "cb_description": "CB-only description of Solo Co, long enough to count as text."},
         {"customer_row_id": "r3", "customer_name": "Nothing Org", **base},
@@ -51,7 +51,7 @@ def fake_sos(ids_text_lists):
 
 def test_website_summaries_dedupe_domains():
     got = summarize_websites(scraped_frame(), summarizer=fake_summarizer)
-    assert set(got) == {"aquila.space", "aquila.earth"}
+    assert set(got) == {"contoso.space", "contoso.earth"}
 
 
 def test_general_summary_synthesis_and_fallbacks(tmp_path):
@@ -62,9 +62,9 @@ def test_general_summary_synthesis_and_fallbacks(tmp_path):
 
     # r1: description + two site summaries -> synthesized.
     assert out.at["r1", "Summary"] == "SYNTH(3 texts)"
-    assert out.at["r1", "website_summary_customer"] == "SUMMARY[aquila.space]"
+    assert out.at["r1", "website_summary_customer"] == "SUMMARY[contoso.space]"
     # text_for_taxonomy = longer of Summary and best site summary.
-    assert out.at["r1", "text_for_taxonomy"] == "SUMMARY[aquila.space]"
+    assert out.at["r1", "text_for_taxonomy"] == "SUMMARY[contoso.space]"
 
     # r2: single text -> no LLM call, Summary IS the text.
     assert out.at["r2", "Summary"].startswith("CB-only description")

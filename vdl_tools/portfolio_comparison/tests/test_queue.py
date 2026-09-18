@@ -148,20 +148,20 @@ def test_live_lock_still_blocks(tmp_path):
 
 def test_rejection_does_not_veto_new_evidence(tmp_path):
     # Human rejects fuzzy candidates; machine later finds a DIFFERENT record
-    # (Dendra Systems case) — the new match must survive replay.
+    # (Adatum Systems case) — the new match must survive replay.
     mapping = make_mapping([
-        {"customer_row_id": "r1", "customer_name": "Dendra", "status": "needs_review"},
+        {"customer_row_id": "r1", "customer_name": "Adatum", "status": "needs_review"},
     ])
     record_decision(mapping, tmp_path, "r1", decided_by="vdl:zein",
                     status=pd.NA, matched_id=None, reason="rejected fuzzy noise",
                     rejected_ids=["u-petra", "u-other"])
     rebuilt = make_mapping([
-        {"customer_row_id": "r1", "customer_name": "Dendra", "status": "auto_matched",
-         "matched_id": "cb-dendra", "confidence": 0.97},
+        {"customer_row_id": "r1", "customer_name": "Adatum", "status": "auto_matched",
+         "matched_id": "cb-adatum", "confidence": 0.97},
     ])
     replayed = replay_decisions(rebuilt, tmp_path)
     assert replayed.iloc[0]["status"] == "auto_matched"
-    assert replayed.iloc[0]["matched_id"] == "cb-dendra"
+    assert replayed.iloc[0]["matched_id"] == "cb-adatum"
 
 
 def test_rejection_still_clears_the_rejected_candidate(tmp_path):

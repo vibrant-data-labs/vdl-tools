@@ -79,7 +79,7 @@ def run_tier2(
                 # Near-exact-name candidates (however many — name searches
                 # return every same-named company): if exactly one's domain
                 # redirects to the same site as the customer's
-                # (aquila.earth → aquila.space), that's the org. Mechanical
+                # (contoso.earth → contoso.space), that's the org. Mechanical
                 # evidence — no human needed.
                 winner = pick_converging_candidate(customer_domain, merged)
                 if winner is not None:

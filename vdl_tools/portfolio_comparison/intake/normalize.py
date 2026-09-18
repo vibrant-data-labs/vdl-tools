@@ -50,7 +50,7 @@ def resolve_redirect(url: str, timeout: float = 10.0) -> str:
     """Follow redirects to the final domain. Returns the input's domain on failure.
 
     HEAD first (no body), but some servers reject HEAD (405) or only redirect
-    GETs (buzzpowerbank.com), so an error status falls back to a streamed GET
+    GETs (tailspinpowercell.com), so an error status falls back to a streamed GET
     — headers only, the body is never read.
     """
     import httpx
@@ -80,7 +80,7 @@ _REDIRECT_CACHE: dict[str, str] = {}
 
 def domains_converge(domain_a: str, domain_b: str, resolver=None) -> bool:
     """True when two domains resolve (via HTTP redirects) to the same final
-    domain — e.g. abalobi.info and abalobi.org both landing on abalobi.org.
+    domain — e.g. fabrikam.info and fabrikam.org both landing on fabrikam.org.
     Mechanical identity evidence: makes human review unnecessary for
     renamed/moved domains that still redirect."""
     if not domain_a or not domain_b:
@@ -99,7 +99,7 @@ def domains_converge(domain_a: str, domain_b: str, resolver=None) -> bool:
 
 
 # Shared-platform domains identify a platform, not an org. A customer URL
-# like linkedin.com/company/replant-capital must never domain-match every
+# like linkedin.com/company/woodgrove-capital must never domain-match every
 # org whose listed website is its LinkedIn page.
 PLATFORM_DOMAINS = {
     "linkedin.com", "facebook.com", "instagram.com", "twitter.com", "x.com",
@@ -133,7 +133,7 @@ def linkedin_slug(url: str | None) -> str:
 
 def name_variants(name: str | None) -> list[str]:
     """Search-retry ladder for a customer-supplied name: the raw name, a
-    TLD-stripped form ('chifoods.us' → 'chifoods'), and a depunctuated
+    TLD-stripped form ('cohofoods.us' → 'cohofoods'), and a depunctuated
     form. Ordered, deduped, blanks removed."""
     if not name or not isinstance(name, str) or not name.strip():
         return []
