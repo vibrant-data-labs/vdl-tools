@@ -43,8 +43,8 @@ def test_map_input_merges_and_tags(tmp_path):
          "matched_url": None, "Summary": "y", "text_for_taxonomy": "y",
          "level0_one_earth_category": None, "level1_one_earth_category": None, "Country": None},
         # new to the landscape, has text -> added
-        {"customer_row_id": "r3", "customer_name": "Reserva", "entity_type": "nonprofit",
-         "disposition": "invested", "matched_id": None, "customer_url": "reserva.example",
+        {"customer_row_id": "r3", "customer_name": "Alpine", "entity_type": "nonprofit",
+         "disposition": "invested", "matched_id": None, "customer_url": "alpine.example",
          "matched_url": None, "Summary": "forest reserve", "text_for_taxonomy": "forest reserve",
          "level0_one_earth_category": "Nature Conservation",
          "level1_one_earth_category": "Land Conservation", "Country": "Costa Rica"},
@@ -57,12 +57,12 @@ def test_map_input_merges_and_tags(tmp_path):
     port.to_parquet(results / "enriched_portfolio.parquet")
 
     out = build_map_input(tmp_path)
-    assert len(out) == 3  # 2 landscape rows + Reserva; Ghost skipped
+    assert len(out) == 3  # 2 landscape rows + Alpine; Ghost skipped
     tags = dict(zip(out["uid"], out["TC Portfolio"]))
     assert tags["u1"] == ["TC Portfolio", "Funded by TC"]
     assert tags["u2"] == ["TC Portfolio", "Evaluated by TC, passed"]
     new = out[out["uid"] == "customer:r3"].iloc[0]
-    assert new["profile_name"] == "Reserva" and new["Org Type"] == "Non Profit"
+    assert new["profile_name"] == "Alpine" and new["Org Type"] == "Non Profit"
     assert new["Data Source"] == "TC" and new["Country"] == "Costa Rica"
     assert list(new["TC Portfolio"]) == ["TC Portfolio", "Funded by TC"]
     # landscape rows keep their own name/summary

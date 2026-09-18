@@ -14,8 +14,8 @@ LONG = "Real org text about climate work. " * 20
 def acquired_frame():
     return pd.DataFrame([
         # Customer + NZI site on different domains: both scraped.
-        {"customer_row_id": "r1", "customer_url": "https://aquila.space",
-         "nzi_website": "https://www.aquila.earth", "cb_website": pd.NA,
+        {"customer_row_id": "r1", "customer_url": "https://contoso.space",
+         "nzi_website": "https://www.contoso.earth", "cb_website": pd.NA,
          "gt_website": pd.NA},
         # Source domain same as customer's: one scrape only.
         {"customer_row_id": "r2", "customer_url": "https://same.com",
@@ -23,8 +23,8 @@ def acquired_frame():
          "gt_website": pd.NA},
         # LinkedIn as customer URL: platform domain, never a target.
         {"customer_row_id": "r3",
-         "customer_url": "https://linkedin.com/company/replant",
-         "nzi_website": pd.NA, "cb_website": "https://replant.example",
+         "customer_url": "https://linkedin.com/company/woodgrove",
+         "nzi_website": pd.NA, "cb_website": "https://woodgrove.example",
          "gt_website": pd.NA},
         # No URLs anywhere.
         {"customer_row_id": "r4", "customer_url": pd.NA, "nzi_website": pd.NA,
@@ -34,11 +34,11 @@ def acquired_frame():
 
 def test_target_selection_dedupes_and_skips_platforms():
     t = select_scrape_targets(acquired_frame()).set_index("customer_row_id")
-    assert t.at["r1", "customer_domain"] == "aquila.space"
-    assert t.at["r1", "source_domain"] == "aquila.earth"
+    assert t.at["r1", "customer_domain"] == "contoso.space"
+    assert t.at["r1", "source_domain"] == "contoso.earth"
     assert t.at["r2", "source_domain"] is None          # same registrable domain
     assert t.at["r3", "customer_domain"] is None        # platform never a target
-    assert t.at["r3", "source_domain"] == "replant.example"
+    assert t.at["r3", "source_domain"] == "woodgrove.example"
     assert t.at["r4", "customer_domain"] is None
 
 
@@ -80,10 +80,10 @@ def test_scrape_texts_fans_out_and_gates(tmp_path):
         )
 
         texts = {
-            "aquila.space": LONG,
-            "aquila.earth": LONG + " earth variant",
+            "contoso.space": LONG,
+            "contoso.earth": LONG + " earth variant",
             "same.com": "Buy this domain today!",     # parked
-            "replant.example": "short",               # thin
+            "woodgrove.example": "short",               # thin
         }
         rows = []
         for url in urls:

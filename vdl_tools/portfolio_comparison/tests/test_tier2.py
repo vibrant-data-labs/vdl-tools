@@ -35,14 +35,14 @@ def make_mapping(rows):
 
 def test_sole_domain_hit_auto_accepts_out_of_universe():
     m = make_mapping([{
-        "customer_row_id": "r1", "customer_name": "Loa Carbon",
-        "customer_url": "loacarbon.com", "entity_type": "for_profit",
+        "customer_row_id": "r1", "customer_name": "Wingtip Carbon",
+        "customer_url": "wingtipcarbon.com", "entity_type": "for_profit",
     }])
-    client = FakeClient({"Loa Carbon": [cand("cb-loa", "Loa Carbon", "domain")]})
+    client = FakeClient({"Wingtip Carbon": [cand("cb-wingtip", "Wingtip Carbon", "domain")]})
     m, cands, n = run_tier2(m, client, {})
     row = m.iloc[0]
     assert row["status"] == "auto_matched"
-    assert row["matched_id"] == "cb-loa"
+    assert row["matched_id"] == "cb-wingtip"
     assert row["in_universe"] == False  # noqa: E712
     assert row["match_method"] == "api_search"
     assert "r1" in cands

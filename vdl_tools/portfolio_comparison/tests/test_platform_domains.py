@@ -11,15 +11,15 @@ from vdl_tools.portfolio_comparison.matching.universe import UniverseIndex, run_
 
 
 def test_identity_domain_blanks_platforms():
-    assert identity_domain("https://www.linkedin.com/company/replant-capital/about/") == ""
+    assert identity_domain("https://www.linkedin.com/company/woodgrove-capital/about/") == ""
     assert identity_domain("https://facebook.com/somepage") == ""
-    assert identity_domain("https://replant.capital") == "replant.capital"
+    assert identity_domain("https://woodgrove.capital") == "woodgrove.capital"
 
 
 def test_linkedin_slug_extraction():
-    assert linkedin_slug("https://www.linkedin.com/company/replant-capital/about/") == "replant-capital"
+    assert linkedin_slug("https://www.linkedin.com/company/woodgrove-capital/about/") == "woodgrove-capital"
     assert linkedin_slug("linkedin.com/company/Acme-Co?trk=x") == "acme-co"
-    assert linkedin_slug("https://replant.capital") == ""
+    assert linkedin_slug("https://woodgrove.capital") == ""
 
 
 def test_platform_domains_never_converge(monkeypatch):
@@ -29,9 +29,9 @@ def test_platform_domains_never_converge(monkeypatch):
 
 
 ENRICHED = pd.DataFrame([
-    {"uid": "u-replant", "Organization": "RePlant Capital",
-     "url_homepage": "https://www.linkedin.com/company/replant-capital/",
-     "LinkedIn": "https://www.linkedin.com/company/replant-capital/"},
+    {"uid": "u-woodgrove", "Organization": "Woodgrove Capital",
+     "url_homepage": "https://www.linkedin.com/company/woodgrove-capital/",
+     "LinkedIn": "https://www.linkedin.com/company/woodgrove-capital/"},
     {"uid": "u-geogen", "Organization": "GeoGenCo",
      "url_homepage": "https://www.linkedin.com/company/geogenco/",
      "LinkedIn": "https://www.linkedin.com/company/geogenco/"},
@@ -44,21 +44,21 @@ def make_rows(rows):
 
 
 def test_linkedin_url_never_domain_matches_other_linkedin_orgs():
-    index = UniverseIndex(ENRICHED, {"u-replant", "u-geogen"})
+    index = UniverseIndex(ENRICHED, {"u-woodgrove", "u-geogen"})
     rows = make_rows([{
-        "customer_row_id": "r1", "customer_name": "RePlant Capital",
-        "customer_url": "https://www.linkedin.com/company/replant-capital/about/",
+        "customer_row_id": "r1", "customer_name": "Woodgrove Capital",
+        "customer_url": "https://www.linkedin.com/company/woodgrove-capital/about/",
     }])
     result, cands = run_tier1(rows, index)
     row = result.iloc[0]
     # Matches via the LinkedIn slug — its own record, not every LinkedIn org.
-    assert row["matched_id"] == "u-replant"
+    assert row["matched_id"] == "u-woodgrove"
     assert row["status"] == "auto_matched"
-    assert all(c.matched_id == "u-replant" for c in cands["r1"])
+    assert all(c.matched_id == "u-woodgrove" for c in cands["r1"])
 
 
 def test_linkedin_url_without_slug_match_falls_to_name():
-    index = UniverseIndex(ENRICHED, {"u-replant", "u-geogen"})
+    index = UniverseIndex(ENRICHED, {"u-woodgrove", "u-geogen"})
     rows = make_rows([{
         "customer_row_id": "r2", "customer_name": "Unrelated Startup",
         "customer_url": "https://www.linkedin.com/company/unrelated-startup/",
@@ -81,16 +81,16 @@ def test_cb_domain_hits_filtered_to_exact_host(monkeypatch):
         calls.append(filters)
         if len(calls) == 1:  # domain search
             return [
-                {"uuid": "cb-ez", "identifier": {"value": "EZ Pack", "permalink": "ez-pack"},
-                 "website_url": "https://e-z-pack.myshopify.com/"},
+                {"uuid": "cb-northwind", "identifier": {"value": "Northwind Pack", "permalink": "northwind-pack"},
+                 "website_url": "https://northwind-pack.myshopify.com/"},
                 {"uuid": "cb-dig", "identifier": {"value": "DIG Labs", "permalink": "dig"},
                  "website_url": "https://dig-labs.myshopify.com"},
             ]
         return []
 
     monkeypatch.setattr(client, "_query", fake_query)
-    cands = client.search("EZ Pack", "https://e-z-pack.myshopify.com/")
-    assert [c.matched_id for c in cands] == ["cb-ez"]
+    cands = client.search("Northwind Pack", "https://northwind-pack.myshopify.com/")
+    assert [c.matched_id for c in cands] == ["cb-northwind"]
     assert cands[0].evidence["signal"] == "domain"
 
 
@@ -105,11 +105,11 @@ def test_cb_falls_to_name_search_when_no_exact_host(monkeypatch):
         if len(calls) == 1:  # domain search: only wrong-host stores
             return [{"uuid": "cb-x", "identifier": {"value": "Other", "permalink": "o"},
                      "website_url": "https://other.myshopify.com"}]
-        return [{"uuid": "cb-name", "identifier": {"value": "EZ Pack", "permalink": "ez"},
+        return [{"uuid": "cb-name", "identifier": {"value": "Northwind Pack", "permalink": "ez"},
                  "website_url": "https://ezpack.com"}]
 
     monkeypatch.setattr(client, "_query", fake_query)
-    cands = client.search("EZ Pack", "https://gone.myshopify.com/")
+    cands = client.search("Northwind Pack", "https://gone.myshopify.com/")
     assert len(calls) == 2  # fell through to name search
     assert cands[0].matched_id == "cb-name"
     assert cands[0].evidence["signal"] == "name"

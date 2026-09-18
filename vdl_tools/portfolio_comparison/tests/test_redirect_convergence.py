@@ -14,15 +14,15 @@ _real_resolve_redirect = normalize.resolve_redirect
 
 @pytest.fixture(autouse=True)
 def fake_redirects(monkeypatch):
-    # abalobi.info and abalobi.org both land on abalobi.org; everything else
+    # fabrikam.info and fabrikam.org both land on fabrikam.org; everything else
     # resolves to itself.
-    table = {"abalobi.info": "abalobi.org", "abalobi.org": "abalobi.org"}
+    table = {"fabrikam.info": "fabrikam.org", "fabrikam.org": "fabrikam.org"}
     monkeypatch.setattr(normalize, "_REDIRECT_CACHE", {})
     monkeypatch.setattr(normalize, "resolve_redirect", lambda d, timeout=10.0: table.get(d, d))
 
 
 def test_resolve_redirect_falls_back_to_get_when_head_rejected(monkeypatch):
-    # buzzpowerbank.com: server 405s HEAD requests and only redirects GETs.
+    # tailspinpowercell.com: server 405s HEAD requests and only redirects GETs.
     import httpx
 
     class FakeResp:
@@ -41,20 +41,20 @@ def test_resolve_redirect_falls_back_to_get_when_head_rejected(monkeypatch):
 
     monkeypatch.setattr(
         httpx, "head",
-        lambda url, **kw: FakeResp(405, "https://buzzpowerbank.com"),
+        lambda url, **kw: FakeResp(405, "https://tailspinpowercell.com"),
     )
     monkeypatch.setattr(
         httpx, "stream",
-        lambda method, url, **kw: FakeStream("https://buzzpowerbanks.nl"),
+        lambda method, url, **kw: FakeStream("https://tailspinpowercells.nl"),
     )
-    assert _real_resolve_redirect("buzzpowerbank.com") == "buzzpowerbanks.nl"
+    assert _real_resolve_redirect("tailspinpowercell.com") == "tailspinpowercells.nl"
 
 
 def test_domains_converge_via_redirects():
-    assert normalize.domains_converge("abalobi.info", "abalobi.org")
-    assert normalize.domains_converge("abalobi.org", "abalobi.org")
-    assert not normalize.domains_converge("abalobi.org", "other.com")
-    assert not normalize.domains_converge("", "abalobi.org")
+    assert normalize.domains_converge("fabrikam.info", "fabrikam.org")
+    assert normalize.domains_converge("fabrikam.org", "fabrikam.org")
+    assert not normalize.domains_converge("fabrikam.org", "other.com")
+    assert not normalize.domains_converge("", "fabrikam.org")
 
 
 class FakeClient:
@@ -76,46 +76,46 @@ def make_mapping(rows):
 
 
 def test_tier2_redirect_convergence_auto_accepts():
-    # CB record on abalobi.info, customer says abalobi.org, name exact:
+    # CB record on fabrikam.info, customer says fabrikam.org, name exact:
     # redirect convergence upgrades review → auto.
     m = make_mapping([{
-        "customer_row_id": "r1", "customer_name": "Abalobi",
-        "customer_url": "https://abalobi.org/", "entity_type": "for_profit",
+        "customer_row_id": "r1", "customer_name": "Fabrikam",
+        "customer_url": "https://fabrikam.org/", "entity_type": "for_profit",
     }])
     cand = Candidate(
-        matched_id="cb-abalobi", matched_name="Abalobi",
-        matched_url="https://abalobi.info", score=1.0, method="api_search",
-        evidence={"signal": "name", "domain": "abalobi.info", "in_universe": False},
+        matched_id="cb-fabrikam", matched_name="Fabrikam",
+        matched_url="https://fabrikam.info", score=1.0, method="api_search",
+        evidence={"signal": "name", "domain": "fabrikam.info", "in_universe": False},
     )
-    client = FakeClient({"Abalobi": [cand]})
+    client = FakeClient({"Fabrikam": [cand]})
     m, cands, _ = run_tier2(m, client, {})
     row = m.iloc[0]
     assert row["status"] == "auto_matched"
-    assert row["matched_id"] == "cb-abalobi"
+    assert row["matched_id"] == "cb-fabrikam"
     assert cands["r1"][0].evidence.get("redirect_confirmed") is True
 
 
 def test_tier2_multi_candidate_convergence_picks_the_one(monkeypatch):
-    # The Aquila case: name search returns many same-named companies; the
+    # The Contoso case: name search returns many same-named companies; the
     # one whose domain redirects to the customer's site wins.
-    table = {"aquila.earth": "aquila.space", "aquila.space": "aquila.space"}
+    table = {"contoso.earth": "contoso.space", "contoso.space": "contoso.space"}
     monkeypatch.setattr(normalize, "_REDIRECT_CACHE", {})
     monkeypatch.setattr(normalize, "resolve_redirect", lambda d, timeout=10.0: table.get(d, d))
 
-    def aquila(cid, domain):
+    def contoso(cid, domain):
         return Candidate(
-            matched_id=cid, matched_name="Aquila", matched_url=f"https://{domain}",
+            matched_id=cid, matched_name="Contoso", matched_url=f"https://{domain}",
             score=1.0, method="api_search",
             evidence={"signal": "name", "domain": domain, "in_universe": False},
         )
 
     m = make_mapping([{
-        "customer_row_id": "r3", "customer_name": "Aquila",
-        "customer_url": "https://aquila.space/", "entity_type": "for_profit",
+        "customer_row_id": "r3", "customer_name": "Contoso",
+        "customer_url": "https://contoso.space/", "entity_type": "for_profit",
     }])
-    cands = [aquila("cb-earth", "aquila.earth"), aquila("cb-za", "aquilaproductions.co.za"),
-             aquila("cb-br", "aquila.com.br"), aquila("cb-ro", "aquila.ro")]
-    m, out_cands, _ = run_tier2(m, FakeClient({"Aquila": cands}), {})
+    cands = [contoso("cb-earth", "contoso.earth"), contoso("cb-za", "contosoproductions.co.za"),
+             contoso("cb-br", "contoso.com.br"), contoso("cb-ro", "contoso.ro")]
+    m, out_cands, _ = run_tier2(m, FakeClient({"Contoso": cands}), {})
     row = m.iloc[0]
     assert row["status"] == "auto_matched"
     assert row["matched_id"] == "cb-earth"
@@ -141,26 +141,26 @@ def test_two_converging_candidates_go_to_review(monkeypatch):
 
 
 def test_same_domain_from_two_sources_is_corroboration(monkeypatch):
-    # The Aquila regression: the NZI→CB chain returns the SAME org once per
-    # source (both on aquila.earth). Two converging candidates on one domain
+    # The Contoso regression: the NZI→CB chain returns the SAME org once per
+    # source (both on contoso.earth). Two converging candidates on one domain
     # is corroboration, not ambiguity — chain order (NZI first) breaks the tie.
-    table = {"aquila.earth": "aquila.space", "aquila.space": "aquila.space"}
+    table = {"contoso.earth": "contoso.space", "contoso.space": "contoso.space"}
     monkeypatch.setattr(normalize, "_REDIRECT_CACHE", {})
     monkeypatch.setattr(normalize, "resolve_redirect", lambda d, timeout=10.0: table.get(d, d))
 
     def src(cid, extra):
-        return Candidate(matched_id=cid, matched_name="Aquila",
-                         matched_url="https://www.aquila.earth", score=1.0,
+        return Candidate(matched_id=cid, matched_name="Contoso",
+                         matched_url="https://www.contoso.earth", score=1.0,
                          method="api_search",
-                         evidence={"signal": "name", "domain": "aquila.earth",
+                         evidence={"signal": "name", "domain": "contoso.earth",
                                    "in_universe": False, **extra})
 
     m = make_mapping([{
-        "customer_row_id": "r6", "customer_name": "Aquila",
-        "customer_url": "https://aquila.space/", "entity_type": "for_profit",
+        "customer_row_id": "r6", "customer_name": "Contoso",
+        "customer_url": "https://contoso.space/", "entity_type": "for_profit",
     }])
     both = [src("108278", {"nzi": True}), src("151d5f17-cb-uuid", {})]
-    m, cands, _ = run_tier2(m, FakeClient({"Aquila": both}), {})
+    m, cands, _ = run_tier2(m, FakeClient({"Contoso": both}), {})
     row = m.iloc[0]
     assert row["status"] == "auto_matched"
     assert row["matched_id"] == "108278"  # chain preference: NZI first

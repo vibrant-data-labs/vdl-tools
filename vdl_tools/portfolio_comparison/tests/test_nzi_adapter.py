@@ -139,9 +139,9 @@ def test_supplement_nzi_ids_domain_confirmed_only():
 def test_name_variants_ladder():
     from vdl_tools.portfolio_comparison.intake.normalize import name_variants
 
-    assert name_variants("chifoods.us") == ["chifoods.us", "chifoods", "chifoods us"]
-    assert name_variants("Buzz Power Banks") == ["Buzz Power Banks"]
-    assert name_variants("M.A.R.S.H. Project")[-1] == "M A R S H Project"
+    assert name_variants("cohofoods.us") == ["cohofoods.us", "cohofoods", "cohofoods us"]
+    assert name_variants("Tailspin Power Cells") == ["Tailspin Power Cells"]
+    assert name_variants("T.R.E.Y. Project")[-1] == "T R E Y Project"
     assert name_variants(None) == []
 
 
@@ -157,14 +157,14 @@ def test_cb_autocomplete_fallback_with_domain_promotion(monkeypatch):
 
     def fake_autocomplete(name):
         stages.append(f"auto:{name}")
-        if name == "CycleWatt":
+        if name == "Litware":
             return [{"uuid": "cb-cyclo", "identifier": {"value": "CycloWatt", "permalink": "cyclowatt"},
-                     "website_url": "https://cyclewatt.com", "short_description": "EV charging"}]
+                     "website_url": "https://litware.com", "short_description": "EV charging"}]
         return []
 
     monkeypatch.setattr(client, "_query", fake_query)
     monkeypatch.setattr(client, "_autocomplete", fake_autocomplete)
-    cands = client.search("CycleWatt", "https://cyclewatt.com")
+    cands = client.search("Litware", "https://litware.com")
     assert cands[0].matched_id == "cb-cyclo"
     # Autocomplete hit whose website exact-hosts the customer domain is
     # promoted to domain-grade evidence.

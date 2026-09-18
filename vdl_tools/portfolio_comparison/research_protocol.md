@@ -2,8 +2,8 @@
 
 Rules for any human or agent doing web research on review-queue rows.
 Spawned research agents MUST receive this protocol verbatim in their prompt.
-Born from real misses in the one-small-planet pilot (Loa Carbon/Aether
-Diamonds false rebrand; Global Solutions Tracker unverified inference).
+Born from real misses in the pilot engagement (a false rebrand match; an
+unverified inference about an initiative's parent organization).
 
 ## Source-API pre-research comes first (pilot ruling)
 
@@ -13,8 +13,8 @@ candidates arrive on queue rows as `method: api_search` with descriptions
 and operating status. Consume that evidence FIRST:
 
 - An `api_search` domain-signal candidate is the org's own source record —
-  it usually settles identity without any web search (Loa Carbon lesson:
-  one domain lookup beat an entire web-research chain).
+  it usually settles identity without any web search (pilot lesson: one
+  domain lookup beat an entire web-research chain).
 - Web research is for what the API couldn't settle: no source record found,
   conflicting candidates, or rebrand/alias questions the record itself
   raises. Never web-research what the API already answered.
@@ -40,13 +40,13 @@ anchors — its domain and description — still point at the customer's org.
   identity, strong evidence (verify the redirect yourself: `curl -sIL`).
 - **Redirect convergence**: when the candidate's domain and the customer's
   domain are different but similar, resolve BOTH — if they land on the same
-  final domain (abalobi.info and abalobi.org → abalobi.org), that is
+  final domain (fabrikam.info and fabrikam.org → fabrikam.org), that is
   mechanical proof of identity; no human review needed. The matcher runs
   this check automatically for near-exact names; agents apply it to any
   domain pair they're weighing.
 - Old domain is dead, parked, or re-registered by an unrelated firm → the
-  domain proves nothing about historical ownership (Balance Ocean lesson:
-  dropped domains get re-registered).
+  domain proves nothing about historical ownership (pilot lesson: dropped
+  domains get re-registered).
 - Old brand was SOLD and lives on elsewhere → matching enriches the wrong
   company even if the legal entity is continuous. Reject.
 
@@ -57,7 +57,7 @@ three cases: (a) rebrand with continuous identity, (b) founder's successor
 venture, (c) pivot where the old brand detached. Distinguish them:
 
 - Read the founder's own bio: "currently X… previously founded Y" signals
-  successor ventures (Loa Carbon lesson).
+  successor ventures (the pilot's false-rebrand lesson).
 - Look for evidence the two orgs COEXIST: both with live sites, separate
   funding events, or separate filings after the alleged rename → refuted.
 - One vendor page repeating another vendor's field is one source, not two.
@@ -68,8 +68,8 @@ venture, (c) pivot where the old brand detached. Distinguish them:
   regulatory/IRS filings, funder portfolio pages, or news coverage naming
   both identities. Aggregators corroborate; they do not establish.
 - Fetch and read the pages you cite. A page you did not open is not a
-  source; verify it actually says what you claim (Global Solutions Tracker
-  lesson: the cited page never named the initiative).
+  source; verify it actually says what you claim (pilot lesson: the cited
+  page never named the initiative).
 - Adversarial pass before submitting any positive verdict: spend one search
   actively trying to REFUTE it. Only claims that survive go out.
 - Every claim in your note must be attributable to a listed source.

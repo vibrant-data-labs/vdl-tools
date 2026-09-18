@@ -166,7 +166,7 @@ class CrunchbaseClient:
         if domain:
             hits = self._query([api.domain_eq("website_url", [domain])])
             # CB's domain_eq matches the registrable domain, so shared-hosting
-            # sites (e-z-pack.myshopify.com) return every store on the host.
+            # sites (northwind-pack.myshopify.com) return every store on the host.
             # Only exact-host hits are identity evidence.
             hits = [h for h in hits if identity_domain(h.get("website_url")) == domain]
             signal = "domain"
@@ -342,12 +342,12 @@ def pick_converging_candidate(
     customer_domain: str, candidates: list[Candidate], min_score: float = 0.95
 ) -> Candidate | None:
     """Among near-exact-name candidates, find the ONE whose domain redirects
-    to the same site as the customer's (aquila.earth → aquila.space).
+    to the same site as the customer's (contoso.earth → contoso.space).
 
     Many same-named companies is the normal case for name searches; redirect
     convergence singles out the right one mechanically. The ambiguity guard
     counts distinct DOMAINS, not candidates: a chained search returns the same
-    org once per source (NZI + CB both listing aquila.earth), and that is
+    org once per source (NZI + CB both listing contoso.earth), and that is
     corroboration. Two different converging domains means something strange,
     and strange goes to review. Ties break by list order, which is chain
     preference (NZI first for text engagements).
