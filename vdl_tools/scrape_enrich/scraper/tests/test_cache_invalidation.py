@@ -31,7 +31,12 @@ def make_session():
     return Session
 
 
-def _seed_host(session, home_key, home_url, with_subpage=True):
+def _seed_host(session, home_key, home_url=None, with_subpage=True):
+    """Seed a WebPagesParsed row plus index (+ optional subpage) WebPagesScraped
+    rows for a host. home_url defaults to a plausible stored value but can be
+    overridden to reproduce real-world quirks (e.g. a trailing slash some
+    scrapes ended up with and others didn't)."""
+    home_url = home_url or f"https://{home_key}"
     session.add(WebPagesParsed(
         cleaned_home_key=home_key,
         home_url=home_url,
@@ -61,8 +66,8 @@ def _seed_host(session, home_key, home_url, with_subpage=True):
 
 def test_delete_cached_urls_removes_host_and_subpages_only_for_matched_host(make_session):
     session = make_session()
-    _seed_host(session, "example.org", "https://example.org")
-    _seed_host(session, "other.org", "https://other.org")
+    _seed_host(session, "example.org")
+    _seed_host(session, "other.org")
     session.commit()
     session.close()
 
@@ -72,14 +77,18 @@ def test_delete_cached_urls_removes_host_and_subpages_only_for_matched_host(make
 
     check = make_session()
     assert check.query(WebPagesParsed).filter_by(cleaned_home_key="example.org").count() == 0
-    assert check.query(WebPagesScraped).filter_by(home_url="https://example.org").count() == 0
+    assert check.query(WebPagesScraped).filter(
+        WebPagesScraped.cleaned_key.like("example.org%")
+    ).count() == 0
     assert check.query(WebPagesParsed).filter_by(cleaned_home_key="other.org").count() == 1
-    assert check.query(WebPagesScraped).filter_by(home_url="https://other.org").count() == 2
+    assert check.query(WebPagesScraped).filter(
+        WebPagesScraped.cleaned_key.like("other.org%")
+    ).count() == 2
 
 
 def test_delete_cached_urls_dry_run_counts_without_deleting(make_session):
     session = make_session()
-    _seed_host(session, "example.org", "https://example.org")
+    _seed_host(session, "example.org")
     session.commit()
     session.close()
 
@@ -96,13 +105,17 @@ def test_delete_cached_urls_dry_run_counts_without_deleting(make_session):
     "example.org",
     "https://example.org",
     "HTTPS://example.org",
+    "example.org/",
+    "example.org?utm=1",
 ])
-def test_delete_cached_urls_matches_bare_and_scheme_variants_on_both_tables(make_session, url_variant):
-    """A bare domain or scheme-case variant matches the row on BOTH tables,
-    since ensure_url_scheme normalizes it to the same 'https://example.org'
-    that scrape_websites_psql would have stored as home_url."""
+def test_delete_cached_urls_matches_scheme_slash_and_query_variants_on_both_tables(make_session, url_variant):
+    """extract_website_name strips scheme, query string and one trailing
+    slash, and BOTH tables are now matched via that same key (cleaned_key
+    for WebPagesScraped, not the raw home_url) - so all of these variants
+    reliably clear both tables regardless of exactly how the URL was
+    originally scraped."""
     session = make_session()
-    _seed_host(session, "example.org", "https://example.org", with_subpage=False)
+    _seed_host(session, "example.org", with_subpage=False)
     session.commit()
     session.close()
 
@@ -111,25 +124,66 @@ def test_delete_cached_urls_matches_bare_and_scheme_variants_on_both_tables(make
     assert result == {"parsed_deleted": 1, "scraped_deleted": 1, "dry_run": False}
 
 
-def test_delete_cached_urls_query_string_only_matches_parsed_table(make_session):
-    """extract_website_name strips the query string (so WebPagesParsed still
-    matches), but ensure_url_scheme does not (so WebPagesScraped, keyed on
-    the literal home_url, does not) - the caller must pass the exact URL
-    that was scraped to clear subpages too, not just the bare domain."""
+def test_delete_cached_urls_matches_scraped_rows_despite_inconsistent_home_url_trailing_slash(make_session):
+    """Regression test for a real bug found via the live DB: WebPagesScraped
+    home_url sometimes carries a trailing slash and sometimes doesn't,
+    depending on how the URL was originally scraped (confirmed on
+    www.bgccam.org, stored as 'https://www.bgccam.org/'). An earlier version
+    of this function matched WebPagesScraped by home_url directly and
+    silently deleted 0 scraped rows for such hosts. Matching by cleaned_key
+    instead is immune to this since it never even looks at home_url."""
     session = make_session()
-    _seed_host(session, "example.org", "https://example.org", with_subpage=False)
+    _seed_host(session, "www.bgccam.org", home_url="https://www.bgccam.org/", with_subpage=False)
     session.commit()
     session.close()
 
-    result = delete_cached_urls(["example.org?utm=1"], session=make_session())
+    result = delete_cached_urls(["www.bgccam.org"], session=make_session())
 
-    assert result["parsed_deleted"] == 1
-    assert result["scraped_deleted"] == 0
+    assert result == {"parsed_deleted": 1, "scraped_deleted": 1, "dry_run": False}
+
+
+def test_delete_cached_urls_treats_www_prefix_as_a_distinct_host(make_session):
+    """www.example.org and example.org are different cache keys (confirmed on
+    the live DB: bgccam.org and www.bgccam.org are two separate, unrelated
+    cache entries) - deleting one must never touch the other."""
+    session = make_session()
+    _seed_host(session, "bgccam.org")
+    _seed_host(session, "www.bgccam.org")
+    session.commit()
+    session.close()
+
+    result = delete_cached_urls(["www.bgccam.org"], session=make_session())
+
+    assert result == {"parsed_deleted": 1, "scraped_deleted": 2, "dry_run": False}
+
+    check = make_session()
+    assert check.query(WebPagesParsed).filter_by(cleaned_home_key="bgccam.org").count() == 1
+    assert check.query(WebPagesParsed).filter_by(cleaned_home_key="www.bgccam.org").count() == 0
+
+
+def test_delete_cached_urls_subpage_prefix_match_does_not_catch_unrelated_similar_hosts(make_session):
+    """cleaned_key subpage matching uses a 'key/%' LIKE pattern - make sure
+    that doesn't accidentally also match a differently-named host that
+    happens to share a prefix (e.g. 'example.org' vs 'example.org.other.com'
+    would both start with 'example.org', but only a '/' boundary counts)."""
+    session = make_session()
+    _seed_host(session, "example.org")
+    _seed_host(session, "example.org.other.com", with_subpage=False)
+    session.commit()
+    session.close()
+
+    result = delete_cached_urls(["example.org"], session=make_session())
+
+    assert result == {"parsed_deleted": 1, "scraped_deleted": 2, "dry_run": False}
+
+    check = make_session()
+    assert check.query(WebPagesParsed).filter_by(cleaned_home_key="example.org.other.com").count() == 1
+    assert check.query(WebPagesScraped).filter_by(cleaned_key="example.org.other.com").count() == 1
 
 
 def test_delete_cached_urls_ignores_empty_and_none_entries(make_session):
     session = make_session()
-    _seed_host(session, "example.org", "https://example.org", with_subpage=False)
+    _seed_host(session, "example.org", with_subpage=False)
     session.commit()
     session.close()
 
@@ -140,7 +194,7 @@ def test_delete_cached_urls_ignores_empty_and_none_entries(make_session):
 
 def test_delete_cached_urls_empty_list_deletes_nothing(make_session):
     session = make_session()
-    _seed_host(session, "example.org", "https://example.org")
+    _seed_host(session, "example.org")
     session.commit()
     session.close()
 
