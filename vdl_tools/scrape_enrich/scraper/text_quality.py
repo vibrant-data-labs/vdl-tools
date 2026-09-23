@@ -16,6 +16,39 @@ PARKED_MARKERS = [
 ]
 THIN_TEXT_CHARS = 200
 
+# Challenge and permission screens. A bot wall answers HTTP 200 and yields
+# text, so "scrape succeeded" and "extraction succeeded" are both true and the
+# wall gets stored as the page — the same trap as a parked domain, one layer
+# further in.
+BOT_WALL_MARKERS = [
+    "403 - forbidden", "access to this page is forbidden", "access denied",
+    "permission to access", "security service to protect against malicious bots",
+    "checking your browser", "verify you are human", "enable javascript and cookies",
+    "captcha", "ddos protection", "cloudflare", "are you a robot",
+    "request unsuccessful",
+]
+# Wall bodies are short; a real page *discussing* Cloudflare or CAPTCHAs is not.
+# The 1,000-5,000 band is mixed, so the threshold sits at
+# the conservative end of it.
+WALL_MAX_CHARS = 1000
+
+
+def looks_like_bot_wall(text) -> bool:
+    """Whether ``text`` is a challenge screen rather than the site's own page.
+
+    Deliberately not a ``classify_text_quality`` verdict: that function answers
+    "is this text usable", and a wall is unusable in the same way ``thin`` is.
+    This answers the narrower question the scraper needs — "should we try the
+    browser, because a real page is probably behind this".
+    """
+    if text is None or (isinstance(text, float) and text != text):
+        return False
+    stripped = str(text).strip()
+    if not stripped or len(stripped) >= WALL_MAX_CHARS:
+        return False
+    lowered = stripped.lower()
+    return any(marker in lowered for marker in BOT_WALL_MARKERS)
+
 
 def classify_text_quality(text, num_errors: int = 0) -> str:
     """ok | thin | parked | dead | empty — anything not 'ok' needs a human
