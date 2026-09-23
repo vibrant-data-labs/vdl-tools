@@ -23,8 +23,10 @@ from vdl_tools.scrape_enrich.scraper.async_scraper import (
 from vdl_tools.scrape_enrich.scraper.scrape_websites import (
     PageType,
     _process_scraped_with_browser_retry,
+    _should_retry_blocked_with_browser,
     _should_retry_with_browser,
 )
+from vdl_tools.scrape_enrich.scraper.text_quality import looks_like_bot_wall
 
 
 JS_SHELL_HTML = """<!doctype html>
@@ -252,6 +254,123 @@ def test_process_no_retry_for_pages_with_text():
         _process_scraped_with_browser_retry(
             stub,
             _shell_scrape_result(content=STATIC_HTML),
+            cache_id="example.org",
+            data_type=PageType.INDEX,
+            root_path="https://example.org/",
+        )
+    )
+    assert stub.browser_calls == []
+    assert result["method"] == "http"
+    assert rows[0]["parsed_html"].strip()
+
+
+# --- bot walls ----------------------------------------------------------------
+# Second class, same shape as the JS shell and a layer further in: the wall
+# answers HTTP 200 *and* extracts cleanly, so neither "scrape failed" nor
+# "extraction empty" catches it and the challenge screen is stored as the page.
+# Left uncaught it is permanent — the row reads as a success, so skip_existing
+# never revisits it and max_errors cannot reach it.
+
+CLOUDFLARE_WALL_HTML = (
+    "<html><head><title>Just a moment...</title></head><body>"
+    "<div class='main-wrapper'><h1>Sorry, you have been blocked</h1>"
+    "<p>This website uses a security service to protect against malicious bots. "
+    "This page is displayed while the website verifies you are not a bot.</p>"
+    "</div></body></html>"
+)
+FORBIDDEN_WALL_HTML = (
+    "<html><body><h1>403 - Forbidden</h1>"
+    "<p>Access to this page is forbidden.</p></body></html>"
+)
+# A real page that merely *mentions* the vendor. Long, so it must not trip the rule.
+MENTIONS_CLOUDFLARE_HTML = (
+    "<html><head><title>Our infrastructure</title></head><body>"
+    + "".join(
+        f"<p>Section {i}: we serve the site through Cloudflare and use a CAPTCHA "
+        "on our donation form, described here at length so that extraction "
+        "produces a page far longer than any challenge screen.</p>"
+        for i in range(20)
+    )
+    + "</body></html>"
+)
+
+
+def _wall_scrape_result(**overrides):
+    overrides.setdefault("url", "https://scouting.org/")
+    overrides.setdefault("content", CLOUDFLARE_WALL_HTML)
+    return _shell_scrape_result(**overrides)
+
+
+def test_bot_wall_text_is_detected():
+    assert looks_like_bot_wall("This website uses a security service to protect against malicious bots.")
+    assert looks_like_bot_wall("403 - Forbidden Access to this page is forbidden.")
+    assert not looks_like_bot_wall("Welcome to our after-school mentoring program.")
+    assert not looks_like_bot_wall("")
+    assert not looks_like_bot_wall(None)
+    # a real page discussing the vendor runs long; a wall does not
+    assert not looks_like_bot_wall("We serve this site through Cloudflare. " * 60)
+
+
+def test_wall_and_empty_triggers_are_disjoint():
+    """Each trigger owns its class; neither should claim the other's."""
+    wall_rows = [{"parsed_html": "Sorry, you have been blocked. Cloudflare."}]
+    empty_rows = [{"parsed_html": "   "}]
+    http = {"method": "http", "url": "https://scouting.org/", "content": CLOUDFLARE_WALL_HTML}
+
+    assert _should_retry_blocked_with_browser(http, wall_rows)
+    assert not _should_retry_with_browser(http, wall_rows)
+    assert _should_retry_with_browser(http, empty_rows)
+    assert not _should_retry_blocked_with_browser(http, empty_rows)
+
+
+def test_wall_not_retried_when_already_fetched_by_browser():
+    rows = [{"parsed_html": "Sorry, you have been blocked. Cloudflare."}]
+    already = {"method": "browser", "url": "https://scouting.org/", "content": CLOUDFLARE_WALL_HTML}
+    assert not _should_retry_blocked_with_browser(already, rows)
+
+
+def test_process_retries_wall_through_browser_and_keeps_rendered_page():
+    stub = StubBrowserScraper(RENDERED_HTML)
+    result, rows = asyncio.run(
+        _process_scraped_with_browser_retry(
+            stub,
+            _wall_scrape_result(),
+            cache_id="scouting.org",
+            data_type=PageType.INDEX,
+            root_path="https://scouting.org/",
+        )
+    )
+    assert stub.browser_calls == ["https://scouting.org/"]
+    assert result["method"] == "browser"
+    assert rows[0]["parsed_html"].strip()
+    assert not looks_like_bot_wall(rows[0]["parsed_html"])
+
+
+def test_process_retries_403_wall_through_browser():
+    stub = StubBrowserScraper(RENDERED_HTML)
+    result, _ = asyncio.run(
+        _process_scraped_with_browser_retry(
+            stub,
+            _wall_scrape_result(
+                url="https://natya.com/", content=FORBIDDEN_WALL_HTML, status_code=403
+            ),
+            cache_id="natya.com",
+            data_type=PageType.INDEX,
+            root_path="https://natya.com/",
+        )
+    )
+    assert stub.browser_calls == ["https://natya.com/"]
+    assert result["method"] == "browser"
+
+
+def test_process_does_not_retry_real_page_mentioning_the_vendor():
+    stub = StubBrowserScraper(RENDERED_HTML)
+    result, rows = asyncio.run(
+        _process_scraped_with_browser_retry(
+            stub,
+            _wall_scrape_result(
+                url="https://example.org/", content=MENTIONS_CLOUDFLARE_HTML
+            ),
             cache_id="example.org",
             data_type=PageType.INDEX,
             root_path="https://example.org/",
