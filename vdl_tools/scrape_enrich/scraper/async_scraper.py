@@ -56,6 +56,9 @@ JS_WALL_PATTERNS = [
     'datadome',
     'geo.captcha-delivery.com',
 
+    # SiteGround
+    'sgcaptcha',
+
     # Generic bot detection / CAPTCHA
     'verify you are human',
     'are you a robot',

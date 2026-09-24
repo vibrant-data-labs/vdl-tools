@@ -8,6 +8,7 @@ from more_itertools import chunked
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 from vdl_tools.shared_tools.tools.logger import logger
 from vdl_tools.scrape_enrich.scraper.scrape_websites import extract_website_name, scrape_websites_psql
+from vdl_tools.scrape_enrich.scraper.text_quality import classify_text_quality
 from vdl_tools.shared_tools.tools.text_cleaning import clean_scraped_text
 from vdl_tools.shared_tools.web_summarization.make_page_text import make_group_text
 from vdl_tools.shared_tools.web_summarization.page_choice.constants import PATHS_TO_KEEP
@@ -16,6 +17,25 @@ from vdl_tools.shared_tools.web_summarization.website_summarization_cache_psql i
     GENERIC_ORG_WEBSITE_PROMPT_TEXT,
 )
 from vdl_tools.shared_tools.openai.prompt_response_cache_sql import DEFAULT_MODEL
+
+# Verdicts a scrape can carry that mean "not the organization's own content" —
+# see text_quality.py's module docstring for why these are never summarized
+# rather than summarized-and-flagged.
+_SKIP_SUMMARIZING_VERDICTS = ("parked", "blocked", "garbled", "dead", "empty")
+
+
+def is_summarizable(text, num_errors: int = 0) -> bool:
+    """Whether ``text`` is worth spending an LLM call to describe.
+
+    False for a scrape that answered but yielded junk — a parked domain, a
+    bot wall, binary mojibake, nothing at all. Asked to describe one of
+    these anyway, the summarizer does not reliably say so: it sometimes
+    invents a plausible description from the organization's name instead.
+    """
+    if not text:
+        return False
+    return classify_text_quality(text, num_errors) not in _SKIP_SUMMARIZING_VERDICTS
+
 
 def summarize_scraped_df(
     scraped_df: pd.DataFrame,
@@ -56,14 +76,26 @@ def summarize_scraped_df(
             (source, make_group_text(prompt_str, group))
             for source, group in source_grouper
         ]
+        num_errors_by_source = {}
 
     else:
         given_ids_texts = scraped_df[["home_url", "combined_text"]].values.tolist()
+        num_errors_by_source = (
+            dict(zip(scraped_df["home_url"], scraped_df["num_errors"]))
+            if "num_errors" in scraped_df.columns else {}
+        )
 
+    n_before = len(given_ids_texts)
     given_ids_texts = [
         (source, text) for source, text in given_ids_texts
-        if text
+        if is_summarizable(text, num_errors_by_source.get(source, 0))
     ]
+    n_skipped = n_before - len(given_ids_texts)
+    if n_skipped:
+        logger.info(
+            f"Skipping summarization for {n_skipped} scraped page(s) classified as "
+            "junk (parked/blocked/garbled/dead/empty) rather than describable content"
+        )
 
     logger.info(f"Summarizing {len(given_ids_texts)} websites")
     with get_session() as session:
