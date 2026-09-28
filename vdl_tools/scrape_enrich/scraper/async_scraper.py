@@ -235,6 +235,20 @@ class AsyncScraper:
             for attempt in range(self.http_retries):
                 try:
                     response = await self.client.get(url)
+                    # TODO: response.url is the final URL after redirects (the
+                    # client follows them), but nothing here or in scrape_url()
+                    # captures it — every caller only ever sees the originally
+                    # requested url. website_quality.py in ed_tracker pays for
+                    # this today with its own separate ~30-minute
+                    # redirect+liveness resolution pass over every domain,
+                    # entirely because the scraper already did this work and
+                    # threw it away. Persisting response.url (and
+                    # failure_reason — see scrape_websites.py's
+                    # process_scraped_content) needs a new column on
+                    # web_pages_scraped and one line in each of scrape_url's
+                    # return dict and process_scraped_content's res.append()
+                    # blocks. Data only lands from the next scrape onward, so
+                    # this is a change to make on its own, not bundle in.
 
                     if response.status_code >= 400:
                         logger.warning(f"HTTP {response.status_code} for {url}")

@@ -156,6 +156,14 @@ def process_scraped_content(
     Process raw scraped content into structured data format.
     Replaces get_page_data/load_website synchronous logic.
     """
+    # TODO: scraped_result already carries a failure_reason from
+    # async_scraper.scrape_url() (dead_link / http_error / js_wall / other),
+    # computed for free on every failed fetch — but none of the res.append()
+    # blocks below persist it to web_pages_scraped, so it's discarded here.
+    # Same story for the final post-redirect URL (see the TODO on
+    # response.url in async_scraper.fetch_http) — this function only ever
+    # sees the originally requested url. Both would need a new column on
+    # web_pages_scraped.
     res = []
     url = scraped_result['url']
     web_content = scraped_result['content']

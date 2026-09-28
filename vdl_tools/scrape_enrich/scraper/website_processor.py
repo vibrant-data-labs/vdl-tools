@@ -154,12 +154,36 @@ def process_page_source(url: str, source: str):
         logger.warn(e)
         return None
     else:
+        # TODO: this fallback only ever looks at <p>/<section> tags, so a page
+        # with no such tags (div/span-only site builders like Weebly, or
+        # legacy table-based layouts) returns "" here even when real content
+        # sits right there in the DOM — Unstructured's primary path can also
+        # fall short of get_page_text's 500-char threshold on these same
+        # pages. Confirmed live on www.starlab.world (real 499-char page,
+        # zero <p>/<section> tags -> 0 chars extracted) and www.ctaern.org
+        # (table-layout page, same result). A single soup.get_text() pass
+        # after stripping <script>/<style> recovers real, readable text on
+        # both — noisy (duplicated nav blocks from responsive desktop/mobile
+        # variants, ~20-30% word-gram duplication measured) but genuine, and
+        # strictly better than the 0 chars these orgs get today. Estimated a
+        # modest slice of the broader "dead" verdict population, not most of
+        # it — most of that bucket is genuinely unreachable domains.
         paragraphs = soup.find_all('p')
         sections = soup.find_all('section')
         extract = " ".join([row.text for row in [*paragraphs, *sections]])
         extract = extract.replace("\xa0", " ")
         extract = extract.replace("\n", " ")
         pattern = re.compile(" {2,}")
+        # TODO: "".isspace() is False in Python, so this only catches the
+        # case where <p>/<section> tags exist but are all whitespace-only
+        # (e.g. decorative <p>&nbsp;</p>) — not the (more common) case where
+        # no such tags exist at all, which already falls through to "".
+        # When it does fire, the literal string "empty" (5 real chars) is
+        # returned and treated as truthy content downstream in
+        # get_page_text() (`page_text = clean_scraped_text(fallback_text) if
+        # fallback_text else ""`), so it can leak into combined_text as fake
+        # page content instead of a genuine empty result. Should return ""
+        # (or None) instead of the sentinel string.
         if extract.isspace():
             logger.warn(f"URL {url} is empty")
             return "empty"
