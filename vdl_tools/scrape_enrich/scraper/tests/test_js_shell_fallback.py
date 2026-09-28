@@ -18,6 +18,7 @@ import asyncio
 from vdl_tools.scrape_enrich.scraper.async_scraper import (
     AsyncScraper,
     FailureReason,
+    JS_WALL_PATTERNS,
     looks_like_js_shell,
 )
 from vdl_tools.scrape_enrich.scraper.scrape_websites import (
@@ -379,3 +380,39 @@ def test_process_does_not_retry_real_page_mentioning_the_vendor():
     assert stub.browser_calls == []
     assert result["method"] == "http"
     assert rows[0]["parsed_html"].strip()
+
+
+# --- JS_WALL_PATTERNS: vendor coverage --------------------------------------
+# fetch_http checks every response body (not just failures) against this list,
+# so a pattern that is too generic silently discards good content and burns a
+# browser-retry slot on pages that never needed one. bbbsba.org is the pilot
+# case for the SiteGround marker: a 202 response whose entire body is a
+# meta-refresh to SiteGround's own bot-check, invisible to every vendor marker
+# already in the list.
+
+SITEGROUND_CHALLENGE_BODY = (
+    '<html><head><link rel="icon" href="data:;">'
+    '<meta http-equiv="refresh" '
+    'content="0;/.well-known/sgcaptcha/?r=%2F&y=ipr:23.93.133.24:1790275577.098">'
+    "</meta></head></html>"
+)
+# The dominant false-positive risk measured against the corpus: 277 of ~90k
+# scraped domains carry this exact Google reCAPTCHA footer on an ordinary,
+# fully-readable contact/donation form — not a wall. A too-broad pattern
+# (a bare "captcha") would misclassify all of them; this is why only the
+# SiteGround-specific string was added, not the generic word.
+RECAPTCHA_FOOTER_TEXT = (
+    "or updates, promotions, and more. This site is protected by reCAPTCHA "
+    "and the Google Privacy Policy and Terms of Service apply."
+)
+
+
+def test_siteground_challenge_is_detected():
+    lowered = SITEGROUND_CHALLENGE_BODY.lower()
+    assert any(pattern in lowered for pattern in JS_WALL_PATTERNS)
+
+
+def test_recaptcha_footer_boilerplate_is_not_flagged():
+    """Regression guard: this ordinary boilerplate must never match."""
+    lowered = RECAPTCHA_FOOTER_TEXT.lower()
+    assert not any(pattern in lowered for pattern in JS_WALL_PATTERNS)
