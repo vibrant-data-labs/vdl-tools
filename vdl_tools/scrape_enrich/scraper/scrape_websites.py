@@ -9,6 +9,7 @@ from urllib.parse import urljoin, urlparse
 
 import vdl_tools.scrape_enrich.scraper.website_processor as wp
 from vdl_tools.scrape_enrich.scraper.async_scraper import AsyncScraper
+from vdl_tools.scrape_enrich.scraper.text_quality import looks_like_bot_wall
 from vdl_tools.shared_tools.web_summarization.make_page_text import make_group_text
 from vdl_tools.shared_tools.tools.logger import logger
 from vdl_tools.shared_tools.database_cache.database_models.web_scraping import WebPagesScraped, WebPagesParsed
@@ -155,6 +156,14 @@ def process_scraped_content(
     Process raw scraped content into structured data format.
     Replaces get_page_data/load_website synchronous logic.
     """
+    # TODO: scraped_result already carries a failure_reason from
+    # async_scraper.scrape_url() (dead_link / http_error / js_wall / other),
+    # computed for free on every failed fetch — but none of the res.append()
+    # blocks below persist it to web_pages_scraped, so it's discarded here.
+    # Same story for the final post-redirect URL (see the TODO on
+    # response.url in async_scraper.fetch_http) — this function only ever
+    # sees the originally requested url. Both would need a new column on
+    # web_pages_scraped.
     res = []
     url = scraped_result['url']
     web_content = scraped_result['content']
@@ -251,6 +260,21 @@ def _should_retry_with_browser(scraped_result: dict, processed_rows: list) -> bo
     return all(not (row.get('parsed_html') or '').strip() for row in processed_rows)
 
 
+def _should_retry_blocked_with_browser(scraped_result: dict, processed_rows: list) -> bool:
+    """Whether a page should be retried through the browser because the HTTP
+    fetch was answered by a bot wall rather than by the site.
+    A wall cached this way reads as a success
+    (``status_code`` 200, ``num_errors`` 0), so ``skip_existing`` never revisits
+    it and ``max_errors`` cannot reach it.
+    """
+    if scraped_result.get('method') != 'http':
+        return False
+    if scraped_result.get('url', '').endswith('.pdf'):
+        return False
+    text = " ".join((row.get('parsed_html') or '') for row in processed_rows)
+    return looks_like_bot_wall(text)
+
+
 async def _process_scraped_with_browser_retry(
     scraper,
     scraped_result: dict,
@@ -264,15 +288,22 @@ async def _process_scraped_with_browser_retry(
     and rows are returned unchanged.
     """
     processed_rows = process_scraped_content(scraped_result, **process_kwargs)
-    if not _should_retry_with_browser(scraped_result, processed_rows):
+    url = scraped_result['url']
+    if _should_retry_with_browser(scraped_result, processed_rows):
+        logger.info(
+            "Empty extracted text for %s despite HTTP %s, retrying with browser",
+            url,
+            scraped_result.get('status_code'),
+        )
+    elif _should_retry_blocked_with_browser(scraped_result, processed_rows):
+        logger.info(
+            "Bot wall answered %s at HTTP %s, retrying with browser",
+            url,
+            scraped_result.get('status_code'),
+        )
+    else:
         return scraped_result, processed_rows
 
-    url = scraped_result['url']
-    logger.info(
-        "Empty extracted text for %s despite HTTP %s, retrying with browser",
-        url,
-        scraped_result.get('status_code'),
-    )
     browser_content = await scraper.fetch_browser(url)
     if not browser_content:
         logger.warning("Browser retry produced no content for %s", url)
