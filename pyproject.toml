@@ -20,6 +20,7 @@ dependencies = [
     "geopy",
     "geotext",
     "GitPython",
+    # Requires the 0.2.0 structured-granters API on the referenced Git branch.
     "givingtuesday-datamart @ git+https://github.com/vibrant-data-labs/givingtuesday-datamart.git",
     "google-api-python-client>=2.100.0",
     "google-cloud-translate>=3.11.0",
