@@ -1,6 +1,8 @@
 # OpenAI Prompt/Response Cache — Usage Guide
 
-This document describes how to use the SQL-backed prompt/response caches in `vdl-tools`: **PromptResponseCacheSQL**, **InstructorPRC**, and **FewShotCache**. They store OpenAI API inputs and outputs in a database so repeated calls with the same inputs can return cached results instead of calling the API again.
+This document describes how to use the SQL-backed prompt/response caches in `vdl-tools`: **PromptResponseCacheSQL**, **InstructorPRC**, and **FewShotCache**. They store model inputs and outputs in a database so repeated calls with the same inputs can return cached results instead of calling the API again.
+
+For direct OpenAI versus Vercel setup, provider routing, reasoning parameters, and cache compatibility, follow the [OpenAI and Vercel AI Gateway tutorial](VERCEL_AI_GATEWAY_TUTORIAL.md). Gateway support described there applies to `PromptResponseCacheSQL`.
 
 ---
 
@@ -18,7 +20,7 @@ This document describes how to use the SQL-backed prompt/response caches in `vdl
 
 - **Database**: A PostgreSQL database configured via your config (e.g. `config.sample.ini` / `get_configuration()`). The cache uses tables `prompt` and `prompt_response`.
 
-- **OpenAI API**: Set `OPENAI_API_KEY` (or configure it in your config) for live API calls when the cache misses.
+- **API credentials**: For direct OpenAI, set `OPENAI_API_KEY` (or configure it in your config). For `PromptResponseCacheSQL` with `api_backend="vercel"`, set `AI_GATEWAY_API_KEY` or add `vercel_api_key` under `[vercel]` in `config.ini`; an OpenAI key is not required for that path.
 
 - **Imports**:
 
@@ -35,7 +37,7 @@ This document describes how to use the SQL-backed prompt/response caches in `vdl
 
 **Module:** `vdl_tools.shared_tools.openai.prompt_response_cache_sql`
 
-A generic SQL-backed cache for OpenAI Responses API completions. Cache keys are `(prompt_id, given_id, text_id)` where `text_id` is a hash of the input text. You can optionally scope by model with `filter_by_model=True`.
+A generic SQL-backed cache for direct OpenAI or Vercel Responses API completions. Lookups use the prompt, caller-supplied ID, and input text hash. With `filter_by_model=True`, reads also match the model name and request hash, separating backend, routing options, and allowlisted hyperparameters. The default `False` shares responses across those identities.
 
 ### Constructor
 
@@ -47,9 +49,11 @@ PromptResponseCacheSQL(
     prompt_id=None,             # Optional: id of existing prompt in DB
     prompt_name="",             # Name when creating from prompt_str
     prompt_description="",      # Description when creating from prompt_str
-    filter_by_model=False,      # If True, cache is keyed by model name too
+    filter_by_model=False,      # If True, reads match model and request parameters
     model="gpt-4.1-mini",       # OpenAI model for API calls (and cache when filter_by_model)
-    store_results=True,         # If False, do not persist to DB (no cache fill)
+    store_results=True,         # If False, do not persist responses (no cache fill)
+    api_backend="openai",       # Or "vercel" with a creator/model ID
+    model_provider=None,       # Optional Vercel serving-provider preference
 )
 ```
 

@@ -32,6 +32,8 @@ KWARG_KEYS_THAT_AFFECT_OUTPUT = frozenset({
     "max_output_tokens",
     "seed",
     "service_tier",
+    "api_backend",
+    "extra_body",  # Includes Vercel providerOptions and provider-specific parameters.
 })
 
 

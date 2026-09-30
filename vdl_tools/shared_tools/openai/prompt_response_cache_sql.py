@@ -29,7 +29,7 @@ from vdl_tools.shared_tools.database_cache.database_models.prompt import (
     PromptResponse,
 )
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
-from vdl_tools.shared_tools.openai.openai_api_utils import get_completion, get_context_window, get_num_tokens
+from vdl_tools.shared_tools.openai.openai_api_utils import completion_request_kwargs, get_completion, get_context_window, get_num_tokens
 from vdl_tools.shared_tools.tools.logger import logger
 
 import logging
@@ -185,7 +185,7 @@ DEFAULT_MODEL = "gpt-4.1-mini"
 
 
 class PromptResponseCacheSQL():
-    """SQL-backed cache for OpenAI Responses API completions.
+    """SQL-backed cache for direct OpenAI or Vercel gateway completions.
 
     Looks up cached responses by (prompt_id, given_id, text_id). If
     ``filter_by_model`` is True, cache entries are also keyed by model name,
@@ -199,6 +199,34 @@ class PromptResponseCacheSQL():
 
     Notes
     -----
+    **Vercel AI Gateway**
+
+    Set ``AI_GATEWAY_API_KEY`` (or ``[vercel] vercel_api_key`` in config.ini)
+    and construct with ``api_backend="vercel"``
+    and a gateway model ID such as ``model="anthropic/claude-sonnet-4.6"``.
+    No OpenAI key is required for gateway calls. The existing Responses API
+    interface is retained: pass ``reasoning={"effort": "high"}``,
+    ``max_output_tokens``, ``temperature``, or ``text_format=MySchema`` to
+    single or bulk calls, subject to the selected model's support.
+
+    ``model_provider=None`` leaves serving-provider routing to Vercel.
+    ``model_provider="bedrock"`` prefers Bedrock but allows gateway fallback.
+    The model ID's prefix identifies the model creator, not necessarily its
+    serving provider. Advanced routing and provider parameters go through
+    ``extra_body={"providerOptions": {"gateway": {"only": ["bedrock"]}}}``;
+    ``only`` restricts providers, while ``order`` specifies preferences.
+    A per-call ``order`` overrides ``model_provider``.
+
+    Use ``filter_by_model=True`` to separate model, backend, routing, and
+    hyperparameter identities. The legacy False default still shares cached
+    results across all identities. Backend and ``extra_body`` are included
+    in the request hash without a database migration. Gateway inputs are not
+    truncated using OpenAI tokenization; the gateway enforces model limits.
+
+    References:
+    https://vercel.com/docs/ai-gateway/sdks-and-apis/openresponses
+    https://vercel.com/docs/ai-gateway/sdks-and-apis/openresponses/advanced
+
     **OpenAI API kwargs and model-specific parameters**
 
     Methods that call the API (`get_cache_or_run`, `bulk_get_cache_or_run`,
@@ -267,6 +295,8 @@ class PromptResponseCacheSQL():
         filter_by_model: bool = False,
         model=DEFAULT_MODEL,
         store_results = True,
+        api_backend: str = "openai",
+        model_provider: str | None = None,
     ):
         """Initialize the cache for a given prompt and model.
 
@@ -298,6 +328,11 @@ class PromptResponseCacheSQL():
             so they can be returned from cache on future requests. If False,
             results are returned but not stored (no cache fill). Default is
             True.
+        api_backend : {"openai", "vercel"}, optional
+            Direct OpenAI by default, or Vercel's Responses-compatible API.
+        model_provider : str, optional
+            Preferred serving-provider slug for Vercel (e.g. "bedrock").
+            Omit to let Vercel choose. Requires api_backend="vercel".
 
         Raises
         ------
@@ -307,6 +342,11 @@ class PromptResponseCacheSQL():
         if not any([prompt is not None, prompt_str, prompt_id]):
             raise Exception("Need to give at least one of prompt, prompt_str, prompt_id")
 
+        completion_request_kwargs(api_backend, model_provider, {})  # Validate early.
+        if api_backend == "vercel" and "/" not in model:
+            raise ValueError("Vercel models must use 'creator/model' format")
+        self.api_backend = api_backend
+        self.model_provider = model_provider
         self.session = session
         self.prompt = self._set_prompt_obj(
             prompt=prompt,
@@ -319,12 +359,19 @@ class PromptResponseCacheSQL():
         self.model = model
         self.store_results = store_results
 
-        context_window, max_output_tokens = get_context_window(self.model)
+        # OpenAI tokenization and default context limits are not valid for
+        # other providers. Let the gateway enforce the selected model's limits.
+        context_window, max_output_tokens = (
+            (None, None) if api_backend == "vercel" else get_context_window(self.model)
+        )
         if context_window:
             prompt_tokens = get_num_tokens(self.prompt.prompt_str, self.model)
             self.max_text_tokens = context_window - prompt_tokens - max_output_tokens
         else:
             self.max_text_tokens = None
+
+    def _request_kwargs(self, kwargs):
+        return completion_request_kwargs(self.api_backend, self.model_provider, kwargs)
 
     def _set_prompt_obj(
         self, prompt, prompt_str, prompt_id, prompt_name, prompt_description):
@@ -431,7 +478,7 @@ class PromptResponseCacheSQL():
             filters.append(PromptResponse.model_name == self.model)
             filters.append(
                 PromptResponse.request_hash
-                == PromptResponse.create_request_hash(request_kwargs)
+                == PromptResponse.create_request_hash(self._request_kwargs(request_kwargs))
             )
 
         prompt_response_obj = (
@@ -494,7 +541,7 @@ class PromptResponseCacheSQL():
             filters.append(PromptResponse.model_name == self.model)
             filters.append(
                 PromptResponse.request_hash
-                == PromptResponse.create_request_hash(request_kwargs)
+                == PromptResponse.create_request_hash(self._request_kwargs(request_kwargs))
             )
 
         found_rows = (
@@ -553,7 +600,7 @@ class PromptResponseCacheSQL():
             `text_id` so the INSERT path can populate the indexed column.
         """
         text_id = PromptResponse.create_text_id(text)
-        norm_kwargs = PromptResponse.normalize_request_kwargs(request_kwargs)
+        norm_kwargs = PromptResponse.normalize_request_kwargs(self._request_kwargs(request_kwargs))
         return {
             "prompt_id": self.prompt.id,
             "given_id": str(given_id),
@@ -584,7 +631,7 @@ class PromptResponseCacheSQL():
         UPDATE case via the `set_` clause.
         """
         text_id = PromptResponse.create_text_id(text)
-        norm_kwargs = PromptResponse.normalize_request_kwargs(request_kwargs)
+        norm_kwargs = PromptResponse.normalize_request_kwargs(self._request_kwargs(request_kwargs))
         return {
             "prompt_id": self.prompt.id,
             "given_id": str(given_id),
@@ -744,7 +791,7 @@ class PromptResponseCacheSQL():
                 # num_errors on a coexisting row from a different model.
                 PromptResponse.model_name == self.model,
                 PromptResponse.request_hash
-                == PromptResponse.create_request_hash(request_kwargs),
+                == PromptResponse.create_request_hash(self._request_kwargs(request_kwargs)),
             )
             .first()
         )
@@ -865,7 +912,7 @@ class PromptResponseCacheSQL():
             text=text,
             model=self.model,
             max_text_tokens=self.max_text_tokens,
-            **kwargs,
+            **self._request_kwargs(kwargs),
         )
 
     def _get_cache_or_run(

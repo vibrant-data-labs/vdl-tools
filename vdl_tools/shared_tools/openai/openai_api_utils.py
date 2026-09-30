@@ -1,5 +1,6 @@
 import contextlib
 import logging
+from functools import cached_property, lru_cache
 
 from openai import AsyncOpenAI, OpenAI
 import tiktoken
@@ -13,13 +14,73 @@ logging.basicConfig(level=logging.DEBUG)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    api_key = get_configuration()['openai']["openai_api_key"]
+class _LazyOpenAIClient:
+    """Keep legacy client exports without requiring OpenAI keys for gateway use."""
 
-CLIENT = OpenAI(max_retries=4,
-                api_key=api_key)
-ASYNC_CLIENT = AsyncOpenAI(api_key=api_key)
+    def __init__(self, asynchronous=False):
+        self.asynchronous = asynchronous
+
+    @cached_property
+    def _client(self):
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            api_key = get_configuration()['openai']["openai_api_key"]
+        if self.asynchronous:
+            return AsyncOpenAI(api_key=api_key)
+        return OpenAI(max_retries=4, api_key=api_key)
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
+
+
+CLIENT = _LazyOpenAIClient()
+ASYNC_CLIENT = _LazyOpenAIClient(asynchronous=True)
+VERCEL_BASE_URL = "https://ai-gateway.vercel.sh/v1"
+
+
+@lru_cache(maxsize=1)
+def get_vercel_client():
+    """Read AI_GATEWAY_API_KEY, then [vercel] vercel_api_key in config.ini."""
+    api_key = os.getenv("AI_GATEWAY_API_KEY")
+    if not api_key:
+        config = get_configuration()
+        if "vercel" in config:
+            api_key = config["vercel"].get("vercel_api_key", "").strip()
+    if not api_key:
+        raise ValueError(
+            "Set AI_GATEWAY_API_KEY or [vercel] vercel_api_key in config.ini "
+            "to your Vercel AI Gateway API key"
+        )
+    return OpenAI(api_key=api_key, base_url=VERCEL_BASE_URL, max_retries=4)
+
+
+def completion_request_kwargs(api_backend, model_provider, kwargs):
+    """Build routing options without mutating caller-owned nested dictionaries.
+
+    model_provider is a preference, allowing Vercel fallback. For a strict
+    restriction use extra_body={"providerOptions": {"gateway": {"only": [...]}}}.
+    An explicit per-call gateway.order overrides the constructor preference.
+    """
+    if api_backend not in {"openai", "vercel"}:
+        raise ValueError("api_backend must be 'openai' or 'vercel'")
+    if model_provider is not None and api_backend != "vercel":
+        raise ValueError("model_provider requires api_backend='vercel'")
+    result = dict(kwargs or {})
+    if result.get("api_backend", api_backend) != api_backend:
+        raise ValueError("Set api_backend on the cache constructor, not per call")
+    if api_backend == "vercel":
+        result["api_backend"] = api_backend
+        if model_provider is not None:
+            if not isinstance(model_provider, str) or not model_provider.strip():
+                raise ValueError("model_provider must be a non-empty provider slug")
+            body = dict(result.get("extra_body") or {})
+            options = dict(body.get("providerOptions") or {})
+            gateway = dict(options.get("gateway") or {})
+            gateway.setdefault("order", [model_provider])
+            options["gateway"] = gateway
+            body["providerOptions"] = options
+            result["extra_body"] = body
+    return result
 DEFAULT_CONTEXT_WINDOW = 400_000
 DEFAULT_MAX_OUTPUT_TOKENS = 128_000
 
@@ -121,9 +182,10 @@ def get_completion(
     text,
     return_all=False,
     max_text_tokens=None,
+    api_backend="openai",
     **kwargs,
 ):
-    """Call the OpenAI Responses API and return the parsed completion.
+    """Call direct OpenAI or Vercel's Responses API and return the completion.
 
     Uses `CLIENT.responses.parse()` with the given prompt and user text.
     By default returns only the parsed output; if `return_all` is True,
@@ -154,6 +216,10 @@ def get_completion(
     return_all : bool, optional
         If True, return the full API response; otherwise return only
         `response.output_parsed`. Default is False.
+    api_backend : {"openai", "vercel"}, optional
+        Defaults to direct OpenAI. Vercel uses AI_GATEWAY_API_KEY and a
+        creator/model ID. Standard Responses kwargs are forwarded unchanged;
+        send Vercel providerOptions through the SDK's extra_body parameter.
     **kwargs
         Passed through to `responses.parse()` (e.g. response_format).
 
@@ -161,6 +227,10 @@ def get_completion(
     -------
     Parsed completion, or the full response object if `return_all` is True.
     """
+    if api_backend not in {"openai", "vercel"}:
+        raise ValueError("api_backend must be 'openai' or 'vercel'")
+    if api_backend == "vercel" and "/" not in model:
+        raise ValueError("Vercel models must use 'creator/model' format")
     if max_text_tokens is not None:
         text = truncate_text(text, model_name=model, max_tokens=max_text_tokens)
 
@@ -187,7 +257,8 @@ def get_completion(
         last_message = messages[-1]['content']
         response_kwargs['input'] = last_message
 
-    response = CLIENT.responses.parse(**response_kwargs)
+    client = get_vercel_client() if api_backend == "vercel" else CLIENT
+    response = client.responses.parse(**response_kwargs)
     if return_all:
         return response
     return response.output_parsed

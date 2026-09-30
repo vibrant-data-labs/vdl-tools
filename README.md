@@ -13,6 +13,11 @@ This repository contains a set of tools which are used at Vibrant Data Labs.
 - [Tag2Network](./vdl_tools/tag2network/)
 - [Shared Tools](./vdl_tools/shared_tools/)
 
+## Documentation
+
+- [SQL prompt/response cache usage guide](docs/OPENAI_PROMPT_RESPONSE_CACHE.md)
+- [Tutorial: OpenAI versus Vercel AI Gateway](docs/VERCEL_AI_GATEWAY_TUTORIAL.md) — setup, provider routing, hyperparameters, and cache behavior.
+
 ## Installation
 
 ### For Users
