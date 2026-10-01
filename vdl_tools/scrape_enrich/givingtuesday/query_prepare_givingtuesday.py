@@ -242,6 +242,7 @@ def query_process_givingtuesday_data(
     return_full_text=True,
     force_include_eins=None,
     remove_granter_eins=True,
+    on_grant_summaries=None,
 ):
     """Return the Crunchbase-shaped DataFrame of grantee orgs matching ``search_terms``.
 
@@ -299,6 +300,10 @@ def query_process_givingtuesday_data(
       logged at WARNING and dropped (there's no identity data to assemble).
     * ``remove_granter_eins`` — when ``True``, remove the EINs that are
       granters from the result.
+
+    * ``on_grant_summaries`` — optional callback receiving yearly summaries
+      for the returned organizations. Called once, including for empty results,
+      so consumers can persist relationships without querying again.
 
     Output columns (one row per eligible EIN):
 
@@ -364,6 +369,8 @@ def query_process_givingtuesday_data(
         len(hits_forced),
     )
     if not eins:
+        if on_grant_summaries is not None:
+            on_grant_summaries([])
         return pd.DataFrame()
 
     basic_long = _records_to_df(client.get_basic_fields(eins, min_taxyear=filter_yr))
@@ -392,6 +399,10 @@ def query_process_givingtuesday_data(
             )
 
     df = _assemble_cb_shape(hits, basic_long, grants_long, column_for_funding)
+
+    if on_grant_summaries is not None:
+        returned_eins = set(df["ein"].str.replace("-", "", regex=False)) if not df.empty else set()
+        on_grant_summaries([g for g in clean_grants if g.ein in returned_eins])
 
     if proceessed_output_path:
         write_dataframe(df, proceessed_output_path)
