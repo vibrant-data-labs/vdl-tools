@@ -146,20 +146,27 @@ def _assemble_cb_shape(hits, basic_long, grants_long, column_for_funding):
             .reset_index()
         )
         grants_wide = grants_wide.merge(max_yr, on="ein", how="left")
-        # Union funder sets across years (each year already arrives deduped).
-        funders = (
-            grants_long.groupby("ein")
-            .agg({
-                "granter_eins": lambda s: sorted({e for arr in s for e in (arr or [])}),
-                "granter_names": lambda s: sorted({n for arr in s for n in (arr or [])}),
-            })
-            .reset_index()
-            .rename(columns={"granter_eins": "Funders", "granter_names": "Funder_Names"})
-        )
+        # Records stay associated by EIN through the cross-year union.
+        def merge_granters(series):
+            identities = {}
+            for records in series:
+                for record in records:
+                    existing = identities.get(record["ein"])
+                    if existing is not None and existing != record:
+                        raise ValueError(f"Conflicting canonical granter identity: {record['ein']}")
+                    identities[record["ein"]] = record
+            return [identities[ein] for ein in sorted(identities)]
+
+        funders = grants_long.groupby("ein")["granters"].agg(merge_granters).reset_index()
         grants_wide = grants_wide.merge(funders, on="ein", how="left")
 
     df = base.merge(contrib_wide, on="ein", how="left")
     df = df.merge(grants_wide, on="ein", how="left")
+
+    if "granters" not in df:
+        df["granters"] = [[] for _ in range(len(df))]
+    else:
+        df["granters"] = df["granters"].map(lambda v: v if isinstance(v, list) else [])
 
     # Description is the FTS hit text (not anything on basic_fields).
     description_by_ein = {h.ein: (h.unique_text or "") for h in hits}
@@ -235,6 +242,7 @@ def query_process_givingtuesday_data(
     return_full_text=True,
     force_include_eins=None,
     remove_granter_eins=True,
+    on_grant_summaries=None,
 ):
     """Return the Crunchbase-shaped DataFrame of grantee orgs matching ``search_terms``.
 
@@ -293,16 +301,21 @@ def query_process_givingtuesday_data(
     * ``remove_granter_eins`` — when ``True``, remove the EINs that are
       granters from the result.
 
+    * ``on_grant_summaries`` — optional callback receiving yearly summaries
+      for the returned organizations. Called once, including for empty results,
+      so consumers can persist relationships without querying again.
+
     Output columns (one row per eligible EIN):
 
     * Identity: ``ein`` (``NN-NNNNNNN``), ``id`` (``givingtuesday_<ein>``),
-      ``Organization``, ``Website_cb_cd``, ``Description``, ``hq_address``.
+      ``Organization``, ``businessname1``, ``businessname2``, ``dba_name``,
+      ``Website_cb_cd``, ``Description``, ``hq_address``.
     * Latest-filing scalars: ``total_revenue_current_year``,
       ``total_cash_contributions``, ``total_cash_contributions_no_gov``.
     * Contributions per year: ``total_cash_contributions_YYYY`` (one
       column per filing year present), ``total_total_cash_contributions``.
     * Grants per year: ``grant_YYYY``, ``total_grants_amount``,
-      ``last_grant_year``, ``Funders``, ``Funder_Names``.
+      ``last_grant_year``, ``granters`` (EIN and three name fields).
     * CB-shaped funding aliases: ``Funding_YYYY`` (mirror of the
       ``column_for_funding`` per-year columns), ``Total_Funding_$``,
       ``Last_Funding_Year``.
@@ -356,11 +369,13 @@ def query_process_givingtuesday_data(
         len(hits_forced),
     )
     if not eins:
+        if on_grant_summaries is not None:
+            on_grant_summaries([])
         return pd.DataFrame()
 
     basic_long = _records_to_df(client.get_basic_fields(eins, min_taxyear=filter_yr))
     grant_summaries = client.get_grant_summaries(eins, role="grantee", min_taxyear=filter_yr)
-    all_granter_eins = set(granter_ein for grant_summary in grant_summaries for granter_ein in (grant_summary.granter_eins or []))
+    all_granter_eins = set(granter.ein for grant_summary in grant_summaries for granter in grant_summary.granters)
 
     if remove_granter_eins:
         # Remove from hits the EINs thare in all_granter_eins
@@ -384,6 +399,10 @@ def query_process_givingtuesday_data(
             )
 
     df = _assemble_cb_shape(hits, basic_long, grants_long, column_for_funding)
+
+    if on_grant_summaries is not None:
+        returned_eins = set(df["ein"].str.replace("-", "", regex=False)) if not df.empty else set()
+        on_grant_summaries([g for g in clean_grants if g.ein in returned_eins])
 
     if proceessed_output_path:
         write_dataframe(df, proceessed_output_path)
