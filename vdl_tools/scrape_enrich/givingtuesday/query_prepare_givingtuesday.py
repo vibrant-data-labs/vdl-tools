@@ -13,6 +13,7 @@ from dataclasses import asdict
 import pandas as pd
 
 from givingtuesday_datamart.client import GtDatamartClient
+from vdl_tools.scrape_enrich.givingtuesday.name_lines import resolve_name_lines
 from vdl_tools.shared_tools.parquet_cache import write_dataframe
 from vdl_tools.shared_tools.tools.config_utils import get_configuration
 from vdl_tools.shared_tools.tools.logger import logger
@@ -172,6 +173,17 @@ def _assemble_cb_shape(hits, basic_long, grants_long, column_for_funding):
     description_by_ein = {h.ein: (h.unique_text or "") for h in hits}
     df["Description"] = df["ein"].map(description_by_ein)
 
+    # Line 1 alone truncates about one name in six; see name_lines.py.
+    # businessname1, businessname2 and dba_name keep the raw filing fields.
+    resolved = [
+        resolve_name_lines(*(v if isinstance(v, str) else None for v in fields))
+        for fields in zip(df["name"], df["name_secondary"], df["dba_name"])
+    ]
+    n_completed = sum(org != name for (org, _), name in zip(resolved, df["name"]))
+    df["name"] = [org for org, _ in resolved]
+    df["DBA"] = [dba or None for _, dba in resolved]
+    logger.info("Name lines: %d name(s) completed from line 2, %d org(s) with a DBA", n_completed, df["DBA"].notna().sum())
+
     df["hq_address"] = df.apply(
         lambda x: _format_address_parts(x['addr_line_1'], x['addr_line_2'], x['city'], x['state'], x['zip']),
         axis=1,
@@ -308,8 +320,10 @@ def query_process_givingtuesday_data(
     Output columns (one row per eligible EIN):
 
     * Identity: ``ein`` (``NN-NNNNNNN``), ``id`` (``givingtuesday_<ein>``),
-      ``Organization``, ``businessname1``, ``businessname2``, ``dba_name``,
-      ``Website_cb_cd``, ``Description``, ``hq_address``.
+      ``Organization`` (both name lines read together), ``DBA`` (cleaned
+      doing-business-as name), ``businessname1``, ``businessname2``,
+      ``dba_name`` (the raw filing fields), ``Website_cb_cd``,
+      ``Description``, ``hq_address``.
     * Latest-filing scalars: ``total_revenue_current_year``,
       ``total_cash_contributions``, ``total_cash_contributions_no_gov``.
     * Contributions per year: ``total_cash_contributions_YYYY`` (one
