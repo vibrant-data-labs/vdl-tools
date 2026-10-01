@@ -33,6 +33,9 @@ LABEL_MAP = {
 
 INVERSE_LABEL_MAP = {v: k for k, v in LABEL_MAP.items()}
 
+# LinkedIn renamed this industry in its 2022 taxonomy; profiles carry either name.
+LINKEDIN_NONPROFIT_INDUSTRIES = {'Non-profit Organizations', 'Non-profit Organization Management'}
+
 
 def load_model():
     if not FULL_MODEL_PATH.exists():
@@ -56,7 +59,7 @@ class CategoryEncoder(BaseEstimator, TransformerMixin):
         X.loc[:, 'OrgType_Text_Prediction'] = model_predictions
 
         X.loc[:, 'industry_li_parsed'] = X["industry_li"].apply(lambda x: x[0] if len(x) > 0 else None)
-        X.loc[:, 'Is LinkedIn NP'] = X["industry_li"].apply(lambda x: x == "Non-profit Organizations")
+        X.loc[:, 'Is LinkedIn NP'] = X["industry_li_parsed"].apply(lambda x: x in LINKEDIN_NONPROFIT_INDUSTRIES)
 
         X.loc[:, 'Non-Profit in CB Sectors'] = X["sectors_cb_cd"].apply(lambda x: 1 if x and  "Non Profit" in x else 0)
 
