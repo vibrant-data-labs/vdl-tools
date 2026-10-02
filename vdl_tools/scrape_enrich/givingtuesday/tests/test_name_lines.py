@@ -35,6 +35,14 @@ CASES = {
         ("METRO COUNCIL FOR", "EDUCATIONAL OPPORTUNITY INC (MCEO)", None),
         ("METRO COUNCIL FOR EDUCATIONAL OPPORTUNITY INC", "MCEO"),
     ),
+    "trailing_parenthetical_on_line_1_stays": (
+        ("HARLOW AREA HOTEL ASSOCIATION (HAHA)", None, None),
+        ("HARLOW AREA HOTEL ASSOCIATION (HAHA)", ""),
+    ),
+    "dba_field_ending_in_the_letters_of_line_2": (
+        ("HARLOW TOOLS INC", "SON", "HARLOW JOHNSON"),
+        ("HARLOW TOOLS INC", "HARLOW JOHNSON"),
+    ),
     "parenthesised_word_is_not_an_acronym": (
         ("HARLOW KIDS INC", "(GROUP)", None),
         ("HARLOW KIDS INC", ""),
@@ -89,12 +97,40 @@ CASES = {
         ("HARLOW HEALTH INC", "HOPE; HOPEFUL FUTURES"),
     ),
     "alias_cut_at_end_of_line_1_and_field_has_it_in_full": (
-        ("HARLOW MINISTRIES INC DBA CEDAR R", None, "CEDAR RESOURCE CENTER"),
-        ("HARLOW MINISTRIES INC", "CEDAR RESOURCE CENTER"),
+        ("HARLOW VALLEY MINISTRIES INC DBA CEDAR R", None, "CEDAR RESOURCE CENTER"),
+        ("HARLOW VALLEY MINISTRIES INC", "CEDAR RESOURCE CENTER"),
+    ),
+    "short_line_1_alias_is_not_a_cut": (
+        ("HARLOW HEALTH INC DBA HOPE", "D/B/A HOPEFUL FUTURES", None),
+        ("HARLOW HEALTH INC", "HOPE; HOPEFUL FUTURES"),
+    ),
+    "short_line_1_alias_and_a_longer_dba_field": (
+        ("HARLOW HEALTH INC DBA HOPE", None, "HOPEFUL FUTURES"),
+        ("HARLOW HEALTH INC", "HOPE; HOPEFUL FUTURES"),
+    ),
+    "dba_field_with_the_legal_name_is_not_an_alias": (
+        ("HARLOW HEALTH INC DBA BRIGHT PATH", None, "HARLOW HEALTH INC"),
+        ("HARLOW HEALTH INC", "BRIGHT PATH"),
+    ),
+    "line_1_marker_keeps_a_different_dba_field": (
+        ("HARLOW HEALTH INC DBA", "BRIGHT PATH", "KIND WORKS"),
+        ("HARLOW HEALTH INC", "BRIGHT PATH; KIND WORKS"),
+    ),
+    "care_word_inside_a_line_1_dba": (
+        ("HARLOW HOSPICE INC DBA", "HOSPICE AND PALLIATIVE CARE OF HARLOW", None),
+        ("HARLOW HOSPICE INC", "HOSPICE AND PALLIATIVE CARE OF HARLOW"),
+    ),
+    "dba_field_repeats_a_line_1_dba_with_and_for_ampersand": (
+        ("HARLOW CORP DBA HARLOW HEALTH &", "REHABILITATION CENTER", "HARLOW HEALTH AND REHABILITATION CENTER"),
+        ("HARLOW CORP", "HARLOW HEALTH & REHABILITATION CENTER"),
+    ),
+    "care_of_after_a_line_1_dba": (
+        ("HARLOW HEALTH INC DBA BRIGHT PATH", "C/O JANE ROSS", None),
+        ("HARLOW HEALTH INC", "BRIGHT PATH"),
     ),
     "alias_cut_on_line_1_and_restated_on_line_2": (
-        ("HARLOW RETREAT CENTER (DBA CAMP", "D/B/A CAMP CEDARWOOD", None),
-        ("HARLOW RETREAT CENTER", "CAMP CEDARWOOD"),
+        ("HARLOW VALLEY RETREAT CENTER (DBA CAMP", "D/B/A CAMP CEDARWOOD", None),
+        ("HARLOW VALLEY RETREAT CENTER", "CAMP CEDARWOOD"),
     ),
     "markers_on_both_lines": (
         ("HARLOW HEALTH INC DBA BRIGHT PATH", "D/B/A KIND WORKS", None),
@@ -144,6 +180,14 @@ CASES = {
     "care_of": (
         ("BRING OMAR HOME INC", "C/O MICHAEL KANE", None),
         ("BRING OMAR HOME INC", ""),
+    ),
+    "in_care_of": (
+        ("HARLOW COMMUNITY CENTER INC", "IN CARE OF JANE ROSS", None),
+        ("HARLOW COMMUNITY CENTER INC", ""),
+    ),
+    "care_of_words_inside_a_name": (
+        ("EDUCATION AND RESEARCH FOUNDATION", "FOR THE CARE OF HARLOW EYES", None),
+        ("EDUCATION AND RESEARCH FOUNDATION FOR THE CARE OF HARLOW EYES", ""),
     ),
     "care_of_mid_line": (
         ("SUMMIT ACADEMY TRANSITION HIGH SCHOOL -", "HARLOW - C/O SUMMIT MANAGEMENT", None),

@@ -179,7 +179,7 @@ def _assemble_cb_shape(hits, basic_long, grants_long, column_for_funding):
         resolve_name_lines(*(v if isinstance(v, str) else None for v in fields))
         for fields in zip(df["name"], df["name_secondary"], df["dba_name"])
     ]
-    n_completed = sum(org != name for (org, _), name in zip(resolved, df["name"]))
+    n_completed = sum(len(org) > len(name) for (org, _), name in zip(resolved, df["name"]) if isinstance(name, str))
     df["name"] = [org for org, _ in resolved]
     df["DBA"] = [dba or None for _, dba in resolved]
     logger.info("Name lines: %d name(s) completed from line 2, %d org(s) with a DBA", n_completed, df["DBA"].notna().sum())

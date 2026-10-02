@@ -1,14 +1,17 @@
 """Turn a 990's two name lines and DBA field into a display name and a DBA.
 
 A 990 carries the organization's name on two lines plus doing-business-as
-lines, which the datamart joins into one ``dba_name``. Line 2 is free text: usually the rest of a name that did not fit on
-line 1, sometimes a DBA, a care-of line, or a second name. Using line 1 alone
-truncates about one name in six.
+lines, which the datamart joins into one ``dba_name``. Line 2 is free text:
+usually the rest of a name that did not fit on line 1, sometimes a DBA, a
+care-of line, or a second name. Using line 1 alone truncates about one name in
+six.
 
 ``resolve_name_lines`` applies four rules, first match wins:
 
-1. A DBA marker (``DBA``, ``FKA``, ``FORMERLY``...) or a match with the DBA
-   field says line 2, or part of it, is a DBA.
+1. A DBA marker (``DBA``, ``FKA``, ``FORMERLY``...) on either line, or a match
+   with the DBA field, says the text after it, or line 2, is a DBA. An alias
+   cut off at the end of a full line 1 and restated on line 2 or in the DBA
+   field is kept once.
 2. Line 2 holds nothing to keep: a care-of line, a PO box, a person with a
    role, or a repeat of line 1.
 3. Line 1 already ends in a legal suffix (``INC``, ``LLC``...), so line 2 is
@@ -56,7 +59,7 @@ CARE_OF_RES = [
     re.compile(p, re.IGNORECASE)
     for p in (
         r"(?<![A-Za-z])C/O(?![A-Za-z])",
-        r"\bCARE OF\b",
+        r"(^|[-,;(]\s*|\bIN\s+)CARE OF\b",
         r"\bATTN\b",
         r"\bP\.?\s?O\.?\s?BOX\b",
         r"\bPOST OFFICE BOX\b",
@@ -83,12 +86,15 @@ def _norm(text):
 
 
 def _clean_tail(text):
-    """Drop a trailing DBA marker and trailing punctuation."""
+    """Drop a trailing DBA marker and trailing punctuation; a closing ``)``
+    that closes an opening one stays (``... ASSOCIATION (CAHA)``)."""
     text = text.strip()
     while True:
         before = text
         text = MARKER_AT_END_RE.sub("", text).strip()
-        text = re.sub(r"[-,;:(/)\s]+$", "", text)
+        text = re.sub(r"[-,;:(/\s]+$", "", text)
+        if text.endswith(")") and text.count(")") > text.count("("):
+            text = text[:-1]
         if text == before:
             return text
 
@@ -147,9 +153,42 @@ def _join_dbas(*dbas):
     return "; ".join(kept.values())
 
 
-def _restated(cut, full):
-    """True when ``full`` restates ``cut``, an alias cut off at the end of line 1."""
-    return bool(_norm(cut)) and _norm(full).startswith(_norm(cut))
+def _words(text):
+    return [w for w in (_norm(t) for t in TOKEN_SPLIT_RE.split(text)) if w]
+
+
+def _ends_with_words(text, tail):
+    """True when ``text`` ends with all of ``tail``'s words, and has more."""
+    text_words, tail_words = _words(text), _words(tail)
+    return len(text_words) > len(tail_words) > 0 and text_words[-len(tail_words):] == tail_words
+
+
+def _add_field_aliases(dba, field_dba):
+    """Add the DBA field's aliases to ``dba``; one that carries an alias in
+    full replaces it, one already there is skipped."""
+    def key(text):
+        return _norm(re.sub(r"\s*&\s*", " AND ", text))
+
+    kept = [d for d in dba.split("; ") if d]
+    for alias in _split_dbas(field_dba).split("; "):
+        if not alias or CONNECTOR_AT_END_RE.fullmatch(_upper(alias)):
+            continue
+        for i, known in enumerate(kept):
+            if key(known).startswith(key(alias)):
+                break
+            if key(alias).startswith(key(known)):
+                kept[i] = alias
+                break
+        else:
+            kept.append(alias)
+    return _join_dbas(*kept)
+
+
+def _restated(cut, full, line1_width):
+    """True when ``full`` restates ``cut``, an alias cut off at the end of a
+    line 1 that fills the name field."""
+    fills_field = line1_width >= min(NAME_FIELD_WIDTHS) - 1
+    return fills_field and bool(_norm(cut)) and _norm(full).startswith(_norm(cut))
 
 
 def _pop_paren_marker(line1):
@@ -175,7 +214,7 @@ def _clean_dba_field(value, line1):
     """A DBA field's value, or '' when it is a placeholder or repeats line 1."""
     value = _clean_head(value or "")
     key = _norm(value)
-    if key.startswith("seeschedule") or key in PLACEHOLDER_DBAS or key == _norm(line1):
+    if key.startswith(("seeschedule", "seescedule")) or key in PLACEHOLDER_DBAS or key == _norm(line1):
         return ""
     return value
 
@@ -188,6 +227,12 @@ def _is_care_of_or_person(line2_upper, line1_upper):
     # "ATTENTION DEFICIT..." after "...ADULTS WITH" is the rest of a name.
     continues_line1 = CONNECTOR_AT_END_RE.search(line1_upper) or line1_upper.endswith("-")
     return line2_upper.startswith("ATTENTION ") and not continues_line1
+
+
+def _before_care_of(line2):
+    """Text before a mid-line ``C/O`` still belongs to the name."""
+    starts = [m.start() for m in (p.search(line2) for p in CARE_OF_RES) if m]
+    return line2[: min(starts)] if starts else ""
 
 
 def _is_part_of_name(line2_upper):
@@ -217,14 +262,17 @@ def _apply_rules(line1, line2, field_dba, raw_dba):
     marker_in_line1 = _marker_after_name(line1)
     if marker_in_line1:
         fragment = line1[marker_in_line1.end():]
+        if _is_care_of_or_person(_upper(line2), _upper(line1)):
+            line2 = _before_care_of(line2)
         if _norm(fragment) == _norm(line2):
             dba = line2
-        elif MARKER_AT_START_RE.match(line2.lstrip("( ")) and _restated(fragment, _split_dbas(line2)):
+        elif MARKER_AT_START_RE.match(line2.lstrip("( ")) and _restated(fragment, _split_dbas(line2), width):
             # "...(DBA CAMP" / "D/B/A CAMP CONQUEST": line 2 restates the cut alias.
             dba = _split_dbas(line2)
         else:
             dba = _split_dbas(_join(fragment, line2, width))
-        return _clean_tail(line1[: marker_in_line1.start()]), with_paren_dba(dba)
+        # Keep a DBA field that names something else, as the no-line-2 path does.
+        return _clean_tail(line1[: marker_in_line1.start()]), with_paren_dba(_add_field_aliases(dba, field_dba))
 
     # A DBA field that holds the name itself, is line 2, or ends with line 2.
     if _norm(raw_dba) == _norm(line1) + _norm(line2):
@@ -232,7 +280,7 @@ def _apply_rules(line1, line2, field_dba, raw_dba):
     field = _norm(field_dba)
     if field and field == _norm(line2):
         return _clean_tail(line1), with_paren_dba(line2)
-    if field and field.endswith(_norm(line2)):
+    if field and _ends_with_words(field_dba, line2):
         return _clean_tail(_join(line1, line2, width)), with_paren_dba(_clean_tail(field_dba))
 
     marker_in_line2 = MARKER_RE.search(line2)
@@ -245,10 +293,7 @@ def _apply_rules(line1, line2, field_dba, raw_dba):
 
     line1_upper, line2_upper = _upper(line1), _upper(line2)
     if _is_care_of_or_person(line2_upper, line1_upper):
-        # Text before a mid-line "C/O" still belongs to the name.
-        starts = [m.start() for m in (p.search(line2) for p in CARE_OF_RES) if m]
-        lead = line2[: min(starts)] if starts else ""
-        return _clean_tail(_join(line1, lead, width)), with_paren_dba(field_dba)
+        return _clean_tail(_join(line1, _before_care_of(line2), width)), with_paren_dba(field_dba)
 
     if LEGAL_SUFFIX_AT_END_RE.search(line1_upper) and not _is_part_of_name(line2_upper):
         # A one-word line 2 here is usually a surname, not an alternate name.
@@ -276,10 +321,11 @@ def resolve_name_lines(name, name_secondary=None, dba_name=None):
         organization, dba = _apply_rules(line1, line2, field_dba, raw_dba)
     else:
         # Without line 2, a marker on line 1 still separates a DBA.
+        width = len(line1)
         line1, paren_dba = _pop_paren_marker(line1)
         marker = _marker_after_name(line1)
         line1_dba = _split_dbas(line1[marker.start():]) if marker else ""
-        if _restated(line1_dba, field_dba):
+        if _restated(line1_dba, field_dba, width):
             line1_dba = ""
         organization = _clean_tail(line1[: marker.start()] if marker else line1)
         dba = _join_dbas(line1_dba, paren_dba, field_dba)
@@ -291,6 +337,5 @@ def resolve_name_lines(name, name_secondary=None, dba_name=None):
     if dba and "; " not in dba and _norm(field_dba).startswith(_norm(dba)) and len(_norm(field_dba)) > len(_norm(dba)):
         dba = field_dba
     organization, dba = " ".join(organization.split()), " ".join(dba.split())
-    if _norm(dba) == _norm(organization):
-        dba = ""
+    dba = _join_dbas(*(d for d in dba.split("; ") if _norm(d) != _norm(organization)))
     return organization, dba
