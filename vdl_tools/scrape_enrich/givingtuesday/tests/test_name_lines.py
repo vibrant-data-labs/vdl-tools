@@ -60,6 +60,38 @@ CASES = {
         ("SUMMIT LEARNING (FKA ZANTE)", "C/O PARTNERS IN HEALTH", None),
         ("SUMMIT LEARNING", "ZANTE"),
     ),
+    "marker_on_line_1_without_line_2": (
+        ("HARLOW HEALTH INC DBA BRIGHT PATH", None, None),
+        ("HARLOW HEALTH INC", "BRIGHT PATH"),
+    ),
+    "marker_in_parentheses_without_line_2": (
+        ("SUMMIT LEARNING (FKA ZANTE)", None, None),
+        ("SUMMIT LEARNING", "ZANTE"),
+    ),
+    "marker_on_line_1_keeps_the_dba_field": (
+        ("HARLOW SEMINARY INC FKA HARLOW MISSION", None, "STICHTING HARLOW"),
+        ("HARLOW SEMINARY INC", "HARLOW MISSION; STICHTING HARLOW"),
+    ),
+    "name_that_starts_with_a_marker_word": (
+        ("FORMERLY HOMELESS ARTISTS NETWORK", None, None),
+        ("FORMERLY HOMELESS ARTISTS NETWORK", ""),
+    ),
+    "alias_cut_on_line_1_and_restated_on_line_2": (
+        ("HARLOW RETREAT CENTER (DBA CAMP", "D/B/A CAMP CEDARWOOD", None),
+        ("HARLOW RETREAT CENTER", "CAMP CEDARWOOD"),
+    ),
+    "markers_on_both_lines": (
+        ("HARLOW HEALTH INC DBA BRIGHT PATH", "D/B/A KIND WORKS", None),
+        ("HARLOW HEALTH INC", "BRIGHT PATH; KIND WORKS"),
+    ),
+    "markers_on_both_lines_and_in_the_dba_field": (
+        ("HARLOW HEALTH INC DBA BRIGHT PATH", "D/B/A KIND WORKS", "BRIGHT PATH D/B/A KIND WORKS"),
+        ("HARLOW HEALTH INC", "BRIGHT PATH; KIND WORKS"),
+    ),
+    "dba_field_with_a_marker_matches_line_2": (
+        ("HARLOW TOOLS INC", "SUNRISE", "DBA SUNRISE"),
+        ("HARLOW TOOLS INC", "SUNRISE"),
+    ),
     "two_markers": (
         ("HARLOW REPERTORY THEATRE", "D/B/A THEATRE FOUR D/B/A BARKDALE THEATRE", None),
         ("HARLOW REPERTORY THEATRE", "THEATRE FOUR; BARKDALE THEATRE"),
@@ -112,6 +144,10 @@ CASES = {
     "attention_line": (
         ("SEEK FIRST MINISTRIES", "ATTENTION HEAD OF SCHOOL", "HIGHLAND RIDGE ACADEMY"),
         ("SEEK FIRST MINISTRIES", "HIGHLAND RIDGE ACADEMY"),
+    ),
+    "attention_line_after_a_word_ending_in_on": (
+        ("HARLOW EDUCATION FOUNDATION", "ATTENTION JANE DOE", None),
+        ("HARLOW EDUCATION FOUNDATION", ""),
     ),
     "attention_that_continues_a_name": (
         ("CHILDREN AND ADULTS WITH", "ATTENTION DEFICIT DISORDER", None),

@@ -41,7 +41,7 @@ NAME_FIELD_WIDTHS = (35, 40)
 
 LEGAL_SUFFIX_AT_END_RE = re.compile(r"\b(INC|INCORPORATED|CORP|CORPORATION|LLC|LTD)\.?\s*$")
 CONNECTOR_AT_START_RE = re.compile(r"(OF|AND|FOR|IN|ON|AT|TO|&|WITH|BY|THE)(?![A-Za-z])")
-CONNECTOR_AT_END_RE = re.compile(r"(AND|OF|FOR|THE|IN|ON|TO|AT|BY|WITH|A|&)$")
+CONNECTOR_AT_END_RE = re.compile(r"(?<![A-Za-z])(AND|OF|FOR|THE|IN|ON|TO|AT|BY|WITH|A)$|&$")
 LONE_SUFFIX_OR_PLACE = {
     "INC", "INCORPORATED", "CORP", "CORPORATION", "LLC", "LTD", "CO", "USA",
     "AMERICA", "INTERNATIONAL", "FOUNDATION", "TRUST", "FUND",
@@ -68,7 +68,7 @@ PERSON_ROLE_RE = re.compile(
 )
 
 PLACEHOLDER_DBAS = {"none", "na", "same", "sameasabove", "notapplicable", "n"}
-TRAILING_ACRONYM_RE = re.compile(r"\s*\(([^\s()]+)\)\s*$")
+TRAILING_ACRONYM_RE = re.compile(r"\(([^\s()]+)\)\s*$")
 ACRONYM_RE = re.compile(r"[A-Z0-9&\-./]{2,10}")
 NOT_ACRONYMS = {"GROUP", "INC", "LLC", "USA", "CORP", "NFP", "THE", "AND", "TRUST", "FUND"}
 TOKEN_SPLIT_RE = re.compile(r"[\s/-]+")
@@ -88,7 +88,7 @@ def _clean_tail(text):
     while True:
         before = text
         text = MARKER_AT_END_RE.sub("", text).strip()
-        text = re.sub(r"[-,;:(/)]\s*$", "", text).strip()
+        text = re.sub(r"[-,;:(/)\s]+$", "", text)
         if text == before:
             return text
 
@@ -109,15 +109,8 @@ def _clean_head(text):
 
 def _split_dbas(text):
     """``X D/B/A Y`` -> ``X; Y``, markers removed and repeats dropped."""
-    pieces, seen = [], set()
-    for piece in MARKER_RE.split(text):
-        if MARKER_RE.fullmatch(piece.strip()):
-            continue
-        piece = _clean_head(_clean_tail(piece))
-        if piece and _norm(piece) not in seen:
-            pieces.append(piece)
-            seen.add(_norm(piece))
-    return "; ".join(pieces)
+    pieces = [_clean_head(_clean_tail(p)) for p in MARKER_RE.split(text) if not MARKER_RE.fullmatch(p.strip())]
+    return _join_dbas(*pieces)
 
 
 def _join(head, tail, line1_width=None):
@@ -143,6 +136,36 @@ def _join(head, tail, line1_width=None):
     ):
         head = head[: len(head) - len(last)].rstrip()
     return f"{head} {tail}".strip()
+
+
+def _join_dbas(*dbas):
+    """Join DBAs with ``; ``, dropping blanks, repeats, and a DBA cut short
+    that another one carries in full (``CAMP`` / ``CAMP CONQUEST``)."""
+    kept = {}
+    for dba in dbas:
+        if dba and _norm(dba) not in kept:
+            kept[_norm(dba)] = dba
+    return "; ".join(
+        dba for key, dba in kept.items()
+        if not any(other != key and other.startswith(key) for other in kept)
+    )
+
+
+def _pop_paren_marker(line1):
+    """``FOO (FKA BAR)`` -> ``('FOO', 'BAR')``; ``(line1, '')`` when there is none."""
+    in_parens = MARKER_IN_PARENS_RE.search(line1)
+    if not in_parens:
+        return line1, ""
+    inner = in_parens.group(1)
+    dba = _clean_head(_clean_tail(inner[MARKER_RE.search(inner).end():]))
+    return _clean_tail(line1[: in_parens.start()] + line1[in_parens.end():]), dba
+
+
+def _marker_after_name(line1):
+    """The first DBA marker on line 1 that follows some name ("FORMERLY
+    INCARCERATED..." is a name, not a marker)."""
+    marker = MARKER_RE.search(line1)
+    return marker if marker and _clean_tail(line1[: marker.start()]) else None
 
 
 def _clean_dba_field(value, line1):
@@ -183,38 +206,29 @@ def _apply_rules(line1, line2, field_dba, raw_dba):
 
     # A marker inside parentheses on line 1 -- "(FKA ZANMI)" -- names a DBA
     # and leaves line 2 to be read on its own.
-    paren_dba = ""
-    in_parens = MARKER_IN_PARENS_RE.search(line1)
-    if in_parens:
-        inner = in_parens.group(1)
-        paren_dba = _clean_head(_clean_tail(inner[MARKER_RE.search(inner).end():]))
-        line1 = _clean_tail(line1[: in_parens.start()] + line1[in_parens.end():])
+    line1, paren_dba = _pop_paren_marker(line1)
 
     def with_paren_dba(dba):
-        return "; ".join(d for d in (dba, paren_dba) if d)
+        return _join_dbas(dba, paren_dba)
 
-    marker_in_line1 = MARKER_RE.search(line1)
+    marker_in_line1 = _marker_after_name(line1)
     if marker_in_line1:
         fragment = line1[marker_in_line1.end():]
         marker_in_line2 = MARKER_RE.search(line2)
         if _norm(fragment) == _norm(line2):
             dba = line2
-        elif marker_in_line2:
-            dba = _split_dbas(line2[marker_in_line2.end():])
         else:
             dba = _split_dbas(_join(fragment, line2, width))
         return _clean_tail(line1[: marker_in_line1.start()]), with_paren_dba(dba)
 
-    # A DBA field that holds the name itself, or ends with line 2.
-    raw = _norm(raw_dba)
-    if raw == _norm(line1) + _norm(line2):
+    # A DBA field that holds the name itself, is line 2, or ends with line 2.
+    if _norm(raw_dba) == _norm(line1) + _norm(line2):
         return _clean_tail(_join(line1, line2, width)), paren_dba
-    if raw.endswith(_norm(line2)) and len(raw) > len(_norm(line2)):
-        dba = _clean_head(_clean_tail(raw_dba))
-        return _clean_tail(_join(line1, line2, width)), with_paren_dba(dba)
-
-    if field_dba and _norm(line2) == _norm(field_dba):
+    field = _norm(field_dba)
+    if field and field == _norm(line2):
         return _clean_tail(line1), with_paren_dba(line2)
+    if field and field.endswith(_norm(line2)):
+        return _clean_tail(_join(line1, line2, width)), with_paren_dba(_clean_tail(field_dba))
 
     marker_in_line2 = MARKER_RE.search(line2)
     if marker_in_line2:
@@ -256,7 +270,12 @@ def resolve_name_lines(name, name_secondary=None, dba_name=None):
     if line2:
         organization, dba = _apply_rules(line1, line2, field_dba, raw_dba)
     else:
-        organization, dba = _clean_tail(line1), field_dba
+        # Without line 2, a marker on line 1 still separates a DBA.
+        line1, paren_dba = _pop_paren_marker(line1)
+        marker = _marker_after_name(line1)
+        line1_dba = _split_dbas(line1[marker.start():]) if marker else ""
+        organization = _clean_tail(line1[: marker.start()] if marker else line1)
+        dba = _join_dbas(line1_dba, paren_dba, field_dba)
     dba = dba or acronym
 
     if organization.count("(") != organization.count(")"):
