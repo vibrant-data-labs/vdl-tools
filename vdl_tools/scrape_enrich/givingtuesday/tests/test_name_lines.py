@@ -76,6 +76,22 @@ CASES = {
         ("FORMERLY HOMELESS ARTISTS NETWORK", None, None),
         ("FORMERLY HOMELESS ARTISTS NETWORK", ""),
     ),
+    "marker_after_a_name_that_starts_with_a_marker_word": (
+        ("FORMERLY HOMELESS INC DBA HOPE", None, None),
+        ("FORMERLY HOMELESS INC", "HOPE"),
+    ),
+    "marker_ends_line_1_of_a_name_that_starts_with_a_marker_word": (
+        ("FORMERLY HOMELESS INC DBA", "HOPE", None),
+        ("FORMERLY HOMELESS INC", "HOPE"),
+    ),
+    "distinct_aliases_on_line_2_are_both_kept": (
+        ("HARLOW HEALTH INC", "DBA HOPE D/B/A HOPEFUL FUTURES", None),
+        ("HARLOW HEALTH INC", "HOPE; HOPEFUL FUTURES"),
+    ),
+    "alias_cut_at_end_of_line_1_and_field_has_it_in_full": (
+        ("HARLOW MINISTRIES INC DBA CEDAR R", None, "CEDAR RESOURCE CENTER"),
+        ("HARLOW MINISTRIES INC", "CEDAR RESOURCE CENTER"),
+    ),
     "alias_cut_on_line_1_and_restated_on_line_2": (
         ("HARLOW RETREAT CENTER (DBA CAMP", "D/B/A CAMP CEDARWOOD", None),
         ("HARLOW RETREAT CENTER", "CAMP CEDARWOOD"),

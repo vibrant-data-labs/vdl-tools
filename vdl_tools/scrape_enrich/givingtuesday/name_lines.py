@@ -139,16 +139,17 @@ def _join(head, tail, line1_width=None):
 
 
 def _join_dbas(*dbas):
-    """Join DBAs with ``; ``, dropping blanks, repeats, and a DBA cut short
-    that another one carries in full (``CAMP`` / ``CAMP CONQUEST``)."""
+    """Join DBAs with ``; ``, dropping blanks and repeats."""
     kept = {}
     for dba in dbas:
         if dba and _norm(dba) not in kept:
             kept[_norm(dba)] = dba
-    return "; ".join(
-        dba for key, dba in kept.items()
-        if not any(other != key and other.startswith(key) for other in kept)
-    )
+    return "; ".join(kept.values())
+
+
+def _restated(cut, full):
+    """True when ``full`` restates ``cut``, an alias cut off at the end of line 1."""
+    return bool(_norm(cut)) and _norm(full).startswith(_norm(cut))
 
 
 def _pop_paren_marker(line1):
@@ -164,8 +165,10 @@ def _pop_paren_marker(line1):
 def _marker_after_name(line1):
     """The first DBA marker on line 1 that follows some name ("FORMERLY
     INCARCERATED..." is a name, not a marker)."""
-    marker = MARKER_RE.search(line1)
-    return marker if marker and _clean_tail(line1[: marker.start()]) else None
+    for marker in MARKER_RE.finditer(line1):
+        if _clean_tail(line1[: marker.start()]):
+            return marker
+    return None
 
 
 def _clean_dba_field(value, line1):
@@ -214,9 +217,11 @@ def _apply_rules(line1, line2, field_dba, raw_dba):
     marker_in_line1 = _marker_after_name(line1)
     if marker_in_line1:
         fragment = line1[marker_in_line1.end():]
-        marker_in_line2 = MARKER_RE.search(line2)
         if _norm(fragment) == _norm(line2):
             dba = line2
+        elif MARKER_AT_START_RE.match(line2.lstrip("( ")) and _restated(fragment, _split_dbas(line2)):
+            # "...(DBA CAMP" / "D/B/A CAMP CONQUEST": line 2 restates the cut alias.
+            dba = _split_dbas(line2)
         else:
             dba = _split_dbas(_join(fragment, line2, width))
         return _clean_tail(line1[: marker_in_line1.start()]), with_paren_dba(dba)
@@ -274,6 +279,8 @@ def resolve_name_lines(name, name_secondary=None, dba_name=None):
         line1, paren_dba = _pop_paren_marker(line1)
         marker = _marker_after_name(line1)
         line1_dba = _split_dbas(line1[marker.start():]) if marker else ""
+        if _restated(line1_dba, field_dba):
+            line1_dba = ""
         organization = _clean_tail(line1[: marker.start()] if marker else line1)
         dba = _join_dbas(line1_dba, paren_dba, field_dba)
     dba = dba or acronym
