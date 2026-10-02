@@ -13,7 +13,12 @@ from sklearn.base import BaseEstimator, TransformerMixin
 
 from vdl_tools.shared_tools import s3_model
 from vdl_tools.shared_tools.tools.logger import logger
-from vdl_tools.shared_tools.cb_funding_calculations import raised_from_venture_rounds
+from vdl_tools.shared_tools.cb_funding_calculations import (
+    FOR_PROFIT_ROUND_TYPES,
+    _raw_stage,
+    _raw_types,
+    raised_from_venture_rounds,
+)
 
 # Suppress only SettingWithCopyWarning
 warnings.filterwarnings('ignore')
@@ -185,6 +190,7 @@ def predict(
     sectors_cb_cd_field='sectors_cb_cd',
     funding_stage_field='Funding Stage',
     funding_types_field='Funding Types',
+    venture_override_skips_series_unknown=False,
 ):
     model = load_model()
 
@@ -223,13 +229,24 @@ def predict(
     # By this point 'Funding Types' / 'Funding Stage' hold DISPLAY names;
     # raised_from_venture_rounds normalizes them via cb_funding_types.as_raw, so
     # this override works on either vocabulary (it used to silently never fire).
+    # With venture_override_skips_series_unknown, an org whose only for-profit-style
+    # round is series_unknown keeps the model's prediction: Crunchbase also files
+    # nonprofit grants under that type, and often retypes them to grant later.
+    def venture_override(x):
+        if venture_override_skips_series_unknown and (
+            _raw_types(x, funding_types_field) & FOR_PROFIT_ROUND_TYPES == {'series_unknown'}
+            and _raw_stage(x, funding_stage_field) != 'ipo'
+        ):
+            return False
+        return raised_from_venture_rounds(
+            x,
+            funding_types_field=funding_types_field,
+            funding_stage_field=funding_stage_field
+        )
+
     prediction_df[org_type_prediction_field] = prediction_df.apply(
         lambda x: INVERSE_LABEL_MAP['For Profit']
-          if raised_from_venture_rounds(
-              x,
-              funding_types_field=funding_types_field,
-              funding_stage_field=funding_stage_field
-            )
+          if venture_override(x)
           else x[org_type_prediction_field],
         axis=1
     )
