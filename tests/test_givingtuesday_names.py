@@ -28,6 +28,19 @@ def test_structured_granters_and_names_survive_assembly_and_parquet():
     assert empty.iloc[0]['granters'] == []
 
 
+def test_assembly_completes_the_name_and_cleans_the_dba():
+    basic = [BasicFieldsRow('012345678', 'HARLOW YOUTH CLUBS OF', 'EASTERN COUNTY INC', 2024, None, None, 'City', 'CA',
+                            '12345', 'example.org', 1000, 500, 400, dba_name='DBA BRIGHT PATH')]
+    hit = NonprofitHit('012345678', 'HARLOW YOUTH CLUBS OF', 'EASTERN COUNTY INC', 'City', 'CA', 1, 'Mission',
+                       dba_name='DBA BRIGHT PATH')
+    row = _assemble_cb_shape([hit], pd.DataFrame([asdict(r) for r in basic]), pd.DataFrame(),
+                             'total_cash_contributions').iloc[0]
+    assert row['Organization'] == 'HARLOW YOUTH CLUBS OF EASTERN COUNTY INC'
+    assert row['DBA'] == 'BRIGHT PATH'
+    assert [row[k] for k in ['businessname1', 'businessname2', 'dba_name']] == [
+        'HARLOW YOUTH CLUBS OF', 'EASTERN COUNTY INC', 'DBA BRIGHT PATH']
+
+
 def test_summary_callback_reuses_query_and_excludes_removed_recipients():
     from unittest.mock import Mock
     from vdl_tools.scrape_enrich.givingtuesday.query_prepare_givingtuesday import query_process_givingtuesday_data
