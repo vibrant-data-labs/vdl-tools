@@ -463,7 +463,11 @@ def assign_group_colors(pairs: pd.DataFrame, *,
     Deterministic for a given pair table.
     """
     nested = pairs[pairs.nested]
-    counts = pd.concat([nested.group_small, nested.group_large]).value_counts()
+    # every group in the pair table gets a color (the scatter shows all
+    # pairs, and a level with NO nested pairs would otherwise fold every
+    # group to grey); only nested rows constrain which colors may collide,
+    # since only there do two group colors sit side by side.
+    counts = pd.concat([pairs.group_small, pairs.group_large]).value_counts()
     shares_a_row: dict[str, set] = {g: set() for g in counts.index}
     for a, b in zip(nested.group_small, nested.group_large):
         if a != b:

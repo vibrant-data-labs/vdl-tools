@@ -141,7 +141,20 @@ VENTURE_ROUNDS = LATE_VENTURE_ROUNDS | EARLY_VENTURE_ROUNDS | {'seed', 'series_u
 # climate_landscape/venture_backed_flag.py). Grants are handled separately there:
 # grant-only + for-profit counts as venture-backed; a grant next to any other
 # round type does not, and grant + non-profit does not.
-VENTURE_BACKED_ROUNDS = VENTURE_ROUNDS | PRE_SEED_STAGES
+# Written out explicitly (not derived from DISCLOSED_STAGES_ORDERED) so that editing the
+# stage order never silently changes who is venture-backed; test_cb_funding_types pins it.
+# Deliberately EXCLUDED: secondary_market (in Crunchbase it is mostly PE / infrastructure
+# stake sales - e.g. Aligned, DataBank, Duke Energy Florida - not venture investment),
+# equity_crowdfunding, initial_coin_offering, private_equity, debt, and all post-IPO rounds.
+VENTURE_BACKED_ROUNDS = {
+    # pre-seed
+    'angel', 'pre_seed', 'convertible_note', 'product_crowdfunding',
+    # seed and lettered venture rounds
+    'seed', 'series_a', 'series_b', 'series_c', 'series_d', 'series_e',
+    'series_f', 'series_g', 'series_h', 'series_i', 'series_j',
+    # venture rounds without a disclosed letter, and corporate venture
+    'series_unknown', 'corporate_round',
+}
 POST_IPO = set(DISCLOSED_STAGES_ORDERED[DISCLOSED_STAGES_ORDERED.index('post_ipo_equity'):])
 UNDISCLOSED_STAGES = {'undisclosed', 'series_unknown'}
 
