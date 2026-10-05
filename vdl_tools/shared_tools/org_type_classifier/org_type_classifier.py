@@ -102,6 +102,12 @@ def train_model(
     extra = pd.DataFrame()
     if extra_training_data_path:
         extra = pd.read_json(extra_training_data_path)
+        unknown = extra.loc[~extra['Label'].isin(INVERSE_LABEL_MAP), 'Label']
+        if len(unknown):
+            raise ValueError(
+                f"{extra_training_data_path}: {len(unknown)} row(s) with a Label other than "
+                f"{list(INVERSE_LABEL_MAP)}: {sorted(unknown.astype(str).unique())}"
+            )
         extra['Label'] = extra['Label'].map(INVERSE_LABEL_MAP)
         df = df[~df['id'].isin(extra['id'])]
 
