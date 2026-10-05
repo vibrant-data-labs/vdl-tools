@@ -29,6 +29,15 @@ def test_marketplace_names_are_parked_even_without_sale_wording():
     assert classify_text_quality("Buy on Afternic or Dan.com today. " * 10) == "parked"
 
 
+def test_godaddy_expired_domain_page_is_parked():
+    page = (
+        "exampleschool.org is parked free, courtesy of GoDaddy.com. Get This Domain "
+        "Related Search Topics Example School Real Estate Cheap Airfare Vacation Packages "
+        "Copyright 1999-2026 GoDaddy, LLC. All rights reserved. Privacy Policy"
+    ) * 2
+    assert classify_text_quality(page) == "parked"
+
+
 def test_garbled_is_a_verdict():
     assert looks_like_garbled_text(GARBLED)
     assert classify_text_quality(GARBLED) == "garbled"
@@ -43,6 +52,22 @@ def test_bot_wall_is_a_verdict():
     # a real page that merely mentions the vendor runs long; a wall does not
     assert not looks_like_bot_wall(LONG_MENTIONS_WALL_VENDOR)
     assert classify_text_quality(LONG_MENTIONS_WALL_VENDOR) == "ok"
+
+
+def test_host_security_check_and_rate_limit_pages_are_walls():
+    security_check = (
+        "Checking the site connection security This page requires cookies to be "
+        "enabled in your browser settings. Please check this setting and enable "
+        "cookies (if disabled) exampleschool.org Checking the site connection security"
+    )
+    rate_limited = (
+        "You have been rate-limited for making too many requests in a short time "
+        "frame. Website owner? If you are the owner of this website, please contact "
+        "your hosting provider."
+    )
+    for page in (security_check, rate_limited):
+        assert looks_like_bot_wall(page)
+        assert classify_text_quality(page) == "blocked"
 
 
 def test_verdict_precedence_garbled_beats_parked_beats_blocked():
