@@ -36,6 +36,8 @@ def test_godaddy_expired_domain_page_is_parked():
         "Copyright 1999-2026 GoDaddy, LLC. All rights reserved. Privacy Policy"
     ) * 2
     assert classify_text_quality(page) == "parked"
+    # a real site whose footer credits its host is not parked
+    assert classify_text_quality(LONG + "Website hosting courtesy of GoDaddy.") == "ok"
 
 
 def test_garbled_is_a_verdict():
@@ -68,6 +70,19 @@ def test_host_security_check_and_rate_limit_pages_are_walls():
     for page in (security_check, rate_limited):
         assert looks_like_bot_wall(page)
         assert classify_text_quality(page) == "blocked"
+
+
+def test_short_real_page_with_cookie_notice_is_not_a_wall():
+    # Under WALL_MAX_CHARS, so only the wording keeps this from being a wall.
+    page = (
+        "Example Watershed Alliance restores creeks and wetlands across the valley "
+        "with volunteer crews, school field trips and native plant nurseries. Join a "
+        "Saturday planting or donate to our stream-monitoring program. This page "
+        "requires cookies to remember your volunteer sign-up preferences."
+    )
+    assert len(page) < 1000
+    assert not looks_like_bot_wall(page)
+    assert classify_text_quality(page) == "ok"
 
 
 def test_verdict_precedence_garbled_beats_parked_beats_blocked():
