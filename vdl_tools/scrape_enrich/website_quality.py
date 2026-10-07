@@ -33,7 +33,8 @@ from urllib.parse import urlparse
 
 import httpx
 import pandas as pd
-from vdl_tools.portfolio_comparison.intake.normalize import PLATFORM_DOMAINS, resolve_redirect
+from vdl_tools.portfolio_comparison.intake.normalize import identity_domain, resolve_redirect
+from vdl_tools.scrape_enrich.scraper.async_scraper import BROWSER_HEADERS
 from vdl_tools.shared_tools.tools.logger import logger
 
 # httpx logs every request at INFO — 50k lines on a full run.
@@ -57,7 +58,12 @@ _EMAIL_RE = re.compile(r"^[^\s/@]+@([^\s/@]+\.[a-z]{2,})$", re.I)
 
 # --- normalization ------------------------------------------------------------
 def normalize_website(url):
-    """Bare host used to identify a website, or '' when it identifies nothing."""
+    """Bare host used to identify a website, or '' when it identifies nothing.
+
+    ``identity_domain`` does the core (lowercase, no scheme/port/``www.``, no
+    platform or dot-less hosts); this first repairs what the raw website fields
+    carry and it does not expect.
+    """
     if not isinstance(url, str):
         return ""
     # Hosts never contain whitespace; GT has "www. tworiversymca. org".
@@ -67,12 +73,9 @@ def normalize_website(url):
         return ""
     host = urlparse(url if "://" in url else f"http://{url}").netloc
     host = host.rsplit("@", 1)[-1]  # "info@bookwormgardens.org" -> the domain
-    host = _WWW_RE.sub("", host).split(":")[0].rstrip("/")
-    # A platform domain identifies a platform and a key without a dot ("na",
-    # "none" — both in the GT data) identifies nothing.
-    if "." not in host or host in PLATFORM_DOMAINS or host in FREE_MAIL:
-        return ""
-    return host
+    host = _WWW_RE.sub("", host)  # "wwww.", "www2." (identity_domain strips only "www.")
+    domain = identity_domain(host)
+    return "" if domain in FREE_MAIL else domain
 
 
 def email_domain(url):
@@ -85,30 +88,9 @@ def email_domain(url):
 
 # --- liveness and redirects ---------------------------------------------------
 # The question worth asking is "will the scraper get this page", so the probe
-# sends what the scraper sends. Copied from the client in
-# vdl_tools/scrape_enrich/scraper/async_scraper.py __aenter__, which builds it
-# inline rather than exporting it; replace this with an import if that changes.
-# Servers do discriminate: abetterchance.org returns 410 to a bare client and
-# 403 to a browser, and 410 is the one we count as dead.
-SCRAPER_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Accept": (
-        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,"
-        "image/webp,image/apng,*/*;q=0.8"
-    ),
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-    "Cache-Control": "max-age=0",
-}
+# sends what the scraper sends. Servers do discriminate: abetterchance.org
+# returns 410 to a bare client and 403 to a browser, and 410 is the one we
+# count as dead.
 # Fast connect to fail quickly on dead links, slow read for live but slow
 # servers — the scraper's split, instead of one flat timeout.
 SCRAPER_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=5.0)
@@ -122,7 +104,7 @@ def _answers(url, timeout=SCRAPER_TIMEOUT):
     try:
         with httpx.stream(
             "GET", url, follow_redirects=True, timeout=timeout,
-            verify=VERIFY_SSL, headers=SCRAPER_HEADERS,
+            verify=VERIFY_SSL, headers=BROWSER_HEADERS,
         ) as resp:
             return resp.status_code not in (404, 410)
     except httpx.TimeoutException:
@@ -279,6 +261,7 @@ def website_evidence(df, domain_cache, scraped=None, id_col="id"):
     verdict, since the summary describes the page rather than being it.
     """
     scraped = scraped or {}
+    summary = df["Website Summary"].fillna("")
     site = df["Website"] if "Website" in df.columns else df["Website_cb_cd"]
     keys = df.get("extracted_website_key", pd.Series("", index=df.index)).fillna("")
     domain = site.map(normalize_website)
@@ -301,14 +284,12 @@ def website_evidence(df, domain_cache, scraped=None, id_col="id"):
         "text_quality": text.map(
             lambda t: _text_quality(*t) if t else ""
         ),
-        "has_summary": df.get("Website Summary", "").fillna("").str.strip().ne(""),
-        "parked_summary": df.get(
-            "Website Summary", pd.Series("", index=df.index)
-        ).fillna("").map(_is_parked_summary),
+        "has_summary": summary.str.strip().ne(""),
+        "parked_summary": summary.map(_is_parked_summary),
         "gambling": [
-            _is_gambling(summary, f"{name} {desc} {desc990}")
-            for summary, name, desc, desc990 in zip(
-                df.get("Website Summary", pd.Series("", index=df.index)).fillna(""),
+            _is_gambling(page_summary, f"{name} {desc} {desc990}")
+            for page_summary, name, desc, desc990 in zip(
+                summary,
                 df.get("profile_name", pd.Series("", index=df.index)).fillna(""),
                 df.get("Description", pd.Series("", index=df.index)).fillna(""),
                 df.get("Description_990", pd.Series("", index=df.index)).fillna(""),
@@ -412,6 +393,18 @@ def _is_gambling(summary, records):
         return False
     own = (records or "").lower()
     return not any(word in own for word in OWN_GAMING_WORDS)
+
+
+def is_junk_summary(summary, records):
+    """Junk that only the summary shows: a squatted gambling site, or a for-sale
+    page whose copy names no marketplace.
+
+    The page text of both reads as ordinary prose, so the scrape-time text
+    check passes them and they get summarized. Used before the relevance model
+    too, which would otherwise judge an org with a short description on the
+    squatter's page. ``records`` is the org's own name and descriptions.
+    """
+    return _is_parked_summary(summary) or _is_gambling(summary, records)
 
 
 # --- the gate -----------------------------------------------------------------
@@ -562,29 +555,42 @@ DECISION_COLS = ["id", "action", "note"]
 DECISIONS = {"remove_website", "remove_url", "fix_website", "keep"}
 
 
+def _org_key(org_id):
+    """An id with any GivingTuesday prefix removed: GT ids are ``givingtuesday_<ein>``
+    and Candid ids the bare EIN, so the two forms name the same organization."""
+    return str(org_id).strip().removeprefix(GT_UID_PREFIX)
+
+
 def load_website_decisions(paths, present=None):
     """``{id: action}`` from ``paths["website_quality_decisions"]``.
 
     ``keep`` vetoes whatever the rules concluded, which is the only way to
-    overrule them: every other rule here fires automatically. Ids are matched as
-    typed and, for a bare EIN, under the ``givingtuesday_`` prefix as well, since
-    both forms get written by hand.
+    overrule them: every other rule here fires automatically. An EIN may be
+    written bare or as ``givingtuesday_<ein>``; either form applies to every
+    present org with that EIN, whichever form its id takes.
     """
     path = pathlib.Path(str(paths.get("website_quality_decisions", "")))
     if not path.is_file():
         return {}
     df = pd.read_csv(path, dtype=str).fillna("")
+    by_key = {}
+    for org_id in present or ():
+        by_key.setdefault(_org_key(org_id), []).append(org_id)
     decisions, ignored = {}, []
     for raw, action in zip(df.get("id", []), df.get("action", [])):
         raw, action = str(raw).strip(), str(action).strip().lower()
         if not raw or action not in DECISIONS:
             ignored.append((raw, action))
             continue
-        key = raw if present is None or raw in present else f"{GT_UID_PREFIX}{raw}"
-        if present is not None and key not in present:
+        if present is None:
+            decisions[raw] = action
+            continue
+        matches = by_key.get(_org_key(raw))
+        if not matches:
             ignored.append((raw, "no such organization"))
             continue
-        decisions[key] = action
+        for org_id in matches:
+            decisions[org_id] = action
     if ignored:
         logger.warning(
             "Website quality: ignoring %d curated row(s) in %s: %s",

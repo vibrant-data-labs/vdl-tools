@@ -176,7 +176,9 @@ def get_scraped_df(
                 linkedin_urls,
                 session=session,
                 api_key=GLOBAL_CONFIG['linkedin']['coresignal_api_key'],
-                max_errors=max_errors,
+                # max_errors is the website-scrape retry budget; a failed Coresignal
+                # lookup is a paid call, so it is not retried, as in run_pipeline.
+                max_errors=1,
             )
 
         original_li_id_to_website_url = {
@@ -277,6 +279,19 @@ def prepare_for_relevance_model(
 
     if df_missing_descriptions.shape[0] > 0:
         df['Website Summary'] = df_missing_descriptions['Website Summary']
+        # A squatted gambling site or a for-sale page reads as ordinary prose, so
+        # it gets summarized; judged on it, a real org would be dropped as irrelevant.
+        junk = pd.Series([
+            website_quality.is_junk_summary(summary, f"{name} {description}")
+            for summary, name, description in zip(
+                df['Website Summary'].fillna(''),
+                df['Organization'].fillna(''),
+                df[description_col].fillna(''),
+            )
+        ], index=df.index)
+        if junk.any():
+            logger.info("Ignoring %s junk website summaries for the relevance model", int(junk.sum()))
+            df.loc[junk, 'Website Summary'] = None
         # For orgs with a short/missing description, prefer the website summary when available
         has_website_summary = df['Website Summary'].notnull()
         df.loc[has_website_summary, 'text_for_relevance_model'] = df.loc[has_website_summary, 'Website Summary']
@@ -467,8 +482,9 @@ def run_pipeline(
     set, the ``venture_backed`` flag is attached from it right after the org-type
     prediction, using ``venture_backed_org_type_col`` for the grant-only rule.
 
-    ``website_max_errors`` is how many failed scrapes a website gets before it is
-    never retried; at the default of 1, one transient failure is permanent.
+    ``website_max_errors`` is how many failed scrapes (and failed summaries) a
+    website gets before it is never retried; at the default of 1, one transient
+    failure is permanent. LinkedIn lookups are not retried either way.
 
     When ``website_quality_paths`` is set (a dict with ``website_domain_cache``,
     ``website_quality_review`` and ``website_quality_decisions``), junk website
@@ -572,10 +588,14 @@ def run_pipeline(
     # `Website Summary` is a text field, so junk left here is written into
     # `Summary` and every model input below. Runs after LinkedIn, which sets
     # `profile_name` (read by the gambling check).
+    blanked_websites = set()
     if website_quality_paths:
         log_major_step("Checking website quality")
-        df_relevant, _ = website_quality.gate_websites(
+        df_relevant, website_decisions = website_quality.gate_websites(
             df_relevant, website_quality_paths, id_col=id_col,
+        )
+        blanked_websites = set(
+            website_decisions.loc[website_decisions['action'] == 'remove_website', id_col]
         )
 
     log_major_step("Cleaning Text Fields")
@@ -613,6 +633,11 @@ def run_pipeline(
         axis=1,
     )
     log_major_step(f"Removing any organizations without Description, Website Summary, or LinkedIn About: {df_relevant['missing_all_texts'].sum()}")
+    if blanked_websites:
+        logger.info(
+            "Of these, %s had only a junk website summary, blanked by the website quality gate",
+            int((df_relevant['missing_all_texts'] & df_relevant[id_col].isin(blanked_websites)).sum()),
+        )
     df_relevant = df_relevant[~df_relevant['missing_all_texts']].copy()
 
     # ADD SUMMARY OF SUMMARIES
