@@ -176,9 +176,7 @@ def get_scraped_df(
                 linkedin_urls,
                 session=session,
                 api_key=GLOBAL_CONFIG['linkedin']['coresignal_api_key'],
-                # max_errors is the website-scrape retry budget; a failed Coresignal
-                # lookup is a paid call, so it is not retried, as in run_pipeline.
-                max_errors=1,
+                max_errors=max_errors,
             )
 
         original_li_id_to_website_url = {
