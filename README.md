@@ -17,6 +17,7 @@ This repository contains a set of tools which are used at Vibrant Data Labs.
 
 - [SQL prompt/response cache usage guide](docs/OPENAI_PROMPT_RESPONSE_CACHE.md)
 - [Tutorial: OpenAI versus Vercel AI Gateway](docs/VERCEL_AI_GATEWAY_TUTORIAL.md) — setup, provider routing, hyperparameters, and cache behavior.
+- [Jev decisions with the SQL cache and Vercel AI Gateway](docs/JEV_VERCEL_CACHE.md)
 
 ## Installation
 
