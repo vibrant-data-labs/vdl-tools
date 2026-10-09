@@ -25,6 +25,11 @@ PARKED_MARKERS = [
     "domains for sale", "domain marketplace", "squadhelp", "premium domain",
     "brandable domain", "make an offer on this domain", "afternic", "dan.com",
     "expireddomains",
+    # GoDaddy's (and its 123 Reg's) page for an expired domain: "<domain> is
+    # parked free, courtesy of GoDaddy.com. Get This Domain". The parking
+    # wording, not the registrar name: this check has no length gate, and a
+    # real site's footer can say "courtesy of GoDaddy".
+    "is parked free, courtesy of",
 ]
 THIN_TEXT_CHARS = 200
 
@@ -46,6 +51,12 @@ BOT_WALL_MARKERS = [
     "checking your browser", "verify you are human", "enable javascript and cookies",
     "captcha", "ddos protection", "cloudflare", "are you a robot",
     "request unsuccessful",
+    # A host-level security check ("Checking the site connection security /
+    # This page requires cookies to be enabled"), stored as the page for ~800
+    # nonprofit sites in one ed_tracker run, and a rate-limit page. Its cookie
+    # sentence is left out: ordinary cookie notices use it too, and every
+    # stored check page carries the heading anyway.
+    "checking the site connection security", "you have been rate-limited",
 ]
 # Wall bodies are short; a real page *discussing* Cloudflare or CAPTCHAs is
 # not. Measured over the marker-containing pages of a 24k-domain corpus: under

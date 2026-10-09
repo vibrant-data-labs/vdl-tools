@@ -7,6 +7,7 @@ import socket; socket.setdefaulttimeout(30)
 # from common: commonly used functions
 from vdl_tools.linkedin import org_loader as li
 from vdl_tools.linkedin.utils.linkedin_url import extract_linkedin_id
+from vdl_tools.scrape_enrich import website_quality
 from vdl_tools.scrape_enrich.combine_crunchbase_candid_linkedin import combine_cb_cd_li
 from vdl_tools.scrape_enrich.scraper.scrape_websites import extract_website_name, scrape_websites_psql
 from vdl_tools.shared_tools import climatebert_adaptation as adp
@@ -276,6 +277,19 @@ def prepare_for_relevance_model(
 
     if df_missing_descriptions.shape[0] > 0:
         df['Website Summary'] = df_missing_descriptions['Website Summary']
+        # A squatted gambling site or a for-sale page reads as ordinary prose, so
+        # it gets summarized; judged on it, a real org would be dropped as irrelevant.
+        junk = pd.Series([
+            website_quality.is_junk_summary(summary, f"{name} {description}")
+            for summary, name, description in zip(
+                df['Website Summary'].fillna(''),
+                df['Organization'].fillna(''),
+                df[description_col].fillna(''),
+            )
+        ], index=df.index)
+        if junk.any():
+            logger.info("Ignoring %s junk website summaries for the relevance model", int(junk.sum()))
+            df.loc[junk, 'Website Summary'] = None
         # For orgs with a short/missing description, prefer the website summary when available
         has_website_summary = df['Website Summary'].notnull()
         df.loc[has_website_summary, 'text_for_relevance_model'] = df.loc[has_website_summary, 'Website Summary']
@@ -457,12 +471,23 @@ def run_pipeline(
     n_per_commit=N_PER_COMMIT,
     funding_rounds_uri=None,
     venture_backed_org_type_col='OrgType Prediction',
+    website_max_errors=1,
+    website_quality_paths=None,
 ):
     """Pure enrichment: scrape, summarize, classify, geocode, and write the meta artifact.
 
     When ``funding_rounds_uri`` (the UNFILTERED raw Crunchbase rounds parquet) is
     set, the ``venture_backed`` flag is attached from it right after the org-type
     prediction, using ``venture_backed_org_type_col`` for the grant-only rule.
+
+    ``website_max_errors`` is how many failed scrapes (and failed summaries) a
+    website gets before it is never retried; at the default of 1, one transient
+    failure is permanent. LinkedIn lookups are not retried either way.
+
+    When ``website_quality_paths`` is set (a dict with ``website_domain_cache``,
+    ``website_quality_review`` and ``website_quality_decisions``), junk website
+    content is blanked by ``website_quality.gate_websites`` before it reaches the
+    summary of summaries.
     """
     log_major_step("loading pre-processed combined crunchbase + candid data")
     if enrich_input_uri:
@@ -517,6 +542,7 @@ def run_pipeline(
         skip_existing=True,
         max_workers=max_workers,
         n_per_commit=n_per_commit,
+        max_errors=website_max_errors,
     )
 
     df_relevant['extracted_website_key'] = df_relevant['Website'].apply(
@@ -556,6 +582,20 @@ def run_pipeline(
         axis=1,
     )
 
+    # A parked or squatted site summarizes as cleanly as a real one, and
+    # `Website Summary` is a text field, so junk left here is written into
+    # `Summary` and every model input below. Runs after LinkedIn, which sets
+    # `profile_name` (read by the gambling check).
+    blanked_websites = set()
+    if website_quality_paths:
+        log_major_step("Checking website quality")
+        df_relevant, website_decisions = website_quality.gate_websites(
+            df_relevant, website_quality_paths, id_col=id_col,
+        )
+        blanked_websites = set(
+            website_decisions.loc[website_decisions['action'] == 'remove_website', id_col]
+        )
+
     log_major_step("Cleaning Text Fields")
     # Clean Text of Line Breaks, Tabs, Double Spaces
     for col in text_fields:
@@ -591,6 +631,11 @@ def run_pipeline(
         axis=1,
     )
     log_major_step(f"Removing any organizations without Description, Website Summary, or LinkedIn About: {df_relevant['missing_all_texts'].sum()}")
+    if blanked_websites:
+        logger.info(
+            "Of these, %s had only a junk website summary, blanked by the website quality gate",
+            int((df_relevant['missing_all_texts'] & df_relevant[id_col].isin(blanked_websites)).sum()),
+        )
     df_relevant = df_relevant[~df_relevant['missing_all_texts']].copy()
 
     # ADD SUMMARY OF SUMMARIES
