@@ -235,7 +235,7 @@ The capital of Cambodia is Phnom Penh.
 | `use_cached_result` | `bool`                   | Use cache when available. Default `True`.       |
 | `n_per_commit`      | `int`                    | Chunk size for DB commits. Default `50`.        |
 | `max_workers`       | `int`                    | Parallel workers for API calls. Default `3`.   |
-| `max_errors`        | `int`                    | Max errors per (given_id, text) before skip. Default `1`. |
+| `max_errors`        | `int`                    | Max errors per (given_id, text) before skip. Default `3`; pass `1` to stop after the first error. |
 | `**kwargs`          |                          | Passed to the OpenAI API for each call.         |
 
 **Output**

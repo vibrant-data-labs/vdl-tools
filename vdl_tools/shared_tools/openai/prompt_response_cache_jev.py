@@ -83,11 +83,6 @@ class JevPromptResponseCacheSQL(PromptResponseCacheSQL):
             api_backend="vercel",
         )
 
-    def get_prompt_response_obj(self, given_id, text, request_kwargs=None):
-        """Treat a previously stored API error as a miss, so it can be retried."""
-        row = super().get_prompt_response_obj(given_id, text, request_kwargs)
-        return None if row is not None and row.num_errors else row
-
     def get_completion(
         self, prompt_str: str, text: str, return_all: bool = False, **kwargs
     ):

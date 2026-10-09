@@ -497,7 +497,8 @@ class PromptResponseCacheSQL():
                 ).desc().nullslast(),
             )
         )
-        return prompt_response_obj.first()
+        row = prompt_response_obj.first()
+        return None if row is not None and row.num_errors else row
 
     def get_prompt_response_obj_bulk(
         self,
@@ -1065,7 +1066,7 @@ class PromptResponseCacheSQL():
         write_to_cache: bool = True,
         n_per_commit: int = 200,
         max_workers=20,
-        max_errors=1,
+        max_errors=3,
         use_cached_result=_UNSET,
         **kwargs
     ) -> dict[str, dict]:
@@ -1101,7 +1102,8 @@ class PromptResponseCacheSQL():
             generous quotas; down (e.g. 5-10) for tier-1 mainline models.
         max_errors : int, optional
             Maximum number of errors to allow for a (given_id, text) before
-            excluding from retries. Default is 1.
+            excluding from retries. Default is 3, so a failed item can be
+            retried on later bulk runs. Pass 1 to stop after the first error.
         use_cached_result : bool, optional
             **Deprecated.** Use ``read_from_cache`` and ``write_to_cache``
             instead. When supplied, overrides ``read_from_cache``.
@@ -1275,7 +1277,7 @@ class PromptResponseCacheSQL():
         write_to_cache: bool = True,
         n_per_commit: int = 200,
         max_workers=20,
-        max_errors=1,
+        max_errors=3,
         use_cached_result=_UNSET,
         **kwargs
     ):
@@ -1302,7 +1304,7 @@ class PromptResponseCacheSQL():
             Number of parallel API workers. Default is 20. Tune up for
             nano/mini models with generous quotas; down for tier-1 mainline.
         max_errors : int, optional
-            Max errors per (given_id, text) before skipping. Default is 1.
+            Max errors per (given_id, text) before skipping. Default is 3.
         use_cached_result : bool, optional
             **Deprecated.** Use ``read_from_cache`` and ``write_to_cache``
             instead. When supplied, overrides ``read_from_cache``.

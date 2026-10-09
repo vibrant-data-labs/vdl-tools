@@ -347,5 +347,6 @@ library and the repository's existing gateway credential loader.
 The adapter retries connection failures, timeouts, and HTTP 429/500/502/503/504
 responses twice by default, with one- and two-second waits. Set
 `max_retries=0` on `JevPromptResponseCacheSQL` to disable these retries. If all
-attempts fail, the existing cache records one error for that call; use the bulk
-method's `max_errors` option to allow later runs to retry that record.
+attempts fail, the shared SQL cache records one error for that call. Bulk calls
+retry that record on later runs until it has three recorded failures by
+default; adjust the bulk method's `max_errors` option when needed.
