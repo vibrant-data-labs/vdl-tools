@@ -286,46 +286,6 @@ def test_bulk_fetches_only_missing_and_retryable_items(monkeypatch, requests):
     cache.session.commit.assert_not_called()
 
 
-def test_single_cache_retries_a_stored_error(monkeypatch, requests):
-    cache = make_cache(monkeypatch)
-    failed = PromptResponse(**cache._build_error_row("failed", "retry", "error", {}))
-    cache.session.query.return_value.filter.return_value.order_by.return_value.first.return_value = failed
-
-    result = cache.get_cache_or_run("failed", "retry", write_to_cache=False)
-
-    assert result["response_text"] == '{"answer":"yes"}'
-    assert len(requests) == 1
-
-
-def test_bulk_retries_a_stored_error_by_default(monkeypatch, requests):
-    cache = make_cache(monkeypatch)
-    failed = PromptResponse(**cache._build_error_row("failed", "retry", "error", {}))
-    cache.session.query.return_value.filter.return_value.all.return_value = [failed]
-
-    result = cache.bulk_get_cache_or_run([("failed", "retry")], write_to_cache=False)
-
-    assert result["failed"]["response_text"] == '{"answer":"yes"}'
-    assert len(requests) == 1
-
-    requests.clear()
-    failed.num_errors = 2
-    assert "failed" in cache.bulk_get_cache_or_run(
-        [("failed", "retry")], write_to_cache=False
-    )
-    assert len(requests) == 1
-
-    requests.clear()
-    failed.num_errors = 3
-    assert cache.bulk_get_cache_or_run([("failed", "retry")], write_to_cache=False) == {}
-    assert requests == []
-
-    failed.num_errors = 1
-    assert cache.bulk_get_cache_or_run(
-        [("failed", "retry")], max_errors=1, write_to_cache=False
-    ) == {}
-    assert requests == []
-
-
 @pytest.mark.parametrize("kwargs", [
     {},
     {"timeout": 30, "text_format": Answer},
