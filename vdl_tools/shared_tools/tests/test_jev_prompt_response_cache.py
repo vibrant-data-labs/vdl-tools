@@ -118,9 +118,54 @@ def test_single_error_is_recorded_then_retried(cache, monkeypatch, gateway):
     assert cache.get_prompt_response_obj("filing-1", "state") is None
 
 
+def test_bulk_retries_transient_gateway_error_before_recording_failure(cache, monkeypatch):
+    calls = []
+    delays = []
+
+    def post(url, **kwargs):
+        calls.append(kwargs["json"]["state"])
+        response = MagicMock(status_code=503 if len(calls) == 1 else 200)
+        response.json.return_value = ANSWER
+        return response
+
+    monkeypatch.setattr(jev, "get_vercel_client", lambda: MagicMock(api_key="test-key"))
+    monkeypatch.setattr(jev.requests, "post", post)
+    monkeypatch.setattr(jev.time, "sleep", delays.append)
+
+    result = cache.bulk_get_cache_or_run(
+        [("filing-1", "Company operates a bank.")],
+        read_from_cache=False,
+        max_workers=1,
+    )
+
+    assert calls == ["Company operates a bank."] * 2
+    assert delays == [1]
+    assert json.loads(result["filing-1"]["response_text"]) == ANSWER["answers"]
+    cache.session.execute.assert_called_once()
+
+
+def test_retry_exhaustion_raises_last_gateway_error(cache, monkeypatch):
+    calls = []
+    delays = []
+    response = MagicMock(status_code=429)
+    response.raise_for_status.side_effect = requests.HTTPError("429 Too Many Requests")
+    monkeypatch.setattr(jev, "get_vercel_client", lambda: MagicMock(api_key="test-key"))
+    monkeypatch.setattr(jev.requests, "post", lambda *a, **k: calls.append(k) or response)
+    monkeypatch.setattr(jev.time, "sleep", delays.append)
+
+    with pytest.raises(requests.HTTPError, match="429 Too Many Requests"):
+        cache.get_completion("", "state")
+
+    assert len(calls) == 3
+    assert delays == [1, 2]
+
+
 def test_bulk_keeps_successes_and_records_http_errors(cache, gateway, monkeypatch):
+    bad_calls = []
+
     def post(url, **kwargs):
         if kwargs["json"]["state"] == "bad":
+            bad_calls.append(kwargs)
             response = MagicMock()
             response.raise_for_status.side_effect = requests.HTTPError("400 Bad Request")
             return response
@@ -144,6 +189,7 @@ def test_bulk_keeps_successes_and_records_http_errors(cache, gateway, monkeypatc
     assert json.loads(result["good"]["response_text"]) == ANSWER["answers"]
     assert len(statements) == 2
     assert {stmt.params["given_id_m0"] for stmt in statements} == {"good", "bad"}
+    assert len(bad_calls) == 1
     cache.session.commit.assert_called_once()
 
 
@@ -152,5 +198,7 @@ def test_rejects_invalid_configuration_and_unhandled_generation_options(cache):
         jev.JevPromptResponseCacheSQL(session=MagicMock(), questions={})
     with pytest.raises(ValueError, match="timeout must be positive"):
         jev.JevPromptResponseCacheSQL(session=MagicMock(), questions=QUESTIONS, timeout=0)
+    with pytest.raises(ValueError, match="max_retries must be nonnegative"):
+        jev.JevPromptResponseCacheSQL(session=MagicMock(), questions=QUESTIONS, max_retries=-1)
     with pytest.raises(TypeError, match="Responses API options"):
         cache.get_completion("", "state", max_output_tokens=100)

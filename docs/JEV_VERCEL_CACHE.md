@@ -343,3 +343,9 @@ question type; its answer contains the probability in `noul`. See
 The repository pins `openai<2`, so its OpenAI SDK does not provide the newer
 `decisions.create()` method. This adapter uses the already installed `requests`
 library and the repository's existing gateway credential loader.
+
+The adapter retries connection failures, timeouts, and HTTP 429/500/502/503/504
+responses twice by default, with one- and two-second waits. Set
+`max_retries=0` on `JevPromptResponseCacheSQL` to disable these retries. If all
+attempts fail, the existing cache records one error for that call; use the bulk
+method's `max_errors` option to allow later runs to retry that record.

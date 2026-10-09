@@ -7,6 +7,7 @@ sending Jev's native request shape to the gateway.
 """
 
 import json
+import time
 from typing import Any, Mapping
 
 import requests
@@ -17,6 +18,7 @@ from vdl_tools.shared_tools.openai.prompt_response_cache_sql import PromptRespon
 
 JEV_GATEWAY_URL = "https://ai-gateway.vercel.sh/typesafe/v1/systemone"
 JEV_GATEWAY_MODEL = "typesafe-ai/jev"
+_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 class _JevResponse:
@@ -56,16 +58,20 @@ class JevPromptResponseCacheSQL(PromptResponseCacheSQL):
         prompt_description: str = "",
         store_results: bool = True,
         timeout: float = 120.0,
+        max_retries: int = 2,
     ):
         if not questions:
             raise ValueError("Jev requires at least one question")
         if timeout <= 0:
             raise ValueError("timeout must be positive")
+        if max_retries < 0:
+            raise ValueError("max_retries must be nonnegative")
         # Canonical JSON makes question/criteria changes part of the prompt
         # identity without introducing a second cache-key mechanism.
         prompt_str = json.dumps(questions, sort_keys=True, separators=(",", ":"))
         self.questions = json.loads(prompt_str)
         self.timeout = timeout
+        self.max_retries = max_retries
         super().__init__(
             session=session,
             prompt_str=prompt_str,
@@ -88,12 +94,22 @@ class JevPromptResponseCacheSQL(PromptResponseCacheSQL):
         """Evaluate state with Jev; the cache supplies ``prompt_str`` for identity."""
         if kwargs:
             raise TypeError(f"Jev does not accept Responses API options: {sorted(kwargs)}")
-        response = requests.post(
-            JEV_GATEWAY_URL,
-            headers={"Authorization": f"Bearer {get_vercel_client().api_key}"},
-            json={"model": self.model, "state": text, "questions": self.questions},
-            timeout=self.timeout,
-        )
-        response.raise_for_status()
+        headers = {"Authorization": f"Bearer {get_vercel_client().api_key}"}
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = requests.post(
+                    JEV_GATEWAY_URL,
+                    headers=headers,
+                    json={"model": self.model, "state": text, "questions": self.questions},
+                    timeout=self.timeout,
+                )
+            except (requests.ConnectionError, requests.Timeout):
+                if attempt == self.max_retries:
+                    raise
+            else:
+                if response.status_code not in _RETRYABLE_STATUS_CODES or attempt == self.max_retries:
+                    response.raise_for_status()
+                    break
+            time.sleep(2**attempt)
         result = _JevResponse(response.json())
         return result if return_all else result.payload["answers"]
