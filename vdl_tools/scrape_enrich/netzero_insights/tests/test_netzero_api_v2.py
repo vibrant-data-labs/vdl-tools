@@ -429,6 +429,21 @@ def test_normalize_investor_aliases_id():
     assert out["investorType"] == "Venture Capital"
 
 
+def test_normalize_investor_aliases_location():
+    # process_nzi.investor keeps `country`; v2 nests it under searchableLocation.
+    out = api_v2.normalize_investor({
+        "id": 1,
+        "searchableLocation": {
+            "cityName": "Nairobi",
+            "country": {"name": "Kenya", "id": 112},
+            "continent": {"name": "Africa", "id": 1},
+        },
+    })
+    assert out["city"] == "Nairobi"
+    assert out["country"] == "Kenya"
+    assert out["continent"] == "Africa"
+
+
 # --------------------------------------------------------------------------
 # Endpoints with no v2 equivalent
 # --------------------------------------------------------------------------

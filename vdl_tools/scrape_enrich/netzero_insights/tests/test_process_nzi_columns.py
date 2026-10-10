@@ -32,6 +32,17 @@ def test_present_columns_are_renamed_and_suffixed_extras_kept():
     assert out.loc[0, "last_round_type_nzi"] == "Seed"
 
 
+def test_investor_country_is_kept():
+    # country was once commented out of ORIGINAL_INVESTOR_DETAILS_COLUMNS, silently dropping it for every investor.
+    df = pd.DataFrame({"investorID": [7, 8], "name": ["A", "B"], "city": ["Nairobi", None],
+                       "country": ["Kenya", "Germany"], "continent": ["Africa", "Europe"]})
+
+    out = investor.filter_format_columns(df, keep_suffix="_nzi")
+
+    assert list(out["country_nzi"]) == ["Kenya", "Germany"]
+    assert "city_nzi" in out.columns and "continent_nzi" in out.columns
+
+
 def test_missing_columns_become_na_and_are_logged(caplog):
     # v2 records lack e.g. eutopiaScore; the old `df[cols]` raised KeyError here.
     df = pd.DataFrame({"clientID": [1, 2]})
