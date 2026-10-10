@@ -33,15 +33,16 @@ def test_legacy_split_keeps_debt_before_series_b_in_early_bucket():
         },
     ])
 
-    early, middle, late, exit_rows = divide_funding_rows(
+    buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
     )
 
-    assert early["round_type_nzi"].tolist() == ["Series A", "Debt"]
-    assert middle["round_type_nzi"].tolist() == ["Series B"]
-    assert late is None
-    assert exit_rows is None
+    assert buckets["up_to_a"] is None
+    assert buckets["a_to_b"]["round_type_nzi"].tolist() == ["Series A", "Debt"]
+    assert buckets["b_to_late"]["round_type_nzi"].tolist() == ["Series B"]
+    assert buckets["late_to_exit"] is None
+    assert buckets["exit"] is None
 
 
 def test_new_split_moves_debt_after_last_early_round_into_later_bucket():
@@ -63,15 +64,16 @@ def test_new_split_moves_debt_after_last_early_round_into_later_bucket():
         },
     ])
 
-    early, middle, late, exit_rows = divide_funding_rows(
+    buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_AFTER_LAST_EARLY_ROUND,
     )
 
-    assert early["round_type_nzi"].tolist() == ["Series A"]
-    assert middle["round_type_nzi"].tolist() == ["Debt", "Series B"]
-    assert late is None
-    assert exit_rows is None
+    assert buckets["up_to_a"] is None
+    assert buckets["a_to_b"]["round_type_nzi"].tolist() == ["Series A"]
+    assert buckets["b_to_late"]["round_type_nzi"].tolist() == ["Debt", "Series B"]
+    assert buckets["late_to_exit"] is None
+    assert buckets["exit"] is None
 
 
 def test_new_split_allows_later_bucket_without_series_b():
@@ -88,15 +90,16 @@ def test_new_split_allows_later_bucket_without_series_b():
         },
     ])
 
-    early, middle, late, exit_rows = divide_funding_rows(
+    buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_AFTER_LAST_EARLY_ROUND,
     )
 
-    assert early["round_type_nzi"].tolist() == ["Series A"]
-    assert middle["round_type_nzi"].tolist() == ["Debt"]
-    assert late is None
-    assert exit_rows is None
+    assert buckets["up_to_a"] is None
+    assert buckets["a_to_b"]["round_type_nzi"].tolist() == ["Series A"]
+    assert buckets["b_to_late"]["round_type_nzi"].tolist() == ["Debt"]
+    assert buckets["late_to_exit"] is None
+    assert buckets["exit"] is None
 
 
 def test_split_still_caps_later_bucket_before_series_c():
@@ -123,24 +126,27 @@ def test_split_still_caps_later_bucket_before_series_c():
         },
     ])
 
-    legacy_early, legacy_middle, legacy_late, legacy_post = divide_funding_rows(
+    legacy_buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
     )
-    new_early, new_middle, new_late, new_post = divide_funding_rows(
+    new_buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_AFTER_LAST_EARLY_ROUND,
     )
 
-    assert legacy_early["round_type_nzi"].tolist() == ["Series A", "Debt"]
-    assert legacy_middle["round_type_nzi"].tolist() == ["Series B"]
-    assert legacy_late["round_type_nzi"].tolist() == ["Series C"]
-    assert legacy_post is None
 
-    assert new_early["round_type_nzi"].tolist() == ["Series A"]
-    assert new_middle["round_type_nzi"].tolist() == ["Debt", "Series B"]
-    assert new_late["round_type_nzi"].tolist() == ["Series C"]
-    assert new_post is None
+    assert legacy_buckets["up_to_a"] is None
+    assert legacy_buckets["a_to_b"]["round_type_nzi"].tolist() == ["Series A", "Debt"]
+    assert legacy_buckets["b_to_late"]["round_type_nzi"].tolist() == ["Series B"]
+    assert legacy_buckets["late_to_exit"]["round_type_nzi"].tolist() == ["Series C"]
+    assert legacy_buckets["exit"] is None
+
+    assert new_buckets["up_to_a"] is None
+    assert new_buckets["a_to_b"]["round_type_nzi"].tolist() == ["Series A"]
+    assert new_buckets["b_to_late"]["round_type_nzi"].tolist() == ["Debt", "Series B"]
+    assert new_buckets["late_to_exit"]["round_type_nzi"].tolist() == ["Series C"]
+    assert new_buckets["exit"] is None
 
 
 def test_new_split_uses_last_early_round_as_boundary():
@@ -172,15 +178,16 @@ def test_new_split_uses_last_early_round_as_boundary():
         },
     ])
 
-    early, middle, late, exit_rows = divide_funding_rows(
+    buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_AFTER_LAST_EARLY_ROUND,
     )
 
-    assert early["round_type_nzi"].tolist() == ["Early VC", "Debt", "Series A"]
-    assert middle["round_type_nzi"].tolist() == ["Debt", "Series B"]
-    assert late is None
-    assert exit_rows is None
+    assert buckets["up_to_a"] is None
+    assert buckets["a_to_b"]["round_type_nzi"].tolist() == ["Early VC", "Debt", "Series A"]
+    assert buckets["b_to_late"]["round_type_nzi"].tolist() == ["Debt", "Series B"]
+    assert buckets["late_to_exit"] is None
+    assert buckets["exit"] is None
 
 
 def test_seed_is_early_stage():
@@ -198,15 +205,16 @@ def test_seed_is_early_stage():
         },
     ])
 
-    early, middle, late, exit_rows = divide_funding_rows(
+    buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
     )
 
-    assert early["round_type_nzi"].tolist() == ["Seed", "Debt"]
-    assert middle is None
-    assert late is None
-    assert exit_rows is None
+    assert buckets["up_to_a"]["round_type_nzi"].tolist() == ["Seed", "Debt"]
+    assert buckets["a_to_b"] is None
+    assert buckets["b_to_late"] is None
+    assert buckets["late_to_exit"] is None
+    assert buckets["exit"] is None
 
 
 def test_company_starting_at_series_b():
@@ -239,15 +247,19 @@ def test_company_starting_at_series_b():
         },
     ])
 
-    early, middle, late, exit_rows = divide_funding_rows(
+    buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
     )
 
-    assert early is None
-    assert middle["round_type_nzi"].tolist() == ["Series B", "Late VC", "Debt", "Series B"]
-    assert late["round_type_nzi"].tolist() == ["Series C"]
-    assert exit_rows is None
+    assert buckets["up_to_a"] is None
+    assert buckets["a_to_b"] is None
+    # Late VC is a late-stage round, so late_to_exit starts there (not at Series C).
+    assert buckets["b_to_late"]["round_type_nzi"].tolist() == ["Series B"]
+    assert buckets["late_to_exit"]["round_type_nzi"].tolist() == [
+        "Late VC", "Debt", "Series B", "Series C",
+    ]
+    assert buckets["exit"] is None
 
 
 def test_full_lifecycle():
@@ -290,15 +302,16 @@ def test_full_lifecycle():
         },
     ])
 
-    early, middle, late, exit_rows = divide_funding_rows(
+    buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
     )
 
-    assert early["round_type_nzi"].tolist() == ["Pre-Seed", "Seed", "Series A"]
-    assert middle["round_type_nzi"].tolist() == ["Series B"]
-    assert late["round_type_nzi"].tolist() == ["Series C"]
-    assert exit_rows["round_type_nzi"].tolist() == ["IPO", "Post IPO - Equity"]
+    assert buckets["up_to_a"]["round_type_nzi"].tolist() == ["Pre-Seed", "Seed"]
+    assert buckets["a_to_b"]["round_type_nzi"].tolist() == ["Series A"]
+    assert buckets["b_to_late"]["round_type_nzi"].tolist() == ["Series B"]
+    assert buckets["late_to_exit"]["round_type_nzi"].tolist() == ["Series C"]
+    assert buckets["exit"]["round_type_nzi"].tolist() == ["IPO", "Post IPO - Equity"]
 
 
 def test_debt_only_returns_all_none():
@@ -316,15 +329,16 @@ def test_debt_only_returns_all_none():
         },
     ])
 
-    early, middle, late, exit_rows = divide_funding_rows(
+    buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
     )
 
-    assert early is None
-    assert middle is None
-    assert late is None
-    assert exit_rows is None
+    assert buckets["up_to_a"] is None
+    assert buckets["a_to_b"] is None
+    assert buckets["b_to_late"] is None
+    assert buckets["late_to_exit"] is None
+    assert buckets["exit"] is None
 
 
 def test_non_venture_absorbed_chronologically():
@@ -362,15 +376,16 @@ def test_non_venture_absorbed_chronologically():
         },
     ])
 
-    early, middle, late, exit_rows = divide_funding_rows(
+    buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
     )
 
-    assert early["round_type_nzi"].tolist() == ["Grant", "Series A", "Debt"]
-    assert middle["round_type_nzi"].tolist() == ["Series B", "Grant"]
-    assert late["round_type_nzi"].tolist() == ["Series C"]
-    assert exit_rows is None
+    assert buckets["up_to_a"]["round_type_nzi"].tolist() == ["Grant"]
+    assert buckets["a_to_b"]["round_type_nzi"].tolist() == ["Series A", "Debt"]
+    assert buckets["b_to_late"]["round_type_nzi"].tolist() == ["Series B", "Grant"]
+    assert buckets["late_to_exit"]["round_type_nzi"].tolist() == ["Series C"]
+    assert buckets["exit"] is None
 
 
 def test_growth_equity_maps_to_late():
@@ -393,15 +408,16 @@ def test_growth_equity_maps_to_late():
         },
     ])
 
-    early, middle, late, exit_rows = divide_funding_rows(
+    buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
     )
 
-    assert early["round_type_nzi"].tolist() == ["Seed"]
-    assert middle["round_type_nzi"].tolist() == ["Series B"]
-    assert late["round_type_nzi"].tolist() == ["Growth equity"]
-    assert exit_rows is None
+    assert buckets["up_to_a"]["round_type_nzi"].tolist() == ["Seed"]
+    assert buckets["a_to_b"] is None
+    assert buckets["b_to_late"]["round_type_nzi"].tolist() == ["Series B"]
+    assert buckets["late_to_exit"]["round_type_nzi"].tolist() == ["Growth equity"]
+    assert buckets["exit"] is None
 
 
 def test_grant_only_company_with_equity_flag():
@@ -419,15 +435,16 @@ def test_grant_only_company_with_equity_flag():
         },
     ])
 
-    early, middle, late, exit_rows = divide_funding_rows(
+    buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
     )
 
-    assert early["round_type_nzi"].tolist() == ["Grant", "Seed"]
-    assert middle is None
-    assert late is None
-    assert exit_rows is None
+    assert buckets["up_to_a"]["round_type_nzi"].tolist() == ["Grant", "Seed"]
+    assert buckets["a_to_b"] is None
+    assert buckets["b_to_late"] is None
+    assert buckets["late_to_exit"] is None
+    assert buckets["exit"] is None
 
 
 # ── Tests based on real company funding patterns ──────────────────────────
@@ -454,15 +471,16 @@ def test_early_stage_acquired_company():
         },
     ])
 
-    early, middle, late, exit_rows = divide_funding_rows(
+    buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
     )
 
-    assert early["round_type_nzi"].tolist() == ["Early VC", "Early VC"]
-    assert middle is None
-    assert late is None
-    assert exit_rows["round_type_nzi"].tolist() == ["Acquisition"]
+    assert buckets["up_to_a"] is None
+    assert buckets["a_to_b"]["round_type_nzi"].tolist() == ["Early VC", "Early VC"]
+    assert buckets["b_to_late"] is None
+    assert buckets["late_to_exit"] is None
+    assert buckets["exit"]["round_type_nzi"].tolist() == ["Acquisition"]
 
 
 def test_series_a_with_debt_and_buyout():
@@ -501,17 +519,16 @@ def test_series_a_with_debt_and_buyout():
         },
     ])
 
-    early, middle, late, exit_rows = divide_funding_rows(
+    buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
     )
 
-    assert early["round_type_nzi"].tolist() == [
-        "Series A", "Series A", "Grant", "Debt",
-    ]
-    assert middle is None
-    assert late is None
-    assert exit_rows["round_type_nzi"].tolist() == ["Buyout", "Project Finance"]
+    assert buckets["up_to_a"] is None
+    assert buckets["a_to_b"]["round_type_nzi"].tolist() == ["Series A", "Series A", "Grant", "Debt"]
+    assert buckets["b_to_late"] is None
+    assert buckets["late_to_exit"] is None
+    assert buckets["exit"]["round_type_nzi"].tolist() == ["Buyout", "Project Finance"]
 
 
 def test_full_lifecycle_with_spac_and_post_ipo():
@@ -570,17 +587,18 @@ def test_full_lifecycle_with_spac_and_post_ipo():
         },
     ])
 
-    early, middle, late, exit_rows = divide_funding_rows(
+    buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
     )
 
-    assert early["round_type_nzi"].tolist() == ["Series A"]
-    assert middle["round_type_nzi"].tolist() == ["Series B"]
-    assert late["round_type_nzi"].tolist() == [
+    assert buckets["up_to_a"] is None
+    assert buckets["a_to_b"]["round_type_nzi"].tolist() == ["Series A"]
+    assert buckets["b_to_late"]["round_type_nzi"].tolist() == ["Series B"]
+    assert buckets["late_to_exit"]["round_type_nzi"].tolist() == [
         "Series C", "Debt", "Series D", "Series E", "Grant",
     ]
-    assert exit_rows["round_type_nzi"].tolist() == ["SPAC", "PIPE", "Post IPO"]
+    assert buckets["exit"]["round_type_nzi"].tolist() == ["SPAC", "PIPE", "Post IPO"]
 
 
 def test_early_to_spac_skipping_middle_and_late():
@@ -609,15 +627,16 @@ def test_early_to_spac_skipping_middle_and_late():
         },
     ])
 
-    early, middle, late, exit_rows = divide_funding_rows(
+    buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
     )
 
-    assert early["round_type_nzi"].tolist() == ["Early VC", "Accelerator/incubator"]
-    assert middle is None
-    assert late is None
-    assert exit_rows["round_type_nzi"].tolist() == ["SPAC", "PIPE"]
+    assert buckets["up_to_a"] is None
+    assert buckets["a_to_b"]["round_type_nzi"].tolist() == ["Early VC", "Accelerator/incubator"]
+    assert buckets["b_to_late"] is None
+    assert buckets["late_to_exit"] is None
+    assert buckets["exit"]["round_type_nzi"].tolist() == ["SPAC", "PIPE"]
 
 
 def test_early_skips_to_late_with_series_c():
@@ -656,17 +675,18 @@ def test_early_skips_to_late_with_series_c():
         },
     ])
 
-    early, middle, late, exit_rows = divide_funding_rows(
+    buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
     )
 
-    assert early["round_type_nzi"].tolist() == ["Seed", "Series A", "Early VC"]
-    assert middle is None
     # PIPE is an exit type (the company is already public), so the exit
     # bucket opens at the PIPE; the same-date SPAC keeps input order after it.
-    assert late["round_type_nzi"].tolist() == ["Series C"]
-    assert exit_rows["round_type_nzi"].tolist() == ["PIPE", "SPAC"]
+    assert buckets["up_to_a"]["round_type_nzi"].tolist() == ["Seed"]
+    assert buckets["a_to_b"]["round_type_nzi"].tolist() == ["Series A", "Early VC"]
+    assert buckets["b_to_late"] is None
+    assert buckets["late_to_exit"]["round_type_nzi"].tolist() == ["Series C"]
+    assert buckets["exit"]["round_type_nzi"].tolist() == ["PIPE", "SPAC"]
 
 
 def test_ipo_only_company_with_post_ipo_and_acquisition():
@@ -695,17 +715,16 @@ def test_ipo_only_company_with_post_ipo_and_acquisition():
         },
     ])
 
-    early, middle, late, exit_rows = divide_funding_rows(
+    buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
     )
 
-    assert early is None
-    assert middle is None
-    assert late is None
-    assert exit_rows["round_type_nzi"].tolist() == [
-        "IPO", "Post IPO", "Grant", "Acquisition",
-    ]
+    assert buckets["up_to_a"] is None
+    assert buckets["a_to_b"] is None
+    assert buckets["b_to_late"] is None
+    assert buckets["late_to_exit"] is None
+    assert buckets["exit"]["round_type_nzi"].tolist() == ["IPO", "Post IPO", "Grant", "Acquisition"]
 
 
 def test_full_lifecycle_seed_to_ipo_with_merger():
@@ -754,22 +773,21 @@ def test_full_lifecycle_seed_to_ipo_with_merger():
         },
     ])
 
-    early, middle, late, exit_rows = divide_funding_rows(
+    buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
     )
 
-    assert early["round_type_nzi"].tolist() == [
-        "Accelerator/incubator", "Seed", "Series A",
-    ]
-    assert middle["round_type_nzi"].tolist() == ["Series B"]
-    assert late["round_type_nzi"].tolist() == ["Series C", "Late VC"]
-    assert exit_rows["round_type_nzi"].tolist() == ["IPO", "Merger"]
+    assert buckets["up_to_a"]["round_type_nzi"].tolist() == ["Accelerator/incubator", "Seed"]
+    assert buckets["a_to_b"]["round_type_nzi"].tolist() == ["Series A"]
+    assert buckets["b_to_late"]["round_type_nzi"].tolist() == ["Series B"]
+    assert buckets["late_to_exit"]["round_type_nzi"].tolist() == ["Series C", "Late VC"]
+    assert buckets["exit"]["round_type_nzi"].tolist() == ["IPO", "Merger"]
 
 
 def test_series_a_to_late_vc_with_acquisition():
     """Based on Company 16398: Series A, Early VC rounds, then Late VC, then Acquisition.
-    Late VC triggers middle; Acquisition triggers exit."""
+    Late VC starts late_to_exit (Late VC is a late-stage round); Acquisition triggers exit."""
     company_funding_rows = make_company_funding_rows([
         {
             "round_date_nzi": pd.Timestamp("2014-07-01"),
@@ -803,15 +821,16 @@ def test_series_a_to_late_vc_with_acquisition():
         },
     ])
 
-    early, middle, late, exit_rows = divide_funding_rows(
+    buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
     )
 
-    assert early["round_type_nzi"].tolist() == ["Series A", "Early VC", "Early VC"]
-    assert middle["round_type_nzi"].tolist() == ["Late VC", "Debt"]
-    assert late is None
-    assert exit_rows["round_type_nzi"].tolist() == ["Acquisition"]
+    assert buckets["up_to_a"] is None
+    assert buckets["a_to_b"]["round_type_nzi"].tolist() == ["Series A", "Early VC", "Early VC"]
+    assert buckets["b_to_late"] is None
+    assert buckets["late_to_exit"]["round_type_nzi"].tolist() == ["Late VC", "Debt"]
+    assert buckets["exit"]["round_type_nzi"].tolist() == ["Acquisition"]
 
 
 def test_series_a_through_spac_with_post_ipo_and_buyout():
@@ -860,17 +879,16 @@ def test_series_a_through_spac_with_post_ipo_and_buyout():
         },
     ])
 
-    early, middle, late, exit_rows = divide_funding_rows(
+    buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
     )
 
-    assert early["round_type_nzi"].tolist() == ["Series A"]
-    assert middle is None
-    assert late["round_type_nzi"].tolist() == ["Series C", "Series D", "Debt"]
-    assert exit_rows["round_type_nzi"].tolist() == [
-        "SPAC", "Post IPO", "Buyout", "Grant",
-    ]
+    assert buckets["up_to_a"] is None
+    assert buckets["a_to_b"]["round_type_nzi"].tolist() == ["Series A"]
+    assert buckets["b_to_late"] is None
+    assert buckets["late_to_exit"]["round_type_nzi"].tolist() == ["Series C", "Series D", "Debt"]
+    assert buckets["exit"]["round_type_nzi"].tolist() == ["SPAC", "Post IPO", "Buyout", "Grant"]
 
 
 def test_grants_heavy_company_through_full_lifecycle():
@@ -929,17 +947,18 @@ def test_grants_heavy_company_through_full_lifecycle():
         },
     ])
 
-    early, middle, late, exit_rows = divide_funding_rows(
+    buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
     )
 
-    assert early["round_type_nzi"].tolist() == ["Grant", "Grant", "Series A"]
-    assert middle["round_type_nzi"].tolist() == ["Series B"]
-    assert late["round_type_nzi"].tolist() == [
+    assert buckets["up_to_a"]["round_type_nzi"].tolist() == ["Grant", "Grant"]
+    assert buckets["a_to_b"]["round_type_nzi"].tolist() == ["Series A"]
+    assert buckets["b_to_late"]["round_type_nzi"].tolist() == ["Series B"]
+    assert buckets["late_to_exit"]["round_type_nzi"].tolist() == [
         "Series C", "Series D", "Series E", "Grant",
     ]
-    assert exit_rows["round_type_nzi"].tolist() == ["SPAC", "Grant"]
+    assert buckets["exit"]["round_type_nzi"].tolist() == ["SPAC", "Grant"]
 
 
 def test_middle_stage_buyout_after_series_b_and_c():
@@ -978,21 +997,22 @@ def test_middle_stage_buyout_after_series_b_and_c():
         },
     ])
 
-    early, middle, late, exit_rows = divide_funding_rows(
+    buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
     )
 
-    assert early["round_type_nzi"].tolist() == ["Series A", "Debt"]
-    assert middle["round_type_nzi"].tolist() == ["Series B"]
-    assert late["round_type_nzi"].tolist() == ["Series C", "Series C"]
-    assert exit_rows["round_type_nzi"].tolist() == ["Buyout"]
+    assert buckets["up_to_a"] is None
+    assert buckets["a_to_b"]["round_type_nzi"].tolist() == ["Series A", "Debt"]
+    assert buckets["b_to_late"]["round_type_nzi"].tolist() == ["Series B"]
+    assert buckets["late_to_exit"]["round_type_nzi"].tolist() == ["Series C", "Series C"]
+    assert buckets["exit"]["round_type_nzi"].tolist() == ["Buyout"]
 
 
 def test_no_boundary_rounds_defaults_to_early():
     """Based on Company 15: Equity crowdfunding, Grants, Accelerators, Awards only.
     No standard venture round types, but has equity financing.
-    All rounds should default to the early bucket."""
+    All rounds should default to the earliest bucket (up_to_a)."""
     company_funding_rows = make_company_funding_rows([
         {
             "round_date_nzi": pd.Timestamp("2012-12-01"),
@@ -1026,18 +1046,18 @@ def test_no_boundary_rounds_defaults_to_early():
         },
     ])
 
-    early, middle, late, exit_rows = divide_funding_rows(
+    buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
     )
 
-    assert early["round_type_nzi"].tolist() == [
-        "Accelerator/Incubator", "Product crowdfunding", "Grant",
-        "Equity crowdfunding", "Award/Prize", "Grant",
+    assert buckets["up_to_a"]["round_type_nzi"].tolist() == [
+        "Accelerator/Incubator", "Product crowdfunding", "Grant", "Equity crowdfunding", "Award/Prize", "Grant",
     ]
-    assert middle is None
-    assert late is None
-    assert exit_rows is None
+    assert buckets["a_to_b"] is None
+    assert buckets["b_to_late"] is None
+    assert buckets["late_to_exit"] is None
+    assert buckets["exit"] is None
 
 
 def test_no_boundary_rounds_defaults_to_early_with_split_after_last():
@@ -1055,15 +1075,16 @@ def test_no_boundary_rounds_defaults_to_early_with_split_after_last():
         },
     ])
 
-    early, middle, late, exit_rows = divide_funding_rows(
+    buckets = divide_funding_rows(
         company_funding_rows,
         split_strategy=SPLIT_AFTER_LAST_EARLY_ROUND,
     )
 
-    assert early["round_type_nzi"].tolist() == ["Grant", "Equity crowdfunding"]
-    assert middle is None
-    assert late is None
-    assert exit_rows is None
+    assert buckets["up_to_a"]["round_type_nzi"].tolist() == ["Grant", "Equity crowdfunding"]
+    assert buckets["a_to_b"] is None
+    assert buckets["b_to_late"] is None
+    assert buckets["late_to_exit"] is None
+    assert buckets["exit"] is None
 
 
 # ── Flatten output: equity / non-equity split per stage ──────────────────
@@ -1220,8 +1241,8 @@ def test_flatten_per_stage_investor_lists():
 def test_leading_debt_dropped_when_no_pre_seed_and_no_series_a():
     # [Debt, Late VC] — no Pre-Seed/Seed (so no up_to_a) and no Series A
     # (so no a_to_b). The leading Debt row is intentionally dropped rather
-    # than absorbed into middle/late. See split_early_late_funding_rounds.py
-    # comment around line 599.
+    # than absorbed into a later bucket. See the "no-Series-A case" comment in
+    # split_early_late_funding_rounds.py.
     company_funding_rows = make_company_funding_rows([
         {
             "round_date_nzi": pd.Timestamp("2019-01-01"),
@@ -1240,19 +1261,19 @@ def test_leading_debt_dropped_when_no_pre_seed_and_no_series_a():
         split_strategy=SPLIT_ON_FIRST_LATE_ROUND,
     )
 
-    # Leading Debt is dropped — middle starts at Late VC.
+    # Leading Debt is dropped — late_to_exit starts at Late VC.
     assert buckets["up_to_a"] is None
     assert buckets["a_to_b"] is None
-    assert buckets["b_to_late"]["round_type_nzi"].tolist() == ["Late VC"]
-    assert buckets["late_to_exit"] is None
+    assert buckets["b_to_late"] is None
+    assert buckets["late_to_exit"]["round_type_nzi"].tolist() == ["Late VC"]
     assert buckets["exit"] is None
 
 
 def test_leading_debt_dropped_with_interleaved_debt_and_ipo():
     # [Debt × 4, Late VC, Debt × 3, IPO] — the 4 leading Debt rounds have
     # no equity boundary before them, so they're dropped. The 3 Debt rounds
-    # between Late VC and IPO get absorbed chronologically into the middle
-    # bucket (which extends through exit_start - 1).
+    # between Late VC and IPO get absorbed chronologically into late_to_exit
+    # (which extends through exit_start - 1).
     company_funding_rows = make_company_funding_rows([
         {"round_date_nzi": pd.Timestamp("2015-01-01"), "round_type_nzi": "Debt",    "financing_type_nzi": "Debt"},
         {"round_date_nzi": pd.Timestamp("2015-06-01"), "round_type_nzi": "Debt",    "financing_type_nzi": "Debt"},
@@ -1272,11 +1293,11 @@ def test_leading_debt_dropped_with_interleaved_debt_and_ipo():
 
     assert buckets["up_to_a"] is None
     assert buckets["a_to_b"] is None
-    # Middle = Late VC + the 3 trailing Debts that fall between Late VC and IPO.
-    assert buckets["b_to_late"]["round_type_nzi"].tolist() == [
+    assert buckets["b_to_late"] is None
+    # late_to_exit = Late VC + the 3 trailing Debts that fall between Late VC and IPO.
+    assert buckets["late_to_exit"]["round_type_nzi"].tolist() == [
         "Late VC", "Debt", "Debt", "Debt",
     ]
-    assert buckets["late_to_exit"] is None
     assert buckets["exit"]["round_type_nzi"].tolist() == ["IPO"]
 
 
