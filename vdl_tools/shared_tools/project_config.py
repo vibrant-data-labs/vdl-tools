@@ -18,9 +18,16 @@ def get_project_config():
     return config["project"]
 
 
-def get_s3_paths():
+def get_s3_paths(paths_file=None):
+    """Return the ``[s3_paths]`` section of a paths.ini with ``{key}`` references expanded.
+
+    ``paths_file`` defaults to ``paths.ini`` in the current working directory. Pass another
+    project's paths.ini to read its pins, e.g. climate-landscape's shared data locations.
+    """
     paths_config = configparser.ConfigParser()
-    paths_file = pl.Path.cwd() / "paths.ini"
+    paths_file = pl.Path(paths_file) if paths_file is not None else pl.Path.cwd() / "paths.ini"
+    if not paths_file.exists():
+        raise FileNotFoundError(f"paths.ini not found: {paths_file}")
     paths_config.read(paths_file)
 
     path_items = list(paths_config.items('s3_paths'))
