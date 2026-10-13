@@ -8,6 +8,8 @@ optional because it needs the network.
 import re
 from urllib.parse import urlparse
 
+import httpx
+
 from vdl_tools.scrape_enrich.url_keys import PLATFORM_DOMAINS
 
 LEGAL_SUFFIXES = {
@@ -55,8 +57,6 @@ def resolve_redirect(url: str, timeout: float = 10.0) -> str:
     GETs (tailspinpowercell.com), so an error status falls back to a streamed GET
     — headers only, the body is never read.
     """
-    import httpx
-
     domain = normalize_domain(url)
     if not domain:
         return ""

@@ -509,9 +509,7 @@ def add_original_website_match(
     remove_duplicates=True,
 ):
     cleaned_original_urls = pd.DataFrame(website_urls, columns=['original_url'])
-    # Match on the domain. A website that identifies no org (a Facebook page,
-    # a placeholder) gets no domain and so matches nothing, rather than every
-    # LinkedIn page that lists the same platform; name matching covers those.
+    # A platform or placeholder website has no domain, so it matches nothing.
     cleaned_original_urls['cleaned_original'] = (
         cleaned_original_urls['original_url'].map(website_domain).replace("", None)
     )

@@ -278,8 +278,7 @@ def prepare_for_relevance_model(
 
     if df_missing_descriptions.shape[0] > 0:
         df['Website Summary'] = df_missing_descriptions['Website Summary']
-        # A squatted gambling site or a for-sale page reads as ordinary prose, so
-        # it gets summarized; judged on it, a real org would be dropped as irrelevant.
+        # Don't judge relevance on a squatter's page.
         junk = pd.Series([
             is_junk_summary(summary, f"{name} {description}")
             for summary, name, description in zip(
@@ -483,15 +482,12 @@ def run_pipeline(
     set, the ``venture_backed`` flag is attached from it right after the org-type
     prediction, using ``venture_backed_org_type_col`` for the grant-only rule.
 
-    ``website_max_errors`` is how many failed scrapes (and failed summaries) a
-    website gets before it is never retried; at the default of 1, one transient
-    failure is permanent. LinkedIn lookups are not retried either way.
+    ``website_max_errors``: failed scrapes (and summaries) a website gets before
+    it is never retried.
 
-    When ``website_domain_cache_uri`` is set (local path or ``s3://``; the file
-    can be shared across projects), junk website content is blanked by
-    ``website_quality.gate_websites`` before it reaches the summary of summaries.
-    ``website_quality_decisions_path`` (curated ``id,action,note`` CSV) and
-    ``website_quality_review_path`` (review xlsx) are optional.
+    When ``website_domain_cache_uri`` is set (local or ``s3://``), the website
+    quality gate blanks junk website content before the summary of summaries;
+    ``website_quality_decisions_path`` and ``website_quality_review_path`` are optional.
     """
     log_major_step("loading pre-processed combined crunchbase + candid data")
     if enrich_input_uri:
@@ -586,10 +582,8 @@ def run_pipeline(
         axis=1,
     )
 
-    # A parked or squatted site summarizes as cleanly as a real one, and
-    # `Website Summary` is a text field, so junk left here is written into
-    # `Summary` and every model input below. Runs after LinkedIn, which sets
-    # `profile_name` (read by the gambling check).
+    # Junk website summaries would spread into `Summary` and every model input
+    # below. After LinkedIn, which sets `profile_name` (read by the gambling check).
     blanked_websites = set()
     if website_domain_cache_uri:
         log_major_step("Checking website quality")

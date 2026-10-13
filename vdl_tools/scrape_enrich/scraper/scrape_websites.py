@@ -1,4 +1,5 @@
 import asyncio
+import gc
 from concurrent.futures import ProcessPoolExecutor as ProcessPool
 
 
@@ -10,7 +11,7 @@ from urllib.parse import urljoin, urlparse
 import vdl_tools.scrape_enrich.scraper.website_processor as wp
 from vdl_tools.scrape_enrich.scraper.async_scraper import AsyncScraper
 from vdl_tools.scrape_enrich.scraper.text_quality import looks_like_bot_wall
-# The page key lives in url_keys; re-exported because callers import it from here.
+# Re-exported: callers import the page key from here.
 from vdl_tools.scrape_enrich.url_keys import extract_website_name  # noqa: F401
 from vdl_tools.shared_tools.web_summarization.make_page_text import make_group_text
 from vdl_tools.shared_tools.tools.logger import logger
@@ -627,7 +628,6 @@ def scrape_websites_psql(
                     continue
                 finally:
                     # Force garbage collection after each chunk
-                    import gc
                     gc.collect()
 
         # Combine existing and newly combined data
@@ -654,7 +654,6 @@ def _format_scraped_sites(results):
 
 
 if __name__ == '__main__':
-    from vdl_tools.shared_tools.database_cache.database_utils import get_session
     urls = [
         'https://www.vibrantdatalabs.org',
         'https://www.spicqyxdl.com/',

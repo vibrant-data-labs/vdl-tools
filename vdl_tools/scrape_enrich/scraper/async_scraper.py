@@ -19,8 +19,7 @@ DEFAULT_RETRY_DELAY = 1.0  # seconds
 DEFAULT_CONNECT_TIMEOUT = 5.0  # Fast fail on dead links
 DEFAULT_READ_TIMEOUT = 15.0    # Allow time for slow servers
 
-# Browser fingerprint sent on every request. website_quality's liveness probe
-# sends the same headers, so the two agree on which sites answer.
+# Sent on every request; website_quality's liveness probe sends the same.
 BROWSER_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',

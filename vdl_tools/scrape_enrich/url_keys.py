@@ -1,21 +1,12 @@
 """The two keys a website URL is reduced to. Use these; don't write another.
 
-``extract_website_name`` — the PAGE key. Names one fetched page: keeps
-``www.``, case and the path (``/`` and ``:`` become ``_``). Every row of the
-Postgres scrape cache is keyed by it, so its output must never change.
-
-    https://www.Example.org/about?ref=x -> www.Example.org_about
-
-``website_domain`` — the DOMAIN key. Names the site an organization is behind,
-for matching records across sources, finding duplicates and redirects, and the
-shared liveness cache. Repairs what raw website fields carry, and returns ""
-when the value cannot identify an org (a platform, a mail provider, a
-placeholder), so two orgs never match on facebook.com or gmail.com.
-
-    https://www.Example.org/about?ref=x -> example.org
-    www. tworiversymca. org             -> tworiversymca.org
-    info@example.org                    -> example.org
-    https://www.facebook.com/exampleorg -> ""
+- ``extract_website_name``: the PAGE key (keeps ``www.``, case and path).
+  Keys every row of the scrape cache, so its output must never change.
+  ``https://www.Example.org/about?ref=x`` -> ``www.Example.org_about``
+- ``website_domain``: the DOMAIN key, for matching, duplicates, redirects and
+  the liveness cache. Repairs messy website fields; "" for platforms, free-mail
+  and placeholders. ``https://www.Example.org/about`` -> ``example.org``,
+  ``info@example.org`` -> ``example.org``, ``facebook.com/x`` -> ``""``
 """
 
 import re
@@ -23,9 +14,7 @@ from urllib.parse import urlparse
 
 from vdl_tools.shared_tools.tools.logger import logger
 
-# Shared-platform domains identify a platform, not an org. A customer URL
-# like linkedin.com/company/woodgrove-capital must never domain-match every
-# org whose listed website is its LinkedIn page.
+# Platforms and mail providers identify no org: never match two orgs on them.
 PLATFORM_DOMAINS = {
     "linkedin.com", "facebook.com", "instagram.com", "twitter.com", "x.com",
     "youtube.com", "medium.com", "crunchbase.com", "angel.co", "wellfound.com",
@@ -34,7 +23,6 @@ PLATFORM_DOMAINS = {
     "apps.apple.com", "play.google.com",
 }
 
-# A website field holding one of these identifies a mail provider, not an org.
 FREE_MAIL = {
     "gmail.com", "yahoo.com", "aol.com", "hotmail.com", "outlook.com", "msn.com",
     "comcast.net", "att.net", "sbcglobal.net", "verizon.net", "bellsouth.net",
@@ -76,7 +64,7 @@ def website_domain(url) -> str:
     """The domain that identifies the org behind ``url``, or '' when it identifies nothing."""
     if not isinstance(url, str):
         return ""
-    # Hosts never contain whitespace; GT has "www. tworiversymca. org".
+    # GT has "www. tworiversymca. org"; hosts never contain whitespace.
     url = re.sub(r"\s+", "", url.lower())
     url = _BROKEN_SCHEME_RE.sub("", url)
     if not url:
@@ -84,7 +72,7 @@ def website_domain(url) -> str:
     host = urlparse(url if "://" in url else f"http://{url}").netloc
     host = host.rsplit("@", 1)[-1]  # "info@example.org" -> the domain
     host = _WWW_RE.sub("", host.split(":")[0])
-    # A key without a dot ("na", "none" — both in the GT data) identifies nothing.
+    # No dot ("na", "none"): a placeholder.
     if "." not in host or host in PLATFORM_DOMAINS or host in FREE_MAIL:
         return ""
     return host
