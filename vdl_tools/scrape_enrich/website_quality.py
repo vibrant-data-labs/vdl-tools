@@ -18,24 +18,27 @@ that first class. One-offs a rule would have to overfit to catch belong in the
 curated decisions file instead.
 
 It also resolves every website domain once (where it redirects, whether it is
-up) into ``paths["website_domain_cache"]``.
+up) into a domain cache that can be shared across projects (see ``gate_websites``).
 
 Moved here from ed_tracker so every pipeline built on ``run_pipeline`` can use it.
 """
 
 import concurrent.futures
 import datetime as dt
-import json
 import logging
 import pathlib
 import re
-from urllib.parse import urlparse
 
 import httpx
 import pandas as pd
-from vdl_tools.portfolio_comparison.intake.normalize import identity_domain, resolve_redirect
+from vdl_tools.portfolio_comparison.intake.normalize import resolve_redirect
 from vdl_tools.scrape_enrich.scraper.async_scraper import BROWSER_HEADERS
+from vdl_tools.scrape_enrich.url_keys import FREE_MAIL, website_domain
+from vdl_tools.shared_tools.database_cache.database_utils import get_session
+from vdl_tools.scrape_enrich.website_junk_rules import is_gambling, is_parked_summary
+from vdl_tools.shared_tools.parquet_cache import read_dataframe, write_dataframe
 from vdl_tools.shared_tools.tools.logger import logger
+from vdl_tools.shared_tools.database_cache.database_models.web_scraping import WebPagesParsed
 
 # httpx logs every request at INFO — 50k lines on a full run.
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -43,41 +46,10 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 WEBSITE_COLS = ["Website_cb_cd", "Website"]
 GT_UID_PREFIX = "givingtuesday_"
 
-# A website field holding one of these identifies a mail provider, not an org.
-FREE_MAIL = {
-    "gmail.com", "yahoo.com", "aol.com", "hotmail.com", "outlook.com", "msn.com",
-    "comcast.net", "att.net", "sbcglobal.net", "verizon.net", "bellsouth.net",
-    "cox.net", "juno.com", "earthlink.net", "icloud.com", "me.com", "mac.com",
-    "live.com", "ymail.com", "protonmail.com",
-}
-
-_BROKEN_SCHEME_RE = re.compile(r"^\s*https?:\s*/*\s*")  # "https: eoydc.org"
-_WWW_RE = re.compile(r"^w{2,}\d*\.")  # "wwww.", "www2."
 _EMAIL_RE = re.compile(r"^[^\s/@]+@([^\s/@]+\.[a-z]{2,})$", re.I)
 
 
 # --- normalization ------------------------------------------------------------
-def normalize_website(url):
-    """Bare host used to identify a website, or '' when it identifies nothing.
-
-    ``identity_domain`` does the core (lowercase, no scheme/port/``www.``, no
-    platform or dot-less hosts); this first repairs what the raw website fields
-    carry and it does not expect.
-    """
-    if not isinstance(url, str):
-        return ""
-    # Hosts never contain whitespace; GT has "www. tworiversymca. org".
-    url = re.sub(r"\s+", "", url.lower())
-    url = _BROKEN_SCHEME_RE.sub("", url)
-    if not url:
-        return ""
-    host = urlparse(url if "://" in url else f"http://{url}").netloc
-    host = host.rsplit("@", 1)[-1]  # "info@bookwormgardens.org" -> the domain
-    host = _WWW_RE.sub("", host)  # "wwww.", "www2." (identity_domain strips only "www.")
-    domain = identity_domain(host)
-    return "" if domain in FREE_MAIL else domain
-
-
 def email_domain(url):
     """Domain of an email address typed into a website field, else ''."""
     if not isinstance(url, str):
@@ -138,33 +110,60 @@ def url_alive(host, timeout=SCRAPER_TIMEOUT):
 def check_domain(domain):
     """Final domain after redirects, and whether the site is up."""
     return {
-        "final_domain": normalize_website(resolve_redirect(domain)) or domain,
+        "final_domain": website_domain(resolve_redirect(domain)) or domain,
         "alive": url_alive(domain),
         "checked": dt.date.today().isoformat(),
     }
 
 
-def load_domain_cache(paths):
-    """``domain -> {final_domain, alive, checked}`` ({} when absent)."""
-    path = pathlib.Path(str(paths.get("website_domain_cache", "")))
-    return json.loads(path.read_text()) if path.is_file() else {}
+CACHE_COLS = ["domain", "final_domain", "alive", "checked"]
+
+
+def load_domain_cache(uri):
+    """``domain -> {final_domain, alive, checked}`` ({} when absent).
+
+    ``uri`` is a local path or an ``s3://`` URI. The cache is keyed by domain,
+    not by project, so one file can serve every pipeline: a domain checked for
+    ed_tracker is not checked again for climate-landscape.
+    """
+    try:
+        df = read_dataframe(uri)
+    except FileNotFoundError:
+        return {}
+    return {
+        r.domain: {"final_domain": r.final_domain, "alive": bool(r.alive), "checked": r.checked}
+        for r in df.itertuples(index=False)
+    }
 
 
 CACHE_VALID_DAYS = 90  # same validity window as vdl-tools' S3 Cache
-SAVE_EVERY = 500
+SAVE_EVERY = 2000
 MAX_WORKERS = 32
 
 
-def _save_cache(cache, path):
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(cache, indent=1, sort_keys=True))
-    tmp.replace(path)
+def _save_cache(cache, uri):
+    """Write the cache, first merging in what another run saved meanwhile.
+
+    A parquet file is rewritten whole, so two pipelines sharing the file would
+    otherwise drop each other's new checks (last writer wins). Merging keeps the
+    newest check per domain; only a write landing between this read and this
+    write can still be lost, and a lost entry is simply checked again next run.
+    """
+    for domain, entry in load_domain_cache(uri).items():
+        if domain not in cache or entry["checked"] > cache[domain]["checked"]:
+            cache[domain] = entry
+    write_dataframe(
+        pd.DataFrame(
+            [{"domain": d, **entry} for d, entry in sorted(cache.items())],
+            columns=CACHE_COLS,
+        ),
+        uri,
+    )
 
 
-def resolve_domains(domains, path, refresh=False, max_workers=MAX_WORKERS):
+def resolve_domains(domains, uri, refresh=False, max_workers=MAX_WORKERS):
     """Check every domain not yet (validly) cached; return the whole cache."""
-    path = pathlib.Path(path)
-    cache = load_domain_cache({"website_domain_cache": path})
+    cache = load_domain_cache(uri)
     cutoff = (dt.date.today() - dt.timedelta(days=CACHE_VALID_DAYS)).isoformat()
     todo = sorted(
         d for d in domains if refresh or d not in cache or cache[d]["checked"] < cutoff
@@ -173,15 +172,16 @@ def resolve_domains(domains, path, refresh=False, max_workers=MAX_WORKERS):
         "Websites: %d domain(s), %d already cached, %d to check",
         len(domains), len(domains) - len(todo), len(todo),
     )
-    path.parent.mkdir(parents=True, exist_ok=True)
+    if not todo:
+        return cache
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(check_domain, d): d for d in todo}
         for i, future in enumerate(concurrent.futures.as_completed(futures), start=1):
             cache[futures[future]] = future.result()
             if i % SAVE_EVERY == 0:
-                _save_cache(cache, path)
+                _save_cache(cache, uri)
                 logger.info("Websites: checked %d/%d", i, len(todo))
-    _save_cache(cache, path)
+    _save_cache(cache, uri)
     return cache
 
 
@@ -203,19 +203,19 @@ def fresh_alive_check(domains, max_workers=MAX_WORKERS):
     return out
 
 
-def resolve_for_frame(df, paths, refresh=False):
+def resolve_for_frame(df, domain_cache_uri, refresh=False):
     """Resolve every website domain in ``df``; returns the whole cache."""
     cols = [c for c in WEBSITE_COLS if c in df.columns]
-    domains = {k for col in cols for k in df[col].map(normalize_website)} - {""}
+    domains = {k for col in cols for k in df[col].map(website_domain)} - {""}
 
-    cache = resolve_domains(domains, paths["website_domain_cache"], refresh=refresh)
+    cache = resolve_domains(domains, domain_cache_uri, refresh=refresh)
     ours = [(d, cache[d]) for d in domains if d in cache]
     logger.info(
         "Websites: %d domain(s) — %d redirect elsewhere, %d dead. Cache: %s",
         len(ours),
         sum(entry["final_domain"] != d for d, entry in ours),
         sum(not entry["alive"] for _, entry in ours),
-        paths["website_domain_cache"],
+        domain_cache_uri,
     )
     return cache
 
@@ -227,9 +227,7 @@ SCRAPE_KEY_CHUNK = 1000
 
 def combined_texts(keys, session):
     """``extracted_website_key -> (combined_text, num_errors)`` from the scrape cache."""
-    from vdl_tools.shared_tools.database_cache.database_models.web_scraping import (
-        WebPagesParsed,
-    )
+
 
     keys = sorted({k for k in keys if k})
     out = {}
@@ -264,7 +262,7 @@ def website_evidence(df, domain_cache, scraped=None, id_col="id"):
     summary = df["Website Summary"].fillna("")
     site = df["Website"] if "Website" in df.columns else df["Website_cb_cd"]
     keys = df.get("extracted_website_key", pd.Series("", index=df.index)).fillna("")
-    domain = site.map(normalize_website)
+    domain = site.map(website_domain)
     mail = site.map(email_domain)
     cached = domain.map(lambda d: domain_cache.get(d, {}))
     text = keys.map(lambda k: scraped.get(k))
@@ -285,9 +283,9 @@ def website_evidence(df, domain_cache, scraped=None, id_col="id"):
             lambda t: _text_quality(*t) if t else ""
         ),
         "has_summary": summary.str.strip().ne(""),
-        "parked_summary": summary.map(_is_parked_summary),
+        "parked_summary": summary.map(is_parked_summary),
         "gambling": [
-            _is_gambling(page_summary, f"{name} {desc} {desc990}")
+            is_gambling(page_summary, f"{name} {desc} {desc990}")
             for page_summary, name, desc, desc990 in zip(
                 summary,
                 df.get("profile_name", pd.Series("", index=df.index)).fillna(""),
@@ -302,40 +300,6 @@ def website_evidence(df, domain_cache, scraped=None, id_col="id"):
     return out
 
 
-# --- junk rules ---------------------------------------------------------------
-# Which evidence a rule may read depends on whether the page was readable.
-#
-# Readable page (a casino, a marketplace): the summary is a faithful rendering
-# of it, so gambling and parked may be detected from the summary.
-#
-# Unreadable page (binary, a bot wall, an empty page): the summarizer sometimes
-# invents a description from the org's NAME instead of reporting it saw
-# nothing, so the summary is evidence of nothing. Those rules read the scraped
-# page text only. A fabrication is always shaped like the org — a squatted
-# nonprofit yields an invented nonprofit description, never an invented casino
-# — which is why this asymmetry holds rather than being a coincidence.
-# Category words every gambling site carries. Deliberately NOT specific game or
-# brand names: those would fit this dataset rather than the problem.
-GAMBLING_PHRASES = [
-    "online gambling", "gambling platform", "online gaming platform", "slot game",
-    "slot machine", "live casino", "online casino", "casino game", "sports betting",
-    "betting platform", "online betting", "online lottery", "online poker",
-    "igaming", "wagering",
-]
-# If the org's own records mention gaming, a gaming website is correct — that is
-# what separates a real casino company from a squatted nonprofit domain.
-# "lottery" is missing on purpose: in an education dataset it means admissions.
-# Amistad Academy's summary says "blind lottery admissions", Lynn Public Schools
-# "lottery systems" for enrollment. Adding single words took 66 flags to 218,
-# almost all of them schools.
-OWN_GAMING_WORDS = ["casino", "gaming", "gambling", "wager", "lottery", "betting"]
-
-# Marketplace names, unambiguous enough to match against summary prose.
-PARKED_SUMMARY_MARKERS = [
-    "expireddomains", "hugedomains", "sedo.com", "squadhelp", "afternic",
-    "domain marketplace", "domain for sale", "domains for sale",
-]
-
 # Qualities that say nothing about who owns the domain, so the link stays.
 # Only the two verdicts whose OWN rule (remove_website, for junk content) needs
 # a "don't also clear the link" exception carved out of it. "dead"/"empty" must
@@ -346,65 +310,6 @@ PARKED_SUMMARY_MARKERS = [
 # their link actually cleared. "thin" never triggers remove_website either, so
 # it was inert either way; left out for the set to document only what matters.
 KEEP_URL_QUALITIES = {"garbled", "blocked"}
-
-TEXT_CHARS = 700
-
-
-def _clip(value, limit=TEXT_CHARS):
-    text = "" if value is None else str(value)
-    return re.sub(r"\s+", " ", text).strip()[:limit]
-
-
-def _location(row):
-    """Where the entity is, from whichever column this stage of the pipeline has.
-
-    ``City`` is produced by geotagging, which runs after this gate, so the raw
-    ``hq_address`` is what is actually available here: "College Point, New York"
-    from Crunchbase, "5 VERTI DRIVE WINSLOW ME 04901" from a 990.
-    """
-    for col in ("hq_address", "City"):
-        value = _clip(row.get(col), 120)
-        if not value:
-            continue
-        return re.sub(r",?\s*(United States|North America)", "", value).strip(" ,")
-    return ""
-
-
-def _is_parked_summary(summary):
-    """The summarizer naming a marketplace the page copy does not.
-
-    handwritingcounts.com renders as "Fresh Listings Daily / Powerful Domain
-    Insights", which matches no marker, but the summary says "primarily
-    associated with ExpiredDomains.com and GoDaddy".
-    """
-    text = (summary or "").lower()
-    return any(m in text for m in PARKED_SUMMARY_MARKERS)
-
-
-def _is_gambling(summary, records):
-    """A gambling site on a domain whose owner has nothing to do with gambling.
-
-    ``records`` should include the org's name as well as its descriptions: 852
-    orgs (all Crunchbase) have no description at all, and for those the name is
-    the only thing standing between a real gaming company and a blanked summary.
-    """
-    text = (summary or "").lower()
-    if not any(phrase in text for phrase in GAMBLING_PHRASES):
-        return False
-    own = (records or "").lower()
-    return not any(word in own for word in OWN_GAMING_WORDS)
-
-
-def is_junk_summary(summary, records):
-    """Junk that only the summary shows: a squatted gambling site, or a for-sale
-    page whose copy names no marketplace.
-
-    The page text of both reads as ordinary prose, so the scrape-time text
-    check passes them and they get summarized. Used before the relevance model
-    too, which would otherwise judge an org with a short description on the
-    squatter's page. ``records`` is the org's own name and descriptions.
-    """
-    return _is_parked_summary(summary) or _is_gambling(summary, records)
 
 
 # --- the gate -----------------------------------------------------------------
@@ -561,17 +466,17 @@ def _org_key(org_id):
     return str(org_id).strip().removeprefix(GT_UID_PREFIX)
 
 
-def load_website_decisions(paths, present=None):
-    """``{id: action}`` from ``paths["website_quality_decisions"]``.
+def load_website_decisions(path, present=None):
+    """``{id: action}`` from the curated decisions CSV at ``path`` ({} when None or absent).
 
     ``keep`` vetoes whatever the rules concluded, which is the only way to
     overrule them: every other rule here fires automatically. An EIN may be
     written bare or as ``givingtuesday_<ein>``; either form applies to every
     present org with that EIN, whichever form its id takes.
     """
-    path = pathlib.Path(str(paths.get("website_quality_decisions", "")))
-    if not path.is_file():
+    if path is None or not pathlib.Path(path).is_file():
         return {}
+    path = pathlib.Path(path)
     df = pd.read_csv(path, dtype=str).fillna("")
     by_key = {}
     for org_id in present or ():
@@ -601,20 +506,37 @@ def load_website_decisions(paths, present=None):
     return decisions
 
 
-def gate_websites(df, paths, id_col="id", resolve=True, dry_run=False, fresh_check=True):
+def gate_websites(
+    df,
+    *,
+    domain_cache_uri,
+    decisions_path=None,
+    review_path=None,
+    id_col="id",
+    resolve=True,
+    dry_run=False,
+    fresh_check=True,
+):
     """Find the junk websites by rule and act on them, before they spread.
 
     Called from ``run_pipeline`` (and ed_tracker's ``process_enrich``) after the
     website summaries are built and before ``add_summary_of_summaries``. Returns ``(df, decisions)``.
+
+    ``domain_cache_uri`` is the domain cache (local path or ``s3://`` URI; one
+    file can be shared across projects). ``decisions_path`` is the hand-curated
+    ``id,action,note`` CSV and ``review_path`` the xlsx written for review; both
+    are skipped when None. Look all three up in the calling project's paths config.
 
     ``fresh_check`` reprobes every domain with scraped text, bypassing the
     90-day liveness cache, since the public link should only show when the
     site is confirmed up right now. Scoped to that chars>0 population, not
     the whole ~25k-domain corpus, to bound the added runtime.
     """
-    from vdl_tools.shared_tools.database_cache.database_utils import get_session
 
-    cache = resolve_for_frame(df, paths) if resolve else load_domain_cache(paths)
+    cache = (
+        resolve_for_frame(df, domain_cache_uri) if resolve
+        else load_domain_cache(domain_cache_uri)
+    )
     with get_session() as session:
         scraped = combined_texts(df.get("extracted_website_key", pd.Series(dtype=str)), session)
 
@@ -627,11 +549,11 @@ def gate_websites(df, paths, id_col="id", resolve=True, dry_run=False, fresh_che
             len(fresh), sum(fresh.values()),
         )
         evidence["fresh_alive"] = evidence["domain"].map(fresh)
-    manual = load_website_decisions(paths, set(df[id_col].astype(str)))
+    manual = load_website_decisions(decisions_path, set(df[id_col].astype(str)))
     decisions = decide_actions(evidence, manual, id_col=id_col)
 
-    if paths.get("website_quality_review"):
-        write_website_review(decisions, paths["website_quality_review"])
+    if review_path:
+        write_website_review(decisions, review_path)
     if dry_run:
         logger.warning("Website quality: dry run — nothing changed")
         return df, decisions

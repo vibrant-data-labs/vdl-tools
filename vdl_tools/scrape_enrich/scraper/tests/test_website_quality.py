@@ -1,20 +1,9 @@
+from vdl_tools.scrape_enrich.website_junk_rules import is_junk_summary
 from vdl_tools.scrape_enrich.website_quality import (
-    is_junk_summary,
+    _save_cache,
+    load_domain_cache,
     load_website_decisions,
-    normalize_website,
 )
-
-
-def test_normalize_website_repairs_raw_fields():
-    assert normalize_website("https://www.exampleschool.org/about") == "exampleschool.org"
-    assert normalize_website("www. exampleschool. org") == "exampleschool.org"
-    assert normalize_website("https: exampleschool.org") == "exampleschool.org"
-    assert normalize_website("info@exampleschool.org") == "exampleschool.org"
-    assert normalize_website("www2.exampleschool.org") == "exampleschool.org"
-    # identifies nothing: a mail provider, a platform, a dot-less placeholder
-    assert normalize_website("someone@gmail.com") == ""
-    assert normalize_website("https://www.facebook.com/exampleschool") == ""
-    assert normalize_website("none") == ""
 
 
 def test_decisions_match_an_ein_in_either_form(tmp_path):
@@ -33,7 +22,7 @@ def test_decisions_match_an_ein_in_either_form(tmp_path):
         "givingtuesday_11-1111111",
         "a1b2c3d4-crunchbase-uuid",
     }
-    decisions = load_website_decisions({"website_quality_decisions": path}, present)
+    decisions = load_website_decisions(path, present)
     assert decisions == {
         "givingtuesday_12-3456789": "remove_website",
         "98-7654321": "remove_url",
@@ -49,3 +38,14 @@ def test_junk_summary_checks_the_orgs_own_records():
     assert not is_junk_summary(casino, "Example Gaming Inc online casino operator")
     assert is_junk_summary("The domain exampleschool.org is listed on HugeDomains.", "Example School")
     assert not is_junk_summary("Example School teaches K-8 students.", "Example School")
+
+
+def test_domain_cache_round_trips_and_keeps_another_runs_newer_checks(tmp_path):
+    uri = tmp_path / "website_domain_cache.parquet"
+    assert load_domain_cache(uri) == {}
+    old = {"final_domain": "example.org", "alive": False, "checked": "2026-01-01"}
+    new = {"final_domain": "example.org", "alive": True, "checked": "2026-10-01"}
+    # another project saved a newer check for example.org meanwhile
+    _save_cache({"example.org": new}, uri)
+    _save_cache({"example.org": old, "other.org": old}, uri)
+    assert load_domain_cache(uri) == {"example.org": new, "other.org": old}

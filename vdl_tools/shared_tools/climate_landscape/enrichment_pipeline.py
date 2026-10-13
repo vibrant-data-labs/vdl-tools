@@ -8,6 +8,7 @@ import socket; socket.setdefaulttimeout(30)
 from vdl_tools.linkedin import org_loader as li
 from vdl_tools.linkedin.utils.linkedin_url import extract_linkedin_id
 from vdl_tools.scrape_enrich import website_quality
+from vdl_tools.scrape_enrich.website_junk_rules import is_junk_summary
 from vdl_tools.scrape_enrich.combine_crunchbase_candid_linkedin import combine_cb_cd_li
 from vdl_tools.scrape_enrich.scraper.scrape_websites import extract_website_name, scrape_websites_psql
 from vdl_tools.shared_tools import climatebert_adaptation as adp
@@ -280,7 +281,7 @@ def prepare_for_relevance_model(
         # A squatted gambling site or a for-sale page reads as ordinary prose, so
         # it gets summarized; judged on it, a real org would be dropped as irrelevant.
         junk = pd.Series([
-            website_quality.is_junk_summary(summary, f"{name} {description}")
+            is_junk_summary(summary, f"{name} {description}")
             for summary, name, description in zip(
                 df['Website Summary'].fillna(''),
                 df['Organization'].fillna(''),
@@ -472,7 +473,9 @@ def run_pipeline(
     funding_rounds_uri=None,
     venture_backed_org_type_col='OrgType Prediction',
     website_max_errors=1,
-    website_quality_paths=None,
+    website_domain_cache_uri=None,
+    website_quality_decisions_path=None,
+    website_quality_review_path=None,
 ):
     """Pure enrichment: scrape, summarize, classify, geocode, and write the meta artifact.
 
@@ -484,10 +487,11 @@ def run_pipeline(
     website gets before it is never retried; at the default of 1, one transient
     failure is permanent. LinkedIn lookups are not retried either way.
 
-    When ``website_quality_paths`` is set (a dict with ``website_domain_cache``,
-    ``website_quality_review`` and ``website_quality_decisions``), junk website
-    content is blanked by ``website_quality.gate_websites`` before it reaches the
-    summary of summaries.
+    When ``website_domain_cache_uri`` is set (local path or ``s3://``; the file
+    can be shared across projects), junk website content is blanked by
+    ``website_quality.gate_websites`` before it reaches the summary of summaries.
+    ``website_quality_decisions_path`` (curated ``id,action,note`` CSV) and
+    ``website_quality_review_path`` (review xlsx) are optional.
     """
     log_major_step("loading pre-processed combined crunchbase + candid data")
     if enrich_input_uri:
@@ -587,10 +591,14 @@ def run_pipeline(
     # `Summary` and every model input below. Runs after LinkedIn, which sets
     # `profile_name` (read by the gambling check).
     blanked_websites = set()
-    if website_quality_paths:
+    if website_domain_cache_uri:
         log_major_step("Checking website quality")
         df_relevant, website_decisions = website_quality.gate_websites(
-            df_relevant, website_quality_paths, id_col=id_col,
+            df_relevant,
+            domain_cache_uri=website_domain_cache_uri,
+            decisions_path=website_quality_decisions_path,
+            review_path=website_quality_review_path,
+            id_col=id_col,
         )
         blanked_websites = set(
             website_decisions.loc[website_decisions['action'] == 'remove_website', id_col]
