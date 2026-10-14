@@ -1,4 +1,5 @@
 import asyncio
+import gc
 from concurrent.futures import ProcessPoolExecutor as ProcessPool
 
 
@@ -10,6 +11,8 @@ from urllib.parse import urljoin, urlparse
 import vdl_tools.scrape_enrich.scraper.website_processor as wp
 from vdl_tools.scrape_enrich.scraper.async_scraper import AsyncScraper
 from vdl_tools.scrape_enrich.scraper.text_quality import looks_like_bot_wall
+# Re-exported: callers import the page key from here.
+from vdl_tools.scrape_enrich.url_keys import extract_website_name  # noqa: F401
 from vdl_tools.shared_tools.web_summarization.make_page_text import make_group_text
 from vdl_tools.shared_tools.tools.logger import logger
 from vdl_tools.shared_tools.database_cache.database_models.web_scraping import WebPagesScraped, WebPagesParsed
@@ -70,32 +73,6 @@ def __clean_website_path(value: str) -> str:
         return path
     except Exception as ex:
         logger.warning(f'Error cleaning website path: {value}')
-        return None
-
-
-def extract_website_name(value: str) -> str:
-    '''
-    Clean the website name
-
-    https://google.com -> google.com
-    https://google.com/ -> google.com
-    https://somewebsite.com:port -> somewebsite.com_port
-    https://coolwebsite.com/inner/page/1 -> coolwebsite.com_inner_page_1
-    https://anotherwebsite.com?query=my-query -> anotherwebsite.com
-    '''
-    if not value:
-        return None
-    try:
-        if "//" in value:
-            website = value.split('//')[1].strip()
-        else:
-            website = value
-        website = website.split('?')[0].strip()
-        # remove trailing slash
-        website = website[:-1] if website.endswith('/') else website
-        return website.replace('/', '_').replace(':', '_')
-    except Exception as ex:
-        logger.warning(f'Error getting website name: {value}')
         return None
 
 
@@ -352,7 +329,12 @@ def scrape_websites_psql(
     max_per_host: int = 3,  # Cap concurrent requests per host to avoid 429s. None disables.
 ) -> pd.DataFrame:
 
-    urls_ids = [(ensure_url_scheme(url), extract_website_name(url)) for url in urls]
+    # A blank website ("" in Candid data) has no page key and can't be stored.
+    urls_ids = [
+        (ensure_url_scheme(url), key)
+        for url in urls
+        if (key := extract_website_name(url))
+    ]
 
     with get_session(session=session) as session:
 
@@ -651,7 +633,6 @@ def scrape_websites_psql(
                     continue
                 finally:
                     # Force garbage collection after each chunk
-                    import gc
                     gc.collect()
 
         # Combine existing and newly combined data
@@ -678,7 +659,6 @@ def _format_scraped_sites(results):
 
 
 if __name__ == '__main__':
-    from vdl_tools.shared_tools.database_cache.database_utils import get_session
     urls = [
         'https://www.vibrantdatalabs.org',
         'https://www.spicqyxdl.com/',

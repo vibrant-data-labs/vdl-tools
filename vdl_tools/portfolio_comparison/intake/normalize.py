@@ -8,6 +8,10 @@ optional because it needs the network.
 import re
 from urllib.parse import urlparse
 
+import httpx
+
+from vdl_tools.scrape_enrich.url_keys import PLATFORM_DOMAINS
+
 LEGAL_SUFFIXES = {
     "inc", "incorporated", "llc", "llp", "lp", "ltd", "limited", "corp",
     "corporation", "co", "company", "pbc", "plc", "gmbh", "sa", "bv", "ag",
@@ -53,8 +57,6 @@ def resolve_redirect(url: str, timeout: float = 10.0) -> str:
     GETs (tailspinpowercell.com), so an error status falls back to a streamed GET
     — headers only, the body is never read.
     """
-    import httpx
-
     domain = normalize_domain(url)
     if not domain:
         return ""
@@ -97,17 +99,6 @@ def domains_converge(domain_a: str, domain_b: str, resolver=None) -> bool:
     final_a, final_b = _REDIRECT_CACHE[domain_a], _REDIRECT_CACHE[domain_b]
     return bool(final_a) and final_a == final_b and final_a not in PLATFORM_DOMAINS
 
-
-# Shared-platform domains identify a platform, not an org. A customer URL
-# like linkedin.com/company/woodgrove-capital must never domain-match every
-# org whose listed website is its LinkedIn page.
-PLATFORM_DOMAINS = {
-    "linkedin.com", "facebook.com", "instagram.com", "twitter.com", "x.com",
-    "youtube.com", "medium.com", "crunchbase.com", "angel.co", "wellfound.com",
-    "wikipedia.org", "en.wikipedia.org", "google.com", "sites.google.com",
-    "docs.google.com", "linktr.ee", "notion.so", "github.com",
-    "apps.apple.com", "play.google.com",
-}
 
 _LINKEDIN_SLUG_RE = re.compile(
     r"linkedin\.com/(?:company|school|showcase)/([^/?#\s]+)", re.IGNORECASE

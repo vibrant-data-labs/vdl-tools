@@ -3,7 +3,7 @@ import urllib
 
 from more_itertools import chunked
 import pandas as pd
-from vdl_tools.scrape_enrich.scraper.scrape_websites import extract_website_name
+from vdl_tools.scrape_enrich.url_keys import website_domain
 from vdl_tools.shared_tools.database_cache.database_models.linkedin_orgs import LinkedInOrganization
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 from vdl_tools.shared_tools.tools.logger import logger as log
@@ -472,14 +472,6 @@ KEY_COLUMNS = [
 ]
 
 
-def _clean_website(website_url):
-    extracted_name = extract_website_name(website_url.lower())
-    # extract_website_name replaces "/" with "_". We want to remove that
-    # And anything that would come after
-    extracted_name = extracted_name.split('_')[0]
-    return extracted_name.replace('www.', '')
-
-
 def add_original_name_match(
     df,
     names_list,
@@ -517,10 +509,12 @@ def add_original_website_match(
     remove_duplicates=True,
 ):
     cleaned_original_urls = pd.DataFrame(website_urls, columns=['original_url'])
+    # A platform or placeholder website has no domain, so it matches nothing.
     cleaned_original_urls['cleaned_original'] = (
-        cleaned_original_urls['original_url'].apply(_clean_website)
+        cleaned_original_urls['original_url'].map(website_domain).replace("", None)
     )
-    df['cleaned_website'] = df['website'].apply(lambda x: _clean_website(x) if x else None)
+    cleaned_original_urls = cleaned_original_urls[cleaned_original_urls['cleaned_original'].notnull()]
+    df['cleaned_website'] = df['website'].map(website_domain).replace("", None)
     df = df.merge(
         cleaned_original_urls,
         left_on='cleaned_website',
