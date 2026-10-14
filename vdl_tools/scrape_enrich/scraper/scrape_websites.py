@@ -329,7 +329,12 @@ def scrape_websites_psql(
     max_per_host: int = 3,  # Cap concurrent requests per host to avoid 429s. None disables.
 ) -> pd.DataFrame:
 
-    urls_ids = [(ensure_url_scheme(url), extract_website_name(url)) for url in urls]
+    # A blank website ("" in Candid data) has no page key and can't be stored.
+    urls_ids = [
+        (ensure_url_scheme(url), key)
+        for url in urls
+        if (key := extract_website_name(url))
+    ]
 
     with get_session(session=session) as session:
 
