@@ -46,6 +46,7 @@ dependencies = [
     "plotly",
     "psycopg2-binary",
     "PySocks",
+    "rapidfuzz>=3.0",                 # why_not: fuzzy org-name resolution (already pulled in by unstructured)
     "pyyaml",
     "regex",
     "requests",
