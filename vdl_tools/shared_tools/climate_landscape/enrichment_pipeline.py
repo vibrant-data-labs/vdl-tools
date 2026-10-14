@@ -458,6 +458,7 @@ def run_pipeline(
     paths,
     enrich_input_uri=None,
     meta_output_uri=None,
+    relevance_results_uri=None,
     relevance_model_name=CB_CD_MODEL_4OMINI,
     relevance_model_system_prompt=DEFAULT_CLIMATE_SYSTEM_PROMPT,
     relevance_model_prompt_format=DEFAULT_CLIMATE_PROMPT_FORMAT,
@@ -522,7 +523,15 @@ def run_pipeline(
         n_per_commit=n_per_commit,
         max_workers=max_workers,
     )
-    df_cb_cd.to_json(paths['relevance_model_results'], orient='records')
+    if relevance_results_uri:
+        write_dataframe(
+            df_cb_cd,
+            relevance_results_uri,
+            lineage={"source": "enrichment_pipeline.run_pipeline", "relevance_model": relevance_model_name},
+        )
+    else:
+        # TODO: remove the local json once callers pass relevance_results_uri
+        df_cb_cd.to_json(paths['relevance_model_results'], orient='records')
 
     df_relevant = df_cb_cd[df_cb_cd['prediction_relevant'] == 1].copy()
     logger.info(
