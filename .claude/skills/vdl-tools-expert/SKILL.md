@@ -71,9 +71,14 @@ vocabulary doesn't know — heed that warning, don't suppress it.
 ### 4. Two different "venture" definitions — don't conflate them
 - `cb_funding_calculations.VENTURE_BACKED_ROUNDS` → the **narrow** set used by
   `climate_landscape.venture_backed_flag.add_venture_backed_flag` (seed…series_j,
-  angel, pre-seed, convertible note, corporate round, secondary market, product
-  crowdfunding; plus a grant-only + For-Profit rule). Requires the org-type
-  prediction column, so it runs AFTER the org-type classifier.
+  angel, pre-seed, convertible note, corporate round, product crowdfunding; plus a
+  grant-only + For-Profit rule). It is an explicit, test-pinned list - NOT derived from
+  `DISCLOSED_STAGES_ORDERED` - and deliberately excludes `secondary_market` (mostly
+  PE / infrastructure stake sales in Crunchbase). Change it only on purpose, with the test.
+  The for-profit test reads `org_type_col` (default `'OrgType Prediction'`, so with the
+  default it runs AFTER the org-type classifier); labels are normalized, so raw
+  `company_type` ('for_profit') and display names ('For Profit') both work, and it raises
+  if `for_profit_label` matches nothing in the column.
 - `raised_from_venture_rounds` → **broader** (also counts private equity and
   post-IPO) and is used only to infer org type.
 
@@ -105,7 +110,7 @@ keep doing that so data artifacts can be traced to the code that made them.
 | Org-type classifier | `shared_tools/org_type_classifier/` |
 | NetZero Insights processing (ECC project) | `scrape_enrich/netzero_insights/` — see the `elemental-catalytic-capital-expert` skill |
 | Keyword tagging from text | `scrape_enrich/tags_from_text.py` |
-| Per-org attribute overrides from a checked-in patch JSON | `shared_tools/org_patches.py` (`apply_org_patches`; added 2026-09-16 on branch `org-patches` — drop this note once merged) |
+| Per-org attribute overrides from a checked-in patch JSON | `shared_tools/org_patches.py` (`apply_org_patches`, #208) |
 | Common pandas/text utilities | `shared_tools/common_functions.py` |
 
 Per-project depth belongs in each repo's own project skill

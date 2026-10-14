@@ -23,6 +23,20 @@ def test_every_grouped_slug_is_a_known_round_type():
     assert grouped <= set(ft.ROUND_TYPES), grouped - set(ft.ROUND_TYPES)
 
 
+def test_venture_backed_rounds_are_pinned():
+    """The venture-backed definition is an explicit list: stage-order edits must not change it."""
+    assert ft.VENTURE_BACKED_ROUNDS == {
+        'angel', 'pre_seed', 'convertible_note', 'product_crowdfunding',
+        'seed', 'series_a', 'series_b', 'series_c', 'series_d', 'series_e',
+        'series_f', 'series_g', 'series_h', 'series_i', 'series_j',
+        'series_unknown', 'corporate_round',
+    }
+    excluded = {'secondary_market', 'equity_crowdfunding', 'initial_coin_offering',
+                'private_equity', 'debt_financing', 'grant'} | ft.POST_IPO
+    assert not (ft.VENTURE_BACKED_ROUNDS & excluded)
+    assert ft.VENTURE_BACKED_ROUNDS <= set(ft.ROUND_TYPES)
+
+
 def test_display_names_match_the_old_xlsx():
     """Spot checks against the former funding_types_mapping.xlsx values."""
     assert ft.to_display('series_a') == 'Series A'

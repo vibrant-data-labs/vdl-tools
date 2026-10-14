@@ -13,17 +13,27 @@ from sklearn.base import BaseEstimator, TransformerMixin
 
 from vdl_tools.shared_tools import s3_model
 from vdl_tools.shared_tools.tools.logger import logger
-from vdl_tools.shared_tools.cb_funding_calculations import raised_from_venture_rounds
+from vdl_tools.shared_tools.cb_funding_calculations import (
+    FOR_PROFIT_ROUND_TYPES,
+    _raw_stage,
+    _raw_types,
+    raised_from_venture_rounds,
+)
 
 # Suppress only SettingWithCopyWarning
 warnings.filterwarnings('ignore')
 
 MODEL_VERSION = '2025_03_28.0'
 MODEL_NAME = 'org_type_classifier'
-FULL_MODEL_FILENAME = f'{MODEL_NAME}_{MODEL_VERSION}.joblib'
 
-FULL_MODEL_PATH = s3_model.wd / 'models' / MODEL_NAME / FULL_MODEL_FILENAME
-MODEL_KEY = f'{MODEL_NAME}/{FULL_MODEL_FILENAME}'
+TRAINING_DATA_PATH = '../climate-landscape/data/results/cb_cd_li_meta.json'
+TRAINING_LABELS_PATH = '../shared-data-clean/data/training_labels/2025_03_26_org_type_labels.json'
+
+
+def model_paths(model_version=MODEL_VERSION):
+    """Local path and S3 key of one saved version of the model."""
+    filename = f'{MODEL_NAME}_{model_version}.joblib'
+    return s3_model.wd / 'models' / MODEL_NAME / filename, f'{MODEL_NAME}/{filename}'
 
 
 LABEL_MAP = {
@@ -33,15 +43,19 @@ LABEL_MAP = {
 
 INVERSE_LABEL_MAP = {v: k for k, v in LABEL_MAP.items()}
 
+# LinkedIn renamed this industry in its 2022 taxonomy; profiles carry either name.
+LINKEDIN_NONPROFIT_INDUSTRIES = {'Non-profit Organizations', 'Non-profit Organization Management'}
 
-def load_model():
-    if not FULL_MODEL_PATH.exists():
-        FULL_MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+def load_model(model_version=MODEL_VERSION):
+    full_model_path, model_key = model_paths(model_version)
+    if not full_model_path.exists():
+        full_model_path.parent.mkdir(parents=True, exist_ok=True)
         s3_model.s3_file(
-            key=MODEL_KEY,
-            filename=FULL_MODEL_PATH
+            key=model_key,
+            filename=full_model_path
         )
-    return joblib.load(FULL_MODEL_PATH)
+    return joblib.load(full_model_path)
 
 
 class CategoryEncoder(BaseEstimator, TransformerMixin):
@@ -56,7 +70,7 @@ class CategoryEncoder(BaseEstimator, TransformerMixin):
         X.loc[:, 'OrgType_Text_Prediction'] = model_predictions
 
         X.loc[:, 'industry_li_parsed'] = X["industry_li"].apply(lambda x: x[0] if len(x) > 0 else None)
-        X.loc[:, 'Is LinkedIn NP'] = X["industry_li"].apply(lambda x: x == "Non-profit Organizations")
+        X.loc[:, 'Is LinkedIn NP'] = X["industry_li_parsed"].apply(lambda x: x in LINKEDIN_NONPROFIT_INDUSTRIES)
 
         X.loc[:, 'Non-Profit in CB Sectors'] = X["sectors_cb_cd"].apply(lambda x: 1 if x and  "Non Profit" in x else 0)
 
@@ -72,10 +86,30 @@ class CategoryEncoder(BaseEstimator, TransformerMixin):
         return X[categorical_features]
 
 
-def train_model():
-    df = pd.read_json('../climate-landscape/data/results/cb_cd_li_meta.json')
-    labels = json.load(open('../shared-data/data/training_labels/2025_03_26_org_type_labels.json'))
+def train_model(
+    model_version,
+    training_data_path=TRAINING_DATA_PATH,
+    training_labels_path=TRAINING_LABELS_PATH,
+    extra_training_data_path=None,
+):
+    # No default version, so a retrain can't overwrite the model other projects load
+    df = pd.read_json(training_data_path)
+    labels = json.load(open(training_labels_path))
     df['Label'] = df['id'].apply(lambda x: INVERSE_LABEL_MAP.get(labels.get(x)))
+
+    # Hand-verified rows that carry their own Label, e.g. nonprofits that Crunchbase
+    # calls For Profit; their label replaces any for the same id in the main data
+    extra = pd.DataFrame()
+    if extra_training_data_path:
+        extra = pd.read_json(extra_training_data_path)
+        unknown = extra.loc[~extra['Label'].isin(INVERSE_LABEL_MAP), 'Label']
+        if len(unknown):
+            raise ValueError(
+                f"{extra_training_data_path}: {len(unknown)} row(s) with a Label other than "
+                f"{list(INVERSE_LABEL_MAP)}: {sorted(unknown.astype(str).unique())}"
+            )
+        extra['Label'] = extra['Label'].map(INVERSE_LABEL_MAP)
+        df = df[~df['id'].isin(extra['id'])]
 
     df = df[df['Label'].notnull()]
 
@@ -85,10 +119,10 @@ def train_model():
 
     # Downn sample the for profit to more closely match the number of non profit
     # But don't over downsample so that we don't have too many false false positives
-    for_profit_cb = df_cb[df_cb['Label'] == INVERSE_LABEL_MAP.get('For Profit')].sample(frac=.8)
+    for_profit_cb = df_cb[df_cb['Label'] == INVERSE_LABEL_MAP.get('For Profit')].sample(frac=.8, random_state=42)
 
     # Take some candid but not too many so that we don't have too many false positives
-    df_candid = df[(df['Data Source'] == 'Candid')].sample(n=round(len(non_profit_cb) * .1))
+    df_candid = df[(df['Data Source'] == 'Candid')].sample(n=round(len(non_profit_cb) * .1), random_state=42)
 
     training_data = pd.concat(
         [non_profit_cb, for_profit_cb, df_candid],
@@ -96,13 +130,18 @@ def train_model():
         ignore_index=True
     )
 
+    # The extra rows train the text model only. They are all orgs whose upstream
+    # Org Type is wrong, so in the category model they would teach it to distrust
+    # Org Type for every org, not just for these.
+    text_training_data = pd.concat([training_data, extra], axis=0, ignore_index=True)
+
     vectorizer = TfidfVectorizer(ngram_range=(1, 3), stop_words='english')
 
     train, test = train_test_split(
-        training_data,
+        text_training_data,
         test_size=0.2,
         random_state=42,
-        stratify=training_data['Label']
+        stratify=text_training_data['Label']
     )
 
     X_train = vectorizer.fit_transform(train['text'])
@@ -157,16 +196,17 @@ def train_model():
     ])
 
     # Save the model to the local directory
-    FULL_MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    full_model_path, model_key = model_paths(model_version)
+    full_model_path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(
         full_pipeline,
-        FULL_MODEL_PATH
+        full_model_path
     )
 
     # Save the model to S3
     s3_model.put_file(
-        key=MODEL_KEY,
-        filename=FULL_MODEL_PATH
+        key=model_key,
+        filename=full_model_path
     )
     return full_pipeline
 
@@ -182,8 +222,10 @@ def predict(
     sectors_cb_cd_field='sectors_cb_cd',
     funding_stage_field='Funding Stage',
     funding_types_field='Funding Types',
+    venture_override_skips_series_unknown=False,
+    model_version=MODEL_VERSION,
 ):
-    model = load_model()
+    model = load_model(model_version)
 
     df_cb = df[(df['Data Source'] == 'Crunchbase')]
     df_cd = df[(df['Data Source'] == 'Candid')]
@@ -220,13 +262,24 @@ def predict(
     # By this point 'Funding Types' / 'Funding Stage' hold DISPLAY names;
     # raised_from_venture_rounds normalizes them via cb_funding_types.as_raw, so
     # this override works on either vocabulary (it used to silently never fire).
+    # With venture_override_skips_series_unknown, an org whose only for-profit-style
+    # round is series_unknown keeps the model's prediction: Crunchbase also files
+    # nonprofit grants under that type, and often retypes them to grant later.
+    def venture_override(x):
+        if venture_override_skips_series_unknown and (
+            _raw_types(x, funding_types_field) & FOR_PROFIT_ROUND_TYPES == {'series_unknown'}
+            and _raw_stage(x, funding_stage_field) != 'ipo'
+        ):
+            return False
+        return raised_from_venture_rounds(
+            x,
+            funding_types_field=funding_types_field,
+            funding_stage_field=funding_stage_field
+        )
+
     prediction_df[org_type_prediction_field] = prediction_df.apply(
         lambda x: INVERSE_LABEL_MAP['For Profit']
-          if raised_from_venture_rounds(
-              x,
-              funding_types_field=funding_types_field,
-              funding_stage_field=funding_stage_field
-            )
+          if venture_override(x)
           else x[org_type_prediction_field],
         axis=1
     )
@@ -243,5 +296,5 @@ def predict(
 
 
 if __name__ == "__main__":
-    df = pd.read_json('../climate-landscape/data/results/cb_cd_li_meta.json')
+    df = pd.read_json(TRAINING_DATA_PATH)
     df = predict(df)

@@ -4,8 +4,8 @@ Per-organization ``venture_backed`` flag from the raw Crunchbase funding rounds.
 An org is venture-backed when, anywhere in its FULL round history, it has
 
   * at least one round whose ``investment_type`` is in ``VENTURE_BACKED_ROUNDS``
-    (seed, series_a..series_j, series_unknown, corporate_round, secondary_market,
-    angel, pre_seed, convertible_note, product_crowdfunding), OR
+    (seed, series_a..series_j, series_unknown, corporate_round, angel, pre_seed,
+    convertible_note, product_crowdfunding - NOT secondary_market), OR
   * ONLY ``grant`` rounds (every round in its history is a grant) AND the org
     is classified For Profit (e.g. an early-stage startup whose only funding
     is an NSF SBIR grant).
@@ -73,6 +73,17 @@ def venture_backed_org_uuids(rounds_df):
     return venture_uuids, grant_only_uuids
 
 
+def _normalize_org_type(value):
+    """Lowercase an org-type label and treat spaces/hyphens as underscores.
+
+    Makes the raw Crunchbase slug and the display names compare equal:
+    'for_profit', 'For Profit', 'For-Profit' -> 'for_profit'. Non-strings (NaN) -> None.
+    """
+    if not isinstance(value, str):
+        return None
+    return value.strip().lower().replace('-', '_').replace(' ', '_')
+
+
 def add_venture_backed_flag(
     df,
     rounds_uri,
@@ -85,13 +96,25 @@ def add_venture_backed_flag(
     ``df[id_col]`` must hold the Crunchbase org uuid for Crunchbase rows; rows
     from other sources (Candid) never match a round and get False. ``org_type_col``
     decides the grant-only rule, so this must run AFTER the org-type prediction
-    step when using the default column. The reason column is 'venture round',
-    'grant-only + for-profit', or '' and exists mainly for QA counts.
+    step when using the default column. ``for_profit_label`` matches either label
+    vocabulary (raw 'for_profit' or display 'For Profit' / 'For-Profit'); a ValueError
+    is raised if no value in ``org_type_col`` matches it. The reason column is
+    'venture round', 'grant-only + for-profit', or '' and exists mainly for QA counts.
     """
     assert org_type_col in df.columns, (
         f"{org_type_col!r} not in the frame -- run add_venture_backed_flag after "
         "the org-type prediction step (or pass org_type_col='Org Type')"
     )
+    # Compare org-type labels in normalized form, so raw Crunchbase slugs ('for_profit')
+    # and display names ('For Profit') both work. A label that matches nothing would
+    # silently switch off the grant-only rule, so fail loudly instead.
+    org_types = df[org_type_col].map(_normalize_org_type)
+    target = _normalize_org_type(for_profit_label)
+    if not org_types.eq(target).any():
+        raise ValueError(
+            f"for_profit_label {for_profit_label!r} matches no value in {org_type_col!r} "
+            f"(values: {sorted(df[org_type_col].dropna().unique())[:10]})"
+        )
 
     # Only two columns of the raw rounds are needed
     rounds = read_dataframe(rounds_uri, columns=['investment_type', 'funded_organization_identifier'])
@@ -99,7 +122,7 @@ def add_venture_backed_flag(
 
     has_venture = df[id_col].isin(venture_uuids)
     grant_only = df[id_col].isin(grant_only_uuids)
-    is_for_profit = df[org_type_col].eq(for_profit_label)
+    is_for_profit = org_types.eq(target)
 
     df[FLAG_COL] = (has_venture | (grant_only & is_for_profit)).astype(bool)
     # The two rules cannot both fire (grant-only orgs have no venture round)
