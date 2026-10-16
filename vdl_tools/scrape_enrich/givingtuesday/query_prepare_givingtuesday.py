@@ -37,6 +37,12 @@ def _make_default_client() -> GtDatamartClient:
     )
 
 
+# basic_fields column carrying 990 Part VIII line 1e (government grants).
+# Pivoted to ``government_grants_YYYY`` next to the ``column_for_funding``
+# years whenever the datamart client exposes it.
+GOV_GRANTS_COL = "government_grants"
+
+
 def _load_keywords(search_terms_list, search_terms_path, allow_empty=False):
     if search_terms_list:
         return search_terms_list
@@ -123,7 +129,8 @@ def _assemble_cb_shape(hits, basic_long, grants_long, column_for_funding):
     # Identity frame: one row per EIN, taken from its most recent filing
     # year. The identity columns (Organization, Website_cb_cd, hq_address,
     # total_revenue_current_year, total_cash_contributions,
-    # total_cash_contributions_no_gov) come straight off this row.
+    # government_grants, total_cash_contributions_no_gov) come straight off
+    # this row.
     base = (
         basic_long.sort_values(["ein", "taxyear"], ascending=[True, False])
         .drop_duplicates(subset=["ein"], keep="first")
@@ -133,6 +140,19 @@ def _assemble_cb_shape(hits, basic_long, grants_long, column_for_funding):
     contrib_wide = _pivot_year_col(
         basic_long, "ein", "taxyear", column_for_funding, column_for_funding
     )
+
+    # Government grants (990 Part VIII line 1e) pivoted alongside the
+    # funding column so consumers can split each year's contributions into
+    # government / non-government without a second datamart read. NaN
+    # (line blank on the filing) pivots to 0 like every other year cell,
+    # so "no gov money" and "line not reported" are indistinguishable
+    # here - the raw per-row value stays on the ``government_grants``
+    # identity scalar for the latest filing only.
+    if GOV_GRANTS_COL in basic_long.columns and GOV_GRANTS_COL != column_for_funding:
+        gov_wide = _pivot_year_col(
+            basic_long, "ein", "taxyear", GOV_GRANTS_COL, GOV_GRANTS_COL
+        )
+        contrib_wide = contrib_wide.merge(gov_wide, on="ein", how="left")
 
     if grants_long.empty:
         grants_wide = pd.DataFrame(columns=["ein"])
@@ -325,9 +345,13 @@ def query_process_givingtuesday_data(
       ``dba_name`` (the raw filing fields), ``Website_cb_cd``,
       ``Description``, ``hq_address``.
     * Latest-filing scalars: ``total_revenue_current_year``,
-      ``total_cash_contributions``, ``total_cash_contributions_no_gov``.
+      ``total_cash_contributions``, ``government_grants``,
+      ``total_cash_contributions_no_gov``.
     * Contributions per year: ``total_cash_contributions_YYYY`` (one
       column per filing year present), ``total_total_cash_contributions``.
+    * Government grants per year (990 Part VIII line 1e, the government
+      slice of the contributions above): ``government_grants_YYYY``,
+      ``total_government_grants``. Blank lines pivot to 0.
     * Grants per year: ``grant_YYYY``, ``total_grants_amount``,
       ``last_grant_year``, ``granters`` (EIN and three name fields).
     * CB-shaped funding aliases: ``Funding_YYYY`` (mirror of the
