@@ -101,7 +101,7 @@ ORIGINAL_INVESTOR_DETAILS_COLUMNS = [
     # "phone",
     # # "domain",
     # "sizeID",
-    # "country",
+    "country",  # where the investor is based (v2 maps it from searchableLocation); many investors lack a city
     # "logoURL",
     "acquirer",
     "continent",
