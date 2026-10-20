@@ -343,7 +343,9 @@ def add_runner_args(parser, runner_cls: type[VendorRunner]):
     parser.add_argument("--no-resume", action="store_true", help="discard previous JSONL results and start over")
 
 
-def run_cli(runner_cls: type[VendorRunner], argv=None):
+def run_cli(runner_cls: type[VendorRunner], argv=None, extra_args=None, build=None):
+    """``extra_args(parser)`` adds vendor flags; ``build(args)`` constructs the
+    runner from them (default: ``runner_cls(get_api_key(runner_cls.name))``)."""
     import argparse
 
     from vdl_tools.shared_tools.parquet_cache import read_dataframe
@@ -351,9 +353,11 @@ def run_cli(runner_cls: type[VendorRunner], argv=None):
     parser = argparse.ArgumentParser(description=runner_cls.__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     add_runner_args(parser, runner_cls)
+    if extra_args:
+        extra_args(parser)
     args = parser.parse_args(argv)
     sample = read_dataframe(args.out_dir / SAMPLE_FILENAME)
-    runner = runner_cls(get_api_key(runner_cls.name))
+    runner = build(args) if build else runner_cls(get_api_key(runner_cls.name))
     df = asyncio.run(run_vendor(
         runner, sample, args.out_dir,
         concurrency=args.concurrency, rpm=args.rpm or None,

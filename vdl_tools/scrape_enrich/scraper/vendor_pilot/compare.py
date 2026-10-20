@@ -15,7 +15,10 @@ Per URL and vendor:
   choice), which is noisier because ``filter_links`` caps per top-level
   path in set-iteration order.
 
-Per vendor and stratum: success rate, verdict shares, median markdown
+Every ``<name>_results.parquet`` in the output directory is treated as a
+vendor (``firecrawl``, ``firecrawl_mainonly``, ``spider``, ...).
+
+Per vendor and stratum: fetch and 2xx rates, verdict shares, median markdown
 length, median links, latency, pages/second (from the run meta), credits
 and cost as the vendor reported them.
 
@@ -51,7 +54,6 @@ from vdl_tools.scrape_enrich.scraper.vendor_pilot._common import (
     git_sha,
 )
 
-VENDORS = ("firecrawl", "spider", "olostep", "jina")
 MAX_PER_SUBPATH = 6  # scrape_websites_psql default
 VERDICTS = ("ok", "thin", "blocked", "parked", "garbled", "empty", "dead")
 
@@ -197,6 +199,7 @@ def per_url(sample: pd.DataFrame, vendor_df: pd.DataFrame, vendor: str) -> pd.Da
             "ours_len": r.parsed_html_len,
             "ours_verdict": r.ours_verdict,
             "success": bool(r.success),
+            "http_2xx": bool(r.success) and r.http_status is not None and 200 <= int(r.http_status) < 300,
             "api_status": r.api_status,
             "http_status": r.http_status,
             "final_url": r.final_url,
@@ -224,6 +227,7 @@ def summarize(df: pd.DataFrame, meta: dict) -> pd.DataFrame:
         out = {
             "n": len(g),
             "success_rate": g.success.mean(),
+            "http_2xx_rate": g.http_2xx.mean(),
             "ok_share": (g.vendor_verdict == "ok").mean(),
             "thin_share": (g.vendor_verdict == "thin").mean(),
             "blocked_share": (g.vendor_verdict == "blocked").mean(),
@@ -259,7 +263,8 @@ def to_markdown_table(summary: pd.DataFrame) -> str:
     cols = [
         ("stratum", "stratum", None),
         ("n", "n", "{:.0f}"),
-        ("success_rate", "success", "{:.0%}"),
+        ("success_rate", "fetched", "{:.0%}"),
+        ("http_2xx_rate", "2xx", "{:.0%}"),
         ("ok_share", "ok", "{:.0%}"),
         ("ours_ok_share", "ours ok", "{:.0%}"),
         ("recovered_share", "recovered", "{:.0%}"),
@@ -299,9 +304,9 @@ def main(argv=None):
 
     sample = read_dataframe(args.out_dir / SAMPLE_FILENAME)
     long_parts, summary_parts, md_sections = [], [], []
-    for vendor in VENDORS:
-        path = args.out_dir / f"{vendor}_results.parquet"
-        if not path.exists():
+    for path in sorted(args.out_dir.glob("*_results.parquet")):
+        vendor = path.name[: -len("_results.parquet")]
+        if vendor.startswith("comparison"):
             continue
         vendor_df = read_dataframe(path)
         logger.info("%s: %s fetched rows", vendor, len(vendor_df))

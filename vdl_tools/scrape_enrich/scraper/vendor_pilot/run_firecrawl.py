@@ -2,7 +2,16 @@
 
 Request: ``formats=['markdown', 'rawHtml', 'links']``, ``maxAge=0`` (no
 vendor cache), ``proxy='auto'`` (retries blocked fetches through their
-stealth pool, billed at a higher credit rate when used).
+stealth pool, billed at a higher credit rate when used),
+``onlyMainContent=false``.
+
+``onlyMainContent`` (Firecrawl default ``true``) drops header, nav and
+footer from the markdown AND from the ``links`` array: probed on one Wix
+site, the default returned 0 internal links and ``false`` returned 8
+(about, team, projects, ...). Our subpage rules live on exactly those nav
+links, so the main run uses ``false``; ``--only-main-content`` runs the
+default under the name ``firecrawl_mainonly`` to measure how much nav text
+pads the markdown.
 
 Free plan limits (docs, 2026-10): 1,000 credits/month, 10 ``/scrape``
 requests per minute, 2 concurrent browsers. The defaults below sit at
@@ -40,12 +49,19 @@ class FirecrawlRunner(VendorRunner):
     default_rpm = 10
     timeout_seconds = 150.0
 
+    def __init__(self, api_key: str, only_main_content: bool = False):
+        super().__init__(api_key)
+        self.only_main_content = only_main_content
+        if only_main_content:
+            self.name = "firecrawl_mainonly"
+
     async def fetch(self, client: httpx.AsyncClient, url: str) -> FetchResult:
         payload = {
             "url": url,
             "formats": ["markdown", "rawHtml", "links"],
             "maxAge": 0,
             "proxy": "auto",
+            "onlyMainContent": self.only_main_content,
             "timeout": 60000,
         }
         response = await client.post(f"{self.base_url}/scrape", json=payload)
@@ -81,5 +97,18 @@ class FirecrawlRunner(VendorRunner):
         return response.json().get("data")
 
 
+def _build(args):
+    from vdl_tools.scrape_enrich.scraper.vendor_pilot._common import get_api_key
+    return FirecrawlRunner(get_api_key(FirecrawlRunner.name), only_main_content=args.only_main_content)
+
+
 if __name__ == "__main__":
-    run_cli(FirecrawlRunner)
+    run_cli(
+        FirecrawlRunner,
+        extra_args=lambda p: p.add_argument(
+            "--only-main-content", action="store_true",
+            help="Firecrawl's default (drops nav/header/footer from markdown and links); "
+                 "results go to firecrawl_mainonly_*",
+        ),
+        build=_build,
+    )
