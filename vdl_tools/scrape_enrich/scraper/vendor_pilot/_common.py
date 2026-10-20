@@ -156,6 +156,16 @@ class VendorRunner:
         """Account balance as the vendor reports it (raw JSON), or None."""
         return None
 
+    async def start(self):
+        """Called once before the first fetch (open browsers, pools, ...)."""
+
+    async def stop(self):
+        """Called once after the last fetch."""
+
+    async def run_context(self) -> dict | None:
+        """Where/how the run happened, stored in the run meta (host, egress IP, ...)."""
+        return None
+
     @staticmethod
     def raise_for_api_status(response: httpx.Response):
         status = response.status_code
@@ -249,6 +259,8 @@ async def run_vendor(
     stop_reason = None
 
     async with httpx.AsyncClient(headers=runner.headers(), timeout=runner.timeout_seconds) as client:
+        await runner.start()
+        context = await runner.run_context()
         credits_before = await _safe_credits(runner, client)
         started = datetime.now(timezone.utc)
         t_start = time.monotonic()
@@ -283,9 +295,12 @@ async def run_vendor(
                                     runner.name, progress["n"], len(todo), progress["ok"],
                                     elapsed / 60, progress["n"] / max(elapsed, 1e-6))
 
-        await asyncio.gather(*(one(row) for row in todo.itertuples(index=False)))
-        t_end = time.monotonic()
-        ended = datetime.now(timezone.utc)
+        try:
+            await asyncio.gather(*(one(row) for row in todo.itertuples(index=False)))
+        finally:
+            t_end = time.monotonic()
+            ended = datetime.now(timezone.utc)
+            await runner.stop()
         credits_after = await _safe_credits(runner, client)
 
     rows = load_jsonl(jsonl_path)
@@ -301,6 +316,7 @@ async def run_vendor(
         "pages_per_second_this_run": round(progress["n"] / max(t_end - t_start, 1e-6), 4),
         "concurrency": concurrency,
         "rpm": rpm,
+        "runner_context": context,
         "credits_before": credits_before,
         "credits_after": credits_after,
         "stop_reason": stop_reason,
