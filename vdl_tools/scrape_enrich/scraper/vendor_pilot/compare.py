@@ -239,6 +239,9 @@ def summarize(df: pd.DataFrame, meta: dict) -> pd.DataFrame:
             "n": len(g),
             "success_rate": g.success.mean(),
             "http_2xx_rate": g.http_2xx.mean(),
+            # The decision metric: the site answered 2xx AND the text passes the
+            # gate. "ok" alone lets a 404 page with a long nav/footer through.
+            "usable_share": (g.http_2xx & (g.vendor_verdict == "ok")).mean(),
             "ok_share": (g.vendor_verdict == "ok").mean(),
             "thin_share": (g.vendor_verdict == "thin").mean(),
             "blocked_share": (g.vendor_verdict == "blocked").mean(),
@@ -280,6 +283,7 @@ def to_markdown_table(summary: pd.DataFrame) -> str:
         ("n", "n", "{:.0f}"),
         ("success_rate", "fetched", "{:.0%}"),
         ("http_2xx_rate", "2xx", "{:.0%}"),
+        ("usable_share", "usable (2xx+ok)", "{:.0%}"),
         ("ok_share", "ok", "{:.0%}"),
         ("ours_ok_share", "ours ok", "{:.0%}"),
         ("recovered_share", "recovered", "{:.0%}"),
@@ -321,8 +325,9 @@ def headline_tables(summary_df: pd.DataFrame) -> str:
     vendors = list(summary_df.vendor.unique())
     out = []
     for key, title, fmt in (
-        ("ok_share", "Share of pages whose text passes `classify_text_quality` (ok)", "{:.0%}"),
+        ("usable_share", "Usable: site answered 2xx AND the text passes `classify_text_quality`", "{:.0%}"),
         ("http_2xx_rate", "Share fetched with a 2xx status", "{:.0%}"),
+        ("ok_share", "Share whose text passes the gate regardless of status (a 404 page with a long nav can pass)", "{:.0%}"),
         ("escalated_share", "Share needing the expensive path (browser fallback / stealth proxy)", "{:.0%}"),
         ("median_wall_s_fetched", "Median seconds per fetched page", "{:.1f}"),
         ("p95_wall_s", "p95 seconds per page (all attempts)", "{:.1f}"),

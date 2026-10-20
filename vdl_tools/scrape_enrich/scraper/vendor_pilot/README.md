@@ -1,8 +1,14 @@
 # Vendor pilot: can Firecrawl or Spider replace the in-house fetch-and-extract layer?
 
-**Status (2026-10-20):** Firecrawl measured on the full 1,000-URL sample.
-Spider not run yet (no API key in config.ini). Results and recommendation
-are in [Results](#results).
+**Status (2026-10-20):** Firecrawl measured on the full 1,000-URL sample,
+against the in-house scraper run the same day on the same URLs from a
+laptop and from an EC2 instance. Spider not run (no API key in config.ini
+yet; runner ready). Short version: Firecrawl gets usable text from 74% of
+the sample versus 61 to 63% for us, with identical reachability, a 1%
+expensive-path rate versus our 25%, similar per-page latency, 1 credit per
+fetched page, and a links array that stands in for our link extraction when
+`onlyMainContent=false`. See [Results](#results) and
+[Recommendation](#recommendation).
 
 ## The question
 
@@ -139,7 +145,191 @@ URL), `comparison_summary.parquet` and `comparison_summary.md`.
 
 ## Results
 
-<!-- RESULTS -->
+### Summary
+
+Same 1,000 home URLs, fetched the same day (2026-10-20). "Usable" means
+the site answered 2xx and the text passes `classify_text_quality`.
+
+| | Firecrawl (full page) | in-house, laptop | in-house, EC2 r5.xlarge |
+|---|---|---|---|
+| usable | **74%** | 63% | 61% |
+| fetched with 2xx | 77% | 77% | 75% |
+| expensive path (stealth proxy / browser fallback) | 1% | 26% | 25% |
+| median s per fetched page | 3.4 | 1.1 | 2.4 |
+| p95 s per page, all attempts | 24.5 | 18.4 | 35.3 |
+| throughput achieved | 0.15 pages/s (free plan cap: 10 req/min) | 3.9 pages/s | 2.2 pages/s |
+| cost | 895 credits for 1,000 URLs; failed fetches billed 0 | laptop time | instance time, shared with a production job |
+
+**Reachability is the same; the gain is extraction and bot walls.** Both
+sides got a 2xx from 77% of the sample. Paired per URL, Firecrawl versus
+the laptop run: usable on both 621, Firecrawl only 117, laptop only 9,
+neither 253. The 117 Firecrawl-only pages are 55 bot walls our browser
+path still cannot get through, 26 pages where our extraction returned thin
+text, 20 where it returned nothing even after the browser retry, and 16
+that did not resolve or connect from the laptop. The 9 laptop-only pages
+are 3 Firecrawl timeouts, 2 vendor 500s, 2 pages Firecrawl saw as 404 and
+one as 403. On the stratum built from cache rows whose extraction came
+back empty (`empty_combined`), Firecrawl is usable on 68% against our 32
+to 34%.
+
+**The links array is a usable substitute, with `onlyMainContent=false`.**
+On the 603 URLs whose raw HTML holds internal links, the array recovers a
+median 93% of the paths our BeautifulSoup extraction finds (at least 90%
+on 64% of pages, under 50% on 8%). After `filter_links` with
+`PATHS_TO_KEEP`, the subpages production would choose match with a median
+recall of 1.0 (at least 0.9 on 95% of the 445 pages where we pick any).
+With Firecrawl's default `onlyMainContent=true` the median recall is 0.31.
+
+**Full-page markdown pads the text.** On the 60 URLs fetched both ways,
+verdicts agree on 55; nav and footer text lifted 3 of 9 thin pages over
+the 200-character line. Markdown runs 7,586 characters median full-page
+against 4,983 main-content-only (2,365 vs 1,758 after stripping link
+syntax), and the links array 24 against 9. The padding also lets a 404
+page with a long nav pass the gate (40% of the `status_404` stratum reads
+"ok" full-page, 12% main-content-only), which is why the usable metric
+requires a 2xx.
+
+**Billing and failures.** The balance moved 1,442 to 547 over the full run:
+895 credits, exactly the sum of per-page `creditsUsed`, one per fetched
+page. The 12 stealth-proxy escalations billed 1 credit each in both places
+(the docs quote a higher stealth rate; not observed here). The whole pilot
+cost 949 credits. The 105 failed fetches: 60 DNS failures, 15 "all
+engines failed", 13 API timeouts (408), 7 connection or tunnel errors, 5
+vendor rate-limit 429s that outlasted the harness's 4 attempts, 2 TLS
+errors, 3 invalid URLs. 32 URLs hit the 4-attempt retry on terminal 500s
+(median 58 s each), which inflates the all-attempts p95; over fetched
+pages the p95 is 15.2 s.
+
+**Laptop versus EC2.** The two in-house runs agree on the verdict for 96%
+of URLs. The datacenter IP costs 0.4 points of bot walls (6.3% vs 5.9%)
+and 8 points on the historically rate-limited stratum. The latency gap is
+the machine, not the IP: 4 vCPUs shared with a running ed_tracker job,
+where each Chromium fallback took 30 s median against 15 s on the laptop.
+
+**Olostep** (sibling run, 2026-10-19, 60-site panel, not this sample):
+40/60 html-usable against 37/60 for the in-house scraper, 8.6 s median
+per page, 49 credits reported for 60 requests. Not re-run here.
+
+### Recommendation
+
+**Firecrawl can replace the fetch-and-extract layer behind the existing
+cache**, and on this sample it is a clear improvement where it matters
+(bot walls, JS shells, pages our extraction returns empty) at no loss in
+reachability. Adopt it on these terms:
+
+1. Request `formats=['markdown','rawHtml','links']` with
+   `onlyMainContent=false` and `maxAge=0`. Take internal links from the
+   array (same-host absolute URL to path, as `compare.vendor_links_as_hrefs`
+   does) and keep `filter_links` + `PATHS_TO_KEEP` unchanged. Keeping
+   `rawHtml` costs nothing extra and leaves our BeautifulSoup path as a
+   fallback.
+2. Gate on `metadata.statusCode` (2xx) before `classify_text_quality`;
+   full-page markdown of a 404 or a parked page can pass the text gate on
+   its own.
+3. Store the markdown as `parsed_html`. It carries about a third more
+   text than our main-content extraction (nav, footer), which the
+   summarizer tolerates and which flipped 3 of 60 verdicts from thin to
+   ok. If that padding turns out to matter, run `unstructured` over
+   `rawHtml` instead, which keeps today's `parsed_html` semantics for the
+   same credit.
+4. Treat HTTP 500 with a `SCRAPE_*` code as a terminal failure (dead
+   target), and respect the plan's requests-per-minute with backoff: at the
+   free plan's 10/min, retries pushed 5 URLs into 429s.
+5. Budget: 1 credit per fetched page, failures free. A full refresh of
+   the cache (130k homes, 490k pages) is about 490k credits, roughly
+   $2,450 at the Hobby plan's marginal $0.005 per credit; larger plans
+   quote lower per-credit rates. The free plan's 10 requests/min is for
+   pilots only; Standard (500/min, 25 browsers) would put a full refresh
+   at about a day of wall time at the measured 3.4 s median.
+
+**Not measured yet**: Spider on the same sample (key pending), subpage
+fetches (same call, not sampled here), and throughput and billing at paid
+concurrency. Next steps, in order: run `run_spider.py` when the key lands;
+a 10k-URL run on a paid plan to confirm throughput and per-credit cost at
+scale; then the cache adapter (markdown to `parsed_html`, links array to
+`filter_links`) as a `scrape_websites_psql` backend.
+
+### Headline tables (generated by `compare.py`; full per-vendor tables, verdict crosstabs and fetch-mode mixes are in `.cache/vendor_pilot/comparison_summary.md`)
+
+Columns: `firecrawl_mainonly` = Firecrawl default `onlyMainContent=true`, first 60 sampled URLs; `firecrawl` = `onlyMainContent=false`, all 1,000; `inhouse_ec2` / `inhouse_laptop` = our scraper on the same 1,000 URLs the same day, from a datacenter and a residential IP.
+
+#### Usable: site answered 2xx AND the text passes `classify_text_quality`
+
+| stratum | firecrawl_mainonly | firecrawl | inhouse_ec2 | inhouse_laptop |
+|---|---|---|---|---|
+| ok_200 | 100% | 95% | 89% | 90% |
+| empty_combined | 64% | 68% | 32% | 34% |
+| status_429 | 89% | 90% | 79% | 87% |
+| status_0 | 14% | 32% | 13% | 16% |
+| status_404 | 12% | 8% | 6% | 7% |
+| ALL | 70% | 74% | 61% | 63% |
+
+#### Share fetched with a 2xx status
+
+| stratum | firecrawl_mainonly | firecrawl | inhouse_ec2 | inhouse_laptop |
+|---|---|---|---|---|
+| ok_200 | 100% | 97% | 96% | 97% |
+| empty_combined | 64% | 75% | 79% | 82% |
+| status_429 | 89% | 90% | 84% | 90% |
+| status_0 | 29% | 34% | 19% | 22% |
+| status_404 | 12% | 9% | 8% | 8% |
+| ALL | 72% | 77% | 75% | 77% |
+
+#### Share whose text passes the gate regardless of status (a 404 page with a long nav can pass)
+
+| stratum | firecrawl_mainonly | firecrawl | inhouse_ec2 | inhouse_laptop |
+|---|---|---|---|---|
+| ok_200 | 100% | 95% | 89% | 90% |
+| empty_combined | 64% | 70% | 32% | 34% |
+| status_429 | 100% | 98% | 79% | 87% |
+| status_0 | 14% | 34% | 13% | 16% |
+| status_404 | 12% | 40% | 6% | 7% |
+| ALL | 72% | 78% | 61% | 63% |
+
+#### Share needing the expensive path (browser fallback / stealth proxy)
+
+| stratum | firecrawl_mainonly | firecrawl | inhouse_ec2 | inhouse_laptop |
+|---|---|---|---|---|
+| ok_200 | 0% | 1% | 24% | 23% |
+| empty_combined | 0% | 3% | 60% | 60% |
+| status_429 | 0% | 0% | 3% | 7% |
+| status_0 | 0% | 2% | 5% | 9% |
+| status_404 | 0% | 0% | 3% | 4% |
+| ALL | 0% | 1% | 25% | 26% |
+
+#### Median seconds per fetched page
+
+| stratum | firecrawl_mainonly | firecrawl | inhouse_ec2 | inhouse_laptop |
+|---|---|---|---|---|
+| ok_200 | 2.8 | 3.2 | 1.8 | 0.9 |
+| empty_combined | 4.5 | 3.8 | 27.2 | 13.8 |
+| status_429 | 3.7 | 5.2 | 1.7 | 0.7 |
+| status_0 | 1.8 | 4.2 | 2.3 | 1.7 |
+| status_404 | 1.8 | 1.8 | 2.3 | 8.4 |
+| ALL | 3.0 | 3.4 | 2.4 | 1.1 |
+
+#### p95 seconds per page (all attempts)
+
+| stratum | firecrawl_mainonly | firecrawl | inhouse_ec2 | inhouse_laptop |
+|---|---|---|---|---|
+| ok_200 | 7.7 | 15.5 | 34.7 | 18.2 |
+| empty_combined | 65.3 | 60.4 | 37.9 | 19.9 |
+| status_429 | 8.5 | 17.3 | 5.2 | 13.2 |
+| status_0 | 2.7 | 101.7 | 8.8 | 12.9 |
+| status_404 | 9.3 | 13.7 | 7.2 | 14.7 |
+| ALL | 17.9 | 24.5 | 35.3 | 18.4 |
+
+#### Median recall of our HTML link extraction by the vendor links array
+
+| stratum | firecrawl_mainonly | firecrawl | inhouse_ec2 | inhouse_laptop |
+|---|---|---|---|---|
+| ok_200 | 0.31 | 0.93 | — | — |
+| empty_combined | 0.21 | 0.95 | — | — |
+| status_429 | 0.63 | 0.95 | — | — |
+| status_0 | 0.38 | 0.97 | — | — |
+| status_404 | 0.40 | 0.00 | — | — |
+| ALL | 0.31 | 0.93 | — | — |
+
 
 ## Caveats and dead ends
 
@@ -148,6 +338,24 @@ URL), `comparison_summary.parquet` and `comparison_summary.md`.
   external partners), none of the nav links our subpage rules select. See
   the probe above. Either send `false`, or keep our BeautifulSoup extraction
   over `rawHtml` (same credit, no change to our link logic).
+- **A text gate alone is not enough on full-page markdown.** A 404 page
+  or a parked page with a long nav exceeds the 200-char thin threshold;
+  `compare.py` reports "usable" as 2xx and ok for that reason.
+- **The harness retried terminal errors in the full Firecrawl run.**
+  Firecrawl answers a dead target with HTTP 500 and a `SCRAPE_*` code;
+  the run treated 500 as transient and retried up to 4 times with backoff
+  (32 URLs, 14 s of sleep each, plus 3 wasted rate-limited calls). Fixed in
+  `run_firecrawl.py` after the run; the all-attempts p95 carries it.
+- **5 URLs were lost to vendor 429s**: the harness's own limiter sat at
+  the plan's 10/min, but retries on top of it exceeded the limit at times.
+  They would succeed on a rerun (resume handles it); they count as failed
+  here.
+- **Stealth escalations billed 1 credit** in this run (12 pages), although
+  the pricing docs quote a higher stealth rate. Observed on the free plan;
+  check on a paid plan before budgeting on it.
+- **The EC2 baseline shared its box with a production job** (ed_tracker,
+  one core at 100%) and ran under `nice`, which is most of why its browser
+  fallbacks took twice as long as the laptop's.
 - **Pages/second on the free plan is the plan's rate limit**, not the
   vendor's throughput: 10 requests/min, 2 concurrent browsers. Paid plans
   advertise 100 to 5,000 requests/min; the per-page wall time (which
