@@ -34,7 +34,8 @@ case $cmd in
     remote "nice -n 10 $remote_py -m vdl_tools.scrape_enrich.scraper.vendor_pilot.run_inhouse --label ec2 --limit 3 2>&1 | grep -v ' - DEBUG - ' | tail -8"
     ;;
   run)
-    remote "nohup nice -n 10 $remote_py -m vdl_tools.scrape_enrich.scraper.vendor_pilot.run_inhouse --label ec2 > $cache/inhouse_ec2_run.log 2>&1 &"
+    # setsid + /dev/null stdin so ssh returns instead of waiting on the job's terminal.
+    remote "setsid nohup nice -n 10 $remote_py -m vdl_tools.scrape_enrich.scraper.vendor_pilot.run_inhouse --label ec2 > $cache/inhouse_ec2_run.log 2>&1 < /dev/null & disown"
     echo "started; check with: $0 status $host"
     ;;
   status)
