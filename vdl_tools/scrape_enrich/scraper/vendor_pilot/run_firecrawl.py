@@ -40,6 +40,26 @@ KEEP_METADATA = (
 )
 
 
+# Firecrawl answers an unreachable target with HTTP 500 and one of these codes.
+# They describe the target, not the API, so retrying is waste: the first full
+# run (2026-10-20) retried them 4x before this check existed, which inflates
+# that run's wall time on dead sites by up to 14 s of backoff.
+TERMINAL_SCRAPE_CODES = (
+    "SCRAPE_ALL_ENGINES_FAILED", "SCRAPE_SITE_ERROR", "SCRAPE_SSL_ERROR",
+    "SCRAPE_DNS_RESOLUTION_ERROR", "SCRAPE_TIMEOUT", "SCRAPE_UNSUPPORTED_FILE_ERROR",
+)
+
+
+def _terminal_scrape_error(response: httpx.Response) -> bool:
+    if response.status_code != 500:
+        return False
+    try:
+        code = response.json().get("code") or ""
+    except ValueError:
+        return False
+    return code.startswith("SCRAPE_") or code in TERMINAL_SCRAPE_CODES
+
+
 class FirecrawlRunner(VendorRunner):
     """Firecrawl v2 scrape, vendor cache bypassed."""
 
@@ -65,7 +85,8 @@ class FirecrawlRunner(VendorRunner):
             "timeout": 60000,
         }
         response = await client.post(f"{self.base_url}/scrape", json=payload)
-        self.raise_for_api_status(response)
+        if not _terminal_scrape_error(response):
+            self.raise_for_api_status(response)
         result = FetchResult(vendor=self.name, url=url, api_status=response.status_code)
         try:
             body = response.json()

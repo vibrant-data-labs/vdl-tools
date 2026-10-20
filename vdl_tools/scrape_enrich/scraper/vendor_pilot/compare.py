@@ -186,10 +186,14 @@ def per_url(sample: pd.DataFrame, vendor_df: pd.DataFrame, vendor: str) -> pd.Da
         vendor_df.drop(columns=["stratum", "url"], errors="ignore"),
         on="cleaned_key", how="inner",
     )
+    # The in-house runner has no links array: our extraction over its raw
+    # HTML *is* the reference, so array-vs-HTML recall is not applicable.
+    has_links_array = not vendor.startswith("inhouse")
     rows = []
     for r in merged.itertuples(index=False):
         plain = markdown_to_plain(r.markdown or "")
         verdict = classify_text_quality(plain, 0 if r.success else 1)
+        meta = r.vendor_metadata if isinstance(r.vendor_metadata, dict) else {}
         row = {
             "vendor": vendor,
             "cleaned_key": r.cleaned_key,
@@ -215,8 +219,15 @@ def per_url(sample: pd.DataFrame, vendor_df: pd.DataFrame, vendor: str) -> pd.Da
             "vendor_verdict": verdict,
             "recovered": r.ours_verdict != "ok" and verdict == "ok",
             "lost": r.ours_verdict == "ok" and verdict != "ok",
+            # how the page was fetched: http/browser/failed (in-house), basic/stealth proxy (Firecrawl)
+            "mode": meta.get("method") or meta.get("proxyUsed") or ("failed" if not r.success else None),
         }
-        row.update(link_metrics(r.home_url, r.raw_html or "", r.links or []))
+        links = link_metrics(r.home_url, r.raw_html or "", r.links or [])
+        if not has_links_array:
+            for key in ("vendor_n_internal", "internal_recall", "internal_jaccard",
+                        "vendor_n_pick", "pick_recall", "pick_jaccard"):
+                links[key] = None
+        row.update(links)
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -240,7 +251,11 @@ def summarize(df: pd.DataFrame, meta: dict) -> pd.DataFrame:
             "median_plain_len": ok.plain_len.median() if len(ok) else np.nan,
             "median_links": ok.n_links.median() if len(ok) else np.nan,
             "median_wall_s": g.wall_seconds.median(),
+            "median_wall_s_fetched": ok.wall_seconds.median() if len(ok) else np.nan,
             "p95_wall_s": g.wall_seconds.quantile(0.95),
+            # browser fallback (in-house) or stealth/enhanced proxy (Firecrawl): the expensive path
+            "escalated_share": g["mode"].isin(["browser", "stealth", "enhanced"]).mean(),
+            "mode_mix": g["mode"].fillna("none").value_counts().to_dict(),
             "internal_recall_median": g.internal_recall.median(),
             "internal_recall_ge_0_9": (g.internal_recall >= 0.9).sum() / g.internal_recall.notna().sum()
             if g.internal_recall.notna().any() else np.nan,
@@ -278,7 +293,9 @@ def to_markdown_table(summary: pd.DataFrame) -> str:
         ("internal_recall_median", "link recall (med)", "{:.2f}"),
         ("pick_recall_median", "pick recall (med)", "{:.2f}"),
         ("median_wall_s", "med s/page", "{:.1f}"),
+        ("median_wall_s_fetched", "med s (fetched)", "{:.1f}"),
         ("p95_wall_s", "p95 s/page", "{:.1f}"),
+        ("escalated_share", "browser/stealth", "{:.0%}"),
         ("credits_reported", "credits (api)", "{:.0f}"),
         ("cost_usd_reported", "cost $ (api)", "{:.4f}"),
     ]
@@ -295,6 +312,33 @@ def to_markdown_table(summary: pd.DataFrame) -> str:
                 cells.append(str(val))
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
+
+
+def headline_tables(summary_df: pd.DataFrame) -> str:
+    """Stratum x vendor pivots of the numbers that decide the question."""
+    strata = [s for s in ("ok_200", "empty_combined", "status_429", "status_0", "status_404", "ALL")
+              if s in set(summary_df.stratum)]
+    vendors = list(summary_df.vendor.unique())
+    out = []
+    for key, title, fmt in (
+        ("ok_share", "Share of pages whose text passes `classify_text_quality` (ok)", "{:.0%}"),
+        ("http_2xx_rate", "Share fetched with a 2xx status", "{:.0%}"),
+        ("escalated_share", "Share needing the expensive path (browser fallback / stealth proxy)", "{:.0%}"),
+        ("median_wall_s_fetched", "Median seconds per fetched page", "{:.1f}"),
+        ("p95_wall_s", "p95 seconds per page (all attempts)", "{:.1f}"),
+        ("internal_recall_median", "Median recall of our HTML link extraction by the vendor links array", "{:.2f}"),
+    ):
+        pivot = summary_df.pivot(index="stratum", columns="vendor", values=key).reindex(strata)
+        lines = [f"**{title}**", "", "| stratum | " + " | ".join(vendors) + " |",
+                 "|---|" + "|".join("---" for _ in vendors) + "|"]
+        for stratum in strata:
+            cells = []
+            for v in vendors:
+                val = pivot.loc[stratum, v] if v in pivot.columns else np.nan
+                cells.append("—" if val is None or (isinstance(val, float) and np.isnan(val)) else fmt.format(val))
+            lines.append(f"| {stratum} | " + " | ".join(cells) + " |")
+        out.append("\n".join(lines))
+    return "\n\n".join(out)
 
 
 def main(argv=None):
@@ -319,6 +363,7 @@ def main(argv=None):
             index=[v for v in VERDICTS if v in set(df.ours_verdict)],
             columns=[v for v in VERDICTS if v in set(df.vendor_verdict)],
         )
+        mode_mix = pd.crosstab(df.stratum, df["mode"].fillna("none"))
         md_sections.append(
             f"### {vendor}\n\n"
             f"Run meta: {json.dumps({k: v for k, v in meta.items() if k not in ('balance_before_first_run', 'balance_after_last_run')}, default=str)}\n\n"
@@ -327,6 +372,8 @@ def main(argv=None):
             + to_markdown_table(summary)
             + "\n\nOur cached verdict (rows) vs vendor verdict (columns):\n\n"
             + crosstab.to_markdown()
+            + "\n\nFetch mode by stratum:\n\n"
+            + mode_mix.to_markdown()
             + "\n"
         )
 
@@ -344,7 +391,7 @@ def main(argv=None):
     }
     write_dataframe(long_df, args.out_dir / "comparison_results.parquet", lineage=lineage)
     write_dataframe(summary_df, args.out_dir / "comparison_summary.parquet", lineage=lineage)
-    md = "\n\n".join(md_sections)
+    md = "## Headline\n\n" + headline_tables(summary_df) + "\n\n## Per vendor\n\n" + "\n\n".join(md_sections)
     (args.out_dir / "comparison_summary.md").write_text(md)
     print(md)
 
