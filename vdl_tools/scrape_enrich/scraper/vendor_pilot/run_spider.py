@@ -19,6 +19,7 @@ import httpx
 
 from vdl_tools.scrape_enrich.scraper.vendor_pilot._common import (
     FetchResult,
+    StopRun,
     VendorRunner,
     run_cli,
 )
@@ -45,6 +46,10 @@ class SpiderRunner(VendorRunner):
             "metadata": True,
         }
         response = await client.post(f"{self.base_url}/scrape", json=payload)
+        if response.status_code == 403:
+            # Spider answers an exhausted balance with 403; nothing else in this
+            # pilot can trigger a 403 from the API itself.
+            raise StopRun(f"vendor API returned 403: {response.text[:300]}")
         self.raise_for_api_status(response)
         result = FetchResult(vendor=self.name, url=url, api_status=response.status_code)
         try:

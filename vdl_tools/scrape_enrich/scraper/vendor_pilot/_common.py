@@ -142,6 +142,7 @@ class VendorRunner:
     default_concurrency = 20
     default_rpm: float | None = None
     timeout_seconds = 120.0
+    max_attempts = MAX_ATTEMPTS  # API-level attempts per URL (429/5xx/transport)
 
     def __init__(self, api_key: str):
         self._api_key = api_key
@@ -183,7 +184,8 @@ class VendorRunner:
 async def _fetch_with_retry(runner: VendorRunner, client: httpx.AsyncClient, url: str) -> FetchResult:
     t0 = time.monotonic()
     last_error = None
-    for attempt in range(1, MAX_ATTEMPTS + 1):
+    max_attempts = runner.max_attempts
+    for attempt in range(1, max_attempts + 1):
         try:
             result = await runner.fetch(client, url)
             result.attempts = attempt
@@ -191,16 +193,20 @@ async def _fetch_with_retry(runner: VendorRunner, client: httpx.AsyncClient, url
             return result.finalize()
         except ApiRetry as exc:
             last_error = f"{exc} (api_status={exc.api_status})"
+            if attempt == max_attempts:
+                break
             delay = exc.retry_after if exc.retry_after is not None else min(60, 2 ** attempt)
-            logger.warning("%s: %s; retry %s/%s in %.0fs", runner.name, url, attempt, MAX_ATTEMPTS, delay)
+            logger.warning("%s: %s; retry %s/%s in %.0fs", runner.name, url, attempt, max_attempts, delay)
             await asyncio.sleep(delay)
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             last_error = f"{type(exc).__name__}: {exc}"
+            if attempt == max_attempts:
+                break
             logger.warning("%s: %s; transport error on attempt %s: %s", runner.name, url, attempt, last_error)
             await asyncio.sleep(min(30, 2 ** attempt))
     return FetchResult(
         vendor=runner.name, url=url, success=False, error=last_error,
-        attempts=MAX_ATTEMPTS, wall_seconds=time.monotonic() - t0,
+        attempts=max_attempts, wall_seconds=time.monotonic() - t0,
     ).finalize()
 
 
