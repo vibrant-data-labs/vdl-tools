@@ -1,14 +1,15 @@
 # Vendor pilot: can Firecrawl or Spider replace the in-house fetch-and-extract layer?
 
-**Status (2026-10-20):** Firecrawl measured on the full 1,000-URL sample,
-against the in-house scraper run the same day on the same URLs from a
-laptop and from an EC2 instance. Spider not run (no API key in config.ini
-yet; runner ready). Short version: Firecrawl gets usable text from 74% of
-the sample versus 61 to 63% for us, with identical reachability, a 1%
-expensive-path rate versus our 25%, similar per-page latency, 1 credit per
-fetched page, and a links array that stands in for our link extraction when
-`onlyMainContent=false`. See [Results](#results) and
-[Recommendation](#recommendation).
+**Status (2026-10-21):** Firecrawl, Olostep and Spider (plain and
+browser-rendered) measured on the same 1,000-URL sample, against the
+in-house scraper run the same day on the same URLs from a laptop and from
+an EC2 instance. Short version: Firecrawl gets usable text from 74% of the
+sample, Olostep 73% once its unreported 404s are discounted, Spider 67%
+(66% with rendering forced), the in-house scraper 61 to 63%. Firecrawl is
+the recommendation: it is the only vendor that both handles the
+JavaScript-shell and bot-wall pages we fail on today and reports the
+target's real status code, which the text gate needs. See
+[Results](#results) and [Recommendation](#recommendation).
 
 ## The question
 
@@ -185,58 +186,101 @@ URL), `comparison_summary.parquet` and `comparison_summary.md`.
 
 ### Summary
 
-Same 1,000 home URLs, fetched the same day (2026-10-20). "Usable" means
-the site answered 2xx and the text passes `classify_text_quality`.
+Same 1,000 home URLs, fetched the same day. "Usable" means the site
+answered 2xx and the text passes `classify_text_quality`. Olostep reports
+status 200 for every page it fetches, so its "as reported" figures include
+51 pages the other vendors see as 404; the strict figure removes them.
 
-| | Firecrawl (full page) | in-house, laptop | in-house, EC2 r5.xlarge |
+| | Firecrawl | Olostep | Spider (smart) | Spider (chrome) | in-house, laptop | in-house, EC2 |
+|---|---|---|---|---|---|---|
+| usable | **74%** | 79% as reported, **73%** strict | 67% | 66% | 63% | 61% |
+| fetched with 2xx | 77% | 88% as reported | 80% | 82% | 77% | 75% |
+| any content returned | 90% | 88% | 91% | 97% | 77% | 75% |
+| expensive path | 1% stealth proxy | always rendered | not reported | always rendered | 26% browser | 25% browser |
+| median s per fetched page | 3.4 | 5.8 | 2.1 | 11.4 | 1.1 | 2.4 |
+| p95 s per page, all attempts | 24.5 | 56.0 | 37.7 | 102.6 | 18.4 | 35.3 |
+| throughput achieved | 0.15 pages/s (free plan cap) | 0.93 pages/s (10 concurrent) | 2.6 pages/s (20 concurrent) | 0.93 pages/s (20 concurrent) | 3.9 pages/s | 2.2 pages/s |
+| links array vs our HTML extraction, median recall | 0.93 | 0.93 (0.30 on the empty-extraction stratum) | 1.00 | 1.00 | n/a | n/a |
+| billed for the 1,000 URLs | 895 credits | 876 credits over exactly 1,000 calls | $0.37 | $1.41 | laptop time | instance time |
+| list price per 1,000 credits or pages | Hobby $3.20, Standard $0.83, Growth $0.67 | Starter $1.80, Standard $0.50, Scale $0.40 | $0.37 measured (bytes + CPU) | $1.41 measured | | |
+
+**Reachability is the same; the differences are extraction, rendering
+and bot walls.** Every fetcher got a 2xx from 75 to 80% of the sample
+(Olostep's 88% is its own fetch status, not the target's). Paired per URL
+against the in-house laptop run, usable on the vendor only / on the laptop
+only:
+
+| vendor | vendor only | laptop only | what the vendor-only pages were on the laptop |
 |---|---|---|---|
-| usable | **74%** | 63% | 61% |
-| fetched with 2xx | 77% | 77% | 75% |
-| expensive path (stealth proxy / browser fallback) | 1% | 26% | 25% |
-| median s per fetched page | 3.4 | 1.1 | 2.4 |
-| p95 s per page, all attempts | 24.5 | 18.4 | 35.3 |
-| throughput achieved | 0.15 pages/s (free plan cap: 10 req/min) | 3.9 pages/s | 2.2 pages/s |
-| cost | 895 credits for 1,000 URLs; failed fetches billed 0 | laptop time | instance time, shared with a production job |
+| Firecrawl | 117 | 9 | 55 bot walls, 26 thin, 20 empty, 16 unreachable |
+| Olostep (strict) | 130 | 25 | 56 bot walls, 28 unreachable, 26 thin, 18 empty |
+| Spider (smart) | 104 | 63 | 56 bot walls, 26 unreachable, 13 thin, 9 empty |
 
-**Reachability is the same; the gain is extraction and bot walls.** Both
-sides got a 2xx from 77% of the sample. Paired per URL, Firecrawl versus
-the laptop run: usable on both 621, Firecrawl only 117, laptop only 9,
-neither 253. The 117 Firecrawl-only pages are 55 bot walls our browser
-path still cannot get through, 26 pages where our extraction returned thin
-text, 20 where it returned nothing even after the browser retry, and 16
-that did not resolve or connect from the laptop. The 9 laptop-only pages
-are 3 Firecrawl timeouts, 2 vendor 500s, 2 pages Firecrawl saw as 404 and
-one as 403. On the stratum built from cache rows whose extraction came
-back empty (`empty_combined`), Firecrawl is usable on 68% against our 32
-to 34%.
+and against Firecrawl: Olostep (strict) wins 28 and loses 31 (a wash: its
+losses are 17 pages where its own scrape timed out or failed TLS and 14
+thin extractions; 8 of its wins are pages Firecrawl saw as HTTP 402, which
+Olostep reports as 200); Spider smart wins 23 and loses 90; Spider chrome
+wins 42 and loses 119. On the stratum built from cache rows whose
+extraction came back empty (`empty_combined`), Firecrawl and Olostep are
+usable on 68 and 67%, Spider on 50% (58% rendered), the in-house scraper
+on 32 to 34%.
 
-**The links array is a usable substitute, with `onlyMainContent=false`.**
-On the 603 URLs whose raw HTML holds internal links, the array recovers a
-median 93% of the paths our BeautifulSoup extraction finds (at least 90%
-on 64% of pages, under 50% on 8%). After `filter_links` with
-`PATHS_TO_KEEP`, the subpages production would choose match with a median
-recall of 1.0 (at least 0.9 on 95% of the 445 pages where we pick any).
-With Firecrawl's default `onlyMainContent=true` the median recall is 0.31.
+**Spider's gap is rendering.** Of its 124 pages that answered 2xx but came
+back thin or empty in smart mode, 95 are JavaScript app shells (median raw
+HTML 3 KB) fetched over plain HTTP. Forcing `request='chrome'` made 26 of
+those 95 usable; Firecrawl makes 67 of them usable. 83 chrome-mode pages
+came back as an empty document (`<html><head></head><body></body></html>`)
+with a 525 or 504 status, so Spider's browser path fails where Firecrawl's
+and Olostep's succeed, at four times the price and five times the latency
+of its smart mode.
 
-**Full-page markdown pads the text.** On the 60 URLs fetched both ways,
-verdicts agree on 55; nav and footer text lifted 3 of 9 thin pages over
-the 200-character line. Markdown runs 7,586 characters median full-page
-against 4,983 main-content-only (2,365 vs 1,758 after stripping link
-syntax), and the links array 24 against 9. The padding also lets a 404
-page with a long nav pass the gate (40% of the `status_404` stratum reads
-"ok" full-page, 12% main-content-only), which is why the usable metric
-requires a 2xx.
+**Links.** With `onlyMainContent=false` Firecrawl's links array recovers
+a median 93% of the internal links our BeautifulSoup extraction finds in
+its raw HTML (at least 90% on 64% of pages); after `filter_links` the
+chosen subpages match with a median recall of 1.0 (at least 0.9 on 95% of
+the pages where we pick any). Olostep's array is comparable overall (0.93,
+at least 0.9 on 52%) but drops to 0.30 on the empty-extraction stratum,
+exactly the pages a vendor is for; after `filter_links` it is 1.0 median,
+at least 0.9 on 91%. Spider's array matches our extraction on 94% of pages,
+by construction: both come from the same HTTP source. With Firecrawl's
+default `onlyMainContent=true` the median recall is 0.31.
 
-**Billing and failures.** The balance moved 1,442 to 547 over the full run:
-895 credits, exactly the sum of per-page `creditsUsed`, one per fetched
-page. The 12 stealth-proxy escalations billed 1 credit each in both places
-(the docs quote a higher stealth rate; not observed here). The whole pilot
-cost 949 credits. The 105 failed fetches: 60 DNS failures, 15 "all
-engines failed", 13 API timeouts (408), 7 connection or tunnel errors, 5
-vendor rate-limit 429s that outlasted the harness's 4 attempts, 2 TLS
-errors, 3 invalid URLs. 32 URLs hit the 4-attempt retry on terminal 500s
-(median 58 s each), which inflates the all-attempts p95; over fetched
-pages the p95 is 15.2 s.
+**Full-page markdown pads the text.** On the 60 URLs Firecrawl fetched
+both ways, verdicts agree on 55; nav and footer text lifted 3 of 9 thin
+pages over the 200-character line. Markdown runs 7,586 characters median
+full-page against 4,983 main-content-only (2,365 vs 1,758 after stripping
+link syntax), and the links array 24 against 9. The padding also lets a
+404 page with a long nav pass the gate (40% of the `status_404` stratum
+reads "ok" full-page, 12% main-content-only), which is why the usable
+metric requires a 2xx, and why Olostep's missing status codes matter.
+
+**Billing and failures.**
+
+- *Firecrawl*: the balance moved 1,442 to 547 over the full run, 895
+  credits, exactly the sum of per-page `creditsUsed`: one per fetched page,
+  the 105 failures free, the 12 stealth-proxy escalations billed 1 credit
+  each (the docs quote a higher stealth rate; not observed on the free
+  plan). The pilot cost 949 credits in all. Failures: 60 DNS, 15 "all
+  engines failed", 13 API timeouts (408), 7 connection or tunnel errors, 5
+  vendor rate-limit 429s that outlasted the harness's attempts, 2 TLS, 3
+  invalid URLs.
+- *Olostep*: 876 credits over exactly 1,000 API calls (the run's cap),
+  one per fetched page, failures free; `cost_usd` came back null on the
+  free plan and $0.92 on the 521 pages fetched after the top-up (about
+  $1.76 per 1,000 fetched pages, the Starter rate). The run was split
+  across two sessions: the free plan's credits ran out after 479 URLs
+  (`402 credits_exhausted`), Zein bought credits, and the resume fetched
+  the remaining 521 under the same settings and the same cap. Failures:
+  57 DNS, 50 of its own 55-second scrape timeouts, 17 TLS, 1 empty.
+- *Spider*: $0.37 for the smart run and $1.41 for the chrome run from the
+  per-page `costs.total_cost` (10,000 credits = $1), which matched the
+  `/data/credits` balance delta on every run that did not overlap a
+  top-up (the balance rose from 2,488 to 248,819 credits during the smart
+  run). Cost is 98% correlated with raw HTML size. Failures (smart): 49
+  "domain does not exist", 4 empty, 2 "Malicious URL not allowed", 2
+  unreachable, 1 geo-blocked, others; chrome: 29.
+- *In-house*: 231 of 1,000 fetches failed on the laptop (119 HTTP errors,
+  106 dead links), 255 went through the Playwright fallback.
 
 **Laptop versus EC2.** The two in-house runs agree on the verdict for 96%
 of URLs. The datacenter IP costs 0.4 points of bot walls (6.3% vs 5.9%)
@@ -244,16 +288,13 @@ and 8 points on the historically rate-limited stratum. The latency gap is
 the machine, not the IP: 4 vCPUs shared with a running ed_tracker job,
 where each Chromium fallback took 30 s median against 15 s on the laptop.
 
-**Olostep** (sibling run, 2026-10-19, 60-site panel, not this sample):
-40/60 html-usable against 37/60 for the in-house scraper, 8.6 s median
-per page, 49 credits reported for 60 requests. Not re-run here.
-
 ### Recommendation
 
-**Firecrawl can replace the fetch-and-extract layer behind the existing
-cache**, and on this sample it is a clear improvement where it matters
-(bot walls, JS shells, pages our extraction returns empty) at no loss in
-reachability. Adopt it on these terms:
+**Adopt Firecrawl for the fetch-and-extract layer behind the existing
+cache.** It is the only vendor that is best or tied on usable text *and*
+reports the target's real status code, and its advantage is concentrated
+where our scraper fails today: JavaScript shells, bot walls and pages our
+extraction returns empty. Terms:
 
 1. Request `formats=['markdown','rawHtml','links']` with
    `onlyMainContent=false` and `maxAge=0`. Take internal links from the
@@ -274,100 +315,127 @@ reachability. Adopt it on these terms:
    target), and respect the plan's requests-per-minute with backoff: at the
    free plan's 10/min, retries pushed 5 URLs into 429s.
 5. Budget: 1 credit per fetched page, failures free. A full refresh of
-   the cache (130k homes, 490k pages) is about 490k credits, roughly
-   $2,450 at the Hobby plan's marginal $0.005 per credit; larger plans
-   quote lower per-credit rates. The free plan's 10 requests/min is for
-   pilots only; Standard (500/min, 25 browsers) would put a full refresh
-   at about a day of wall time at the measured 3.4 s median.
+   the cache (130k homes, 490k pages, about 440k fetched) fits in one
+   month of the Growth plan ($333/month, 500k credits, 50 concurrent
+   browsers, 5,000 requests/min); Standard ($83/month, 100k credits, 25
+   browsers) covers incremental runs. At the measured 3.4 s median, 25
+   concurrent browsers put a full refresh at roughly a day of wall time.
 
-**Not measured yet**: Spider on the same sample (key pending), subpage
-fetches (same call, not sampled here), and throughput and billing at paid
-concurrency. Next steps, in order: run `run_spider.py` when the key lands;
-a 10k-URL run on a paid plan to confirm throughput and per-credit cost at
-scale; then the cache adapter (markdown to `parsed_html`, links array to
-`filter_links`) as a `scrape_websites_psql` backend.
+**Olostep** is the second choice: text parity with Firecrawl (73% strict
+vs 74%) at a lower list price ($0.50 vs $0.83 per 1,000 on the Standard
+plans), but it reports 200 for every page it fetches (the 2xx gate cannot
+work; 51 of its "usable" pages are 404s the others catch), 5% of pages
+hit its 55-second timeout, median latency is 5.8 s, and its links array
+misses most of our links on the empty-extraction stratum. Choose it only
+if price dominates and we add our own 404-page detection.
+
+**Spider** is the cheapest ($0.37 per 1,000 pages) and the fastest over
+HTTP, with a perfect links array and the same strength on bot walls, but
+its rendering is the weakest: it leaves the JavaScript shells that are our
+main failure class unrendered, and forcing Chrome recovers a quarter of
+them at four times the price and five times the latency, with 83 empty
+documents. It does not fit fetch-and-extract across our population on its
+own. A two-tier design (Spider smart first, Firecrawl for the pages that
+come back thin or empty) would cut Firecrawl credits by roughly two
+thirds; worth costing only once the single-vendor path is in place.
+
+**Not measured**: subpage fetches (same call, not sampled here) and
+throughput and billing at paid concurrency. Next steps, in order: a
+10k-URL run on a paid Firecrawl plan to confirm throughput and per-credit
+cost at scale; then the cache adapter (markdown to `parsed_html`, links
+array to `filter_links`) as a `scrape_websites_psql` backend.
 
 ### Headline tables (generated by `compare.py`; full per-vendor tables, verdict crosstabs and fetch-mode mixes are in `.cache/vendor_pilot/comparison_summary.md`)
 
-Columns: `firecrawl_mainonly` = Firecrawl default `onlyMainContent=true`, first 60 sampled URLs; `firecrawl` = `onlyMainContent=false`, all 1,000; `inhouse_ec2` / `inhouse_laptop` = our scraper on the same 1,000 URLs the same day, from a datacenter and a residential IP.
+Columns: `firecrawl` = `onlyMainContent=false`, all 1,000; `firecrawl_mainonly` = Firecrawl default, first 60 sampled URLs; `olostep` = all 1,000 across two sessions (free credits ran out at 479, resumed after a top-up); `spider` = `request='smart'`; `spider_chrome` = `request='chrome'`; `inhouse_ec2` / `inhouse_laptop` = our scraper on the same 1,000 URLs the same day (2026-10-20), from a datacenter and a residential IP. Olostep's 2xx and usable rows are inflated: it reports status 200 for pages the other vendors see as 404 (see Caveats).
+
+#### URLs attempted (a run cut short by credits covers a stratified prefix of the sample)
+
+| stratum | firecrawl_mainonly | firecrawl | inhouse_ec2 | inhouse_laptop | olostep | spider_chrome | spider |
+|---|---|---|---|---|---|---|---|
+| ok_200 | 25 | 500 | 500 | 500 | 500 | 500 | 500 |
+| empty_combined | 11 | 200 | 200 | 200 | 200 | 200 | 200 |
+| status_429 | 9 | 100 | 100 | 100 | 100 | 100 | 100 |
+| status_0 | 7 | 100 | 100 | 100 | 100 | 100 | 100 |
+| status_404 | 8 | 100 | 100 | 100 | 100 | 100 | 100 |
+| ALL | 60 | 1000 | 1000 | 1000 | 1000 | 1000 | 1000 |
 
 #### Usable: site answered 2xx AND the text passes `classify_text_quality`
 
-| stratum | firecrawl_mainonly | firecrawl | inhouse_ec2 | inhouse_laptop |
-|---|---|---|---|---|
-| ok_200 | 100% | 95% | 89% | 90% |
-| empty_combined | 64% | 68% | 32% | 34% |
-| status_429 | 89% | 90% | 79% | 87% |
-| status_0 | 14% | 32% | 13% | 16% |
-| status_404 | 12% | 8% | 6% | 7% |
-| ALL | 70% | 74% | 61% | 63% |
+| stratum | firecrawl_mainonly | firecrawl | inhouse_ec2 | inhouse_laptop | olostep | spider_chrome | spider |
+|---|---|---|---|---|---|---|---|
+| ok_200 | 100% | 95% | 89% | 90% | 94% | 85% | 90% |
+| empty_combined | 64% | 68% | 32% | 34% | 68% | 58% | 50% |
+| status_429 | 89% | 90% | 79% | 87% | 97% | 69% | 95% |
+| status_0 | 14% | 32% | 13% | 16% | 32% | 23% | 23% |
+| status_404 | 12% | 8% | 6% | 7% | 54% | 25% | 6% |
+| ALL | 70% | 74% | 61% | 63% | 79% | 66% | 67% |
 
 #### Share fetched with a 2xx status
 
-| stratum | firecrawl_mainonly | firecrawl | inhouse_ec2 | inhouse_laptop |
-|---|---|---|---|---|
-| ok_200 | 100% | 97% | 96% | 97% |
-| empty_combined | 64% | 75% | 79% | 82% |
-| status_429 | 89% | 90% | 84% | 90% |
-| status_0 | 29% | 34% | 19% | 22% |
-| status_404 | 12% | 9% | 8% | 8% |
-| ALL | 72% | 77% | 75% | 77% |
+| stratum | firecrawl_mainonly | firecrawl | inhouse_ec2 | inhouse_laptop | olostep | spider_chrome | spider |
+|---|---|---|---|---|---|---|---|
+| ok_200 | 100% | 97% | 96% | 97% | 97% | 96% | 97% |
+| empty_combined | 64% | 75% | 79% | 82% | 84% | 85% | 86% |
+| status_429 | 89% | 90% | 84% | 90% | 100% | 92% | 98% |
+| status_0 | 29% | 34% | 19% | 22% | 40% | 39% | 37% |
+| status_404 | 12% | 9% | 8% | 8% | 83% | 34% | 8% |
+| ALL | 72% | 77% | 75% | 77% | 88% | 82% | 80% |
 
 #### Share whose text passes the gate regardless of status (a 404 page with a long nav can pass)
 
-| stratum | firecrawl_mainonly | firecrawl | inhouse_ec2 | inhouse_laptop |
-|---|---|---|---|---|
-| ok_200 | 100% | 95% | 89% | 90% |
-| empty_combined | 64% | 70% | 32% | 34% |
-| status_429 | 100% | 98% | 79% | 87% |
-| status_0 | 14% | 34% | 13% | 16% |
-| status_404 | 12% | 40% | 6% | 7% |
-| ALL | 72% | 78% | 61% | 63% |
+| stratum | firecrawl_mainonly | firecrawl | inhouse_ec2 | inhouse_laptop | olostep | spider_chrome | spider |
+|---|---|---|---|---|---|---|---|
+| ok_200 | 100% | 95% | 89% | 90% | 94% | 86% | 90% |
+| empty_combined | 64% | 70% | 32% | 34% | 68% | 58% | 50% |
+| status_429 | 100% | 98% | 79% | 87% | 97% | 69% | 95% |
+| status_0 | 14% | 34% | 13% | 16% | 32% | 25% | 25% |
+| status_404 | 12% | 40% | 6% | 7% | 54% | 46% | 24% |
+| ALL | 72% | 78% | 61% | 63% | 79% | 69% | 69% |
 
 #### Share needing the expensive path (browser fallback / stealth proxy)
 
-| stratum | firecrawl_mainonly | firecrawl | inhouse_ec2 | inhouse_laptop |
-|---|---|---|---|---|
-| ok_200 | 0% | 1% | 24% | 23% |
-| empty_combined | 0% | 3% | 60% | 60% |
-| status_429 | 0% | 0% | 3% | 7% |
-| status_0 | 0% | 2% | 5% | 9% |
-| status_404 | 0% | 0% | 3% | 4% |
-| ALL | 0% | 1% | 25% | 26% |
+| stratum | firecrawl_mainonly | firecrawl | inhouse_ec2 | inhouse_laptop | olostep | spider_chrome | spider |
+|---|---|---|---|---|---|---|---|
+| ok_200 | 0% | 1% | 24% | 23% | 0% | 0% | 0% |
+| empty_combined | 0% | 3% | 60% | 60% | 0% | 0% | 0% |
+| status_429 | 0% | 0% | 3% | 7% | 0% | 0% | 0% |
+| status_0 | 0% | 2% | 5% | 9% | 0% | 0% | 0% |
+| status_404 | 0% | 0% | 3% | 4% | 0% | 0% | 0% |
+| ALL | 0% | 1% | 25% | 26% | 0% | 0% | 0% |
 
 #### Median seconds per fetched page
 
-| stratum | firecrawl_mainonly | firecrawl | inhouse_ec2 | inhouse_laptop |
-|---|---|---|---|---|
-| ok_200 | 2.8 | 3.2 | 1.8 | 0.9 |
-| empty_combined | 4.5 | 3.8 | 27.2 | 13.8 |
-| status_429 | 3.7 | 5.2 | 1.7 | 0.7 |
-| status_0 | 1.8 | 4.2 | 2.3 | 1.7 |
-| status_404 | 1.8 | 1.8 | 2.3 | 8.4 |
-| ALL | 3.0 | 3.4 | 2.4 | 1.1 |
+| stratum | firecrawl_mainonly | firecrawl | inhouse_ec2 | inhouse_laptop | olostep | spider_chrome | spider |
+|---|---|---|---|---|---|---|---|
+| ok_200 | 2.8 | 3.2 | 1.8 | 0.9 | 6.1 | 10.6 | 2.0 |
+| empty_combined | 4.5 | 3.8 | 27.2 | 13.8 | 5.7 | 12.0 | 2.6 |
+| status_429 | 3.7 | 5.2 | 1.7 | 0.7 | 5.9 | 17.8 | 2.2 |
+| status_0 | 1.8 | 4.2 | 2.3 | 1.7 | 4.8 | 15.8 | 2.2 |
+| status_404 | 1.8 | 1.8 | 2.3 | 8.4 | 3.4 | 6.1 | 1.7 |
+| ALL | 3.0 | 3.4 | 2.4 | 1.1 | 5.8 | 11.4 | 2.1 |
 
 #### p95 seconds per page (all attempts)
 
-| stratum | firecrawl_mainonly | firecrawl | inhouse_ec2 | inhouse_laptop |
-|---|---|---|---|---|
-| ok_200 | 7.7 | 15.5 | 34.7 | 18.2 |
-| empty_combined | 65.3 | 60.4 | 37.9 | 19.9 |
-| status_429 | 8.5 | 17.3 | 5.2 | 13.2 |
-| status_0 | 2.7 | 101.7 | 8.8 | 12.9 |
-| status_404 | 9.3 | 13.7 | 7.2 | 14.7 |
-| ALL | 17.9 | 24.5 | 35.3 | 18.4 |
+| stratum | firecrawl_mainonly | firecrawl | inhouse_ec2 | inhouse_laptop | olostep | spider_chrome | spider |
+|---|---|---|---|---|---|---|---|
+| ok_200 | 7.7 | 15.5 | 34.7 | 18.2 | 17.4 | 78.3 | 11.1 |
+| empty_combined | 65.3 | 60.4 | 37.9 | 19.9 | 56.1 | 105.2 | 51.6 |
+| status_429 | 8.5 | 17.3 | 5.2 | 13.2 | 18.7 | 105.2 | 29.1 |
+| status_0 | 2.7 | 101.7 | 8.8 | 12.9 | 60.5 | 105.2 | 75.2 |
+| status_404 | 9.3 | 13.7 | 7.2 | 14.7 | 56.5 | 93.0 | 44.9 |
+| ALL | 17.9 | 24.5 | 35.3 | 18.4 | 56.0 | 102.6 | 37.7 |
 
 #### Median recall of our HTML link extraction by the vendor links array
 
-| stratum | firecrawl_mainonly | firecrawl | inhouse_ec2 | inhouse_laptop |
-|---|---|---|---|---|
-| ok_200 | 0.31 | 0.93 | — | — |
-| empty_combined | 0.21 | 0.95 | — | — |
-| status_429 | 0.63 | 0.95 | — | — |
-| status_0 | 0.38 | 0.97 | — | — |
-| status_404 | 0.40 | 0.00 | — | — |
-| ALL | 0.31 | 0.93 | — | — |
-
+| stratum | firecrawl_mainonly | firecrawl | inhouse_ec2 | inhouse_laptop | olostep | spider_chrome | spider |
+|---|---|---|---|---|---|---|---|
+| ok_200 | 0.31 | 0.93 | — | — | 0.82 | 1.00 | 1.00 |
+| empty_combined | 0.21 | 0.95 | — | — | 0.30 | 1.00 | 1.00 |
+| status_429 | 0.63 | 0.95 | — | — | 0.99 | 1.00 | 1.00 |
+| status_0 | 0.38 | 0.97 | — | — | 1.00 | 1.00 | 1.00 |
+| status_404 | 0.40 | 0.00 | — | — | 1.00 | 1.00 | 1.00 |
+| ALL | 0.31 | 0.93 | — | — | 0.93 | 1.00 | 1.00 |
 
 ## Caveats and dead ends
 
@@ -376,6 +444,27 @@ Columns: `firecrawl_mainonly` = Firecrawl default `onlyMainContent=true`, first 
   external partners), none of the nav links our subpage rules select. See
   the probe above. Either send `false`, or keep our BeautifulSoup extraction
   over `rawHtml` (same credit, no change to our link logic).
+- **Olostep reports status 200 for every page it fetches**, including
+  the 33 pages in the `status_404` stratum that Firecrawl and Spider both
+  report as 404 and the 8 pages Firecrawl saw as 402. Its "2xx" is its own
+  fetch status. The README quotes a strict usable share with the pages the
+  other two vendors both call 404 removed; production would need its own
+  404-page detection on Olostep output.
+- **Olostep's run was split across two sessions.** The free plan's
+  credits ran out after 479 URLs (`402 credits_exhausted`, 2026-10-21
+  14:16 PDT); Zein bought credits and the resume fetched the remaining
+  521 (14:28 to 14:38 PDT) under the same settings and the same 1,000-call
+  cap, which the run hit exactly. The shuffled sample keeps both halves
+  stratified; the two halves' timings are 12 minutes apart.
+- **Olostep's selector setting is not what was asked for** (`"none"`):
+  see Vendor settings. The JSON-stringified form of a custom selector list
+  is silently ignored by the API; send a JSON array.
+- **Spider refused 2 URLs as "Malicious URL not allowed"** and
+  geo-blocked 1 ("could not be served from country 'co'"); the smart run's
+  balance was topped up mid-run, so its spend is the per-page cost sum.
+- **Spider chrome returned 83 empty documents** with 525/504 statuses on
+  pages Firecrawl and Olostep render; its browser path, not the targets,
+  is the limit.
 - **A text gate alone is not enough on full-page markdown.** A 404 page
   or a parked page with a long nav exceeds the 200-char thin threshold;
   `compare.py` reports "usable" as 2xx and ok for that reason.
