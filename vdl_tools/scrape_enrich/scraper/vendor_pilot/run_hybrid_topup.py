@@ -90,11 +90,15 @@ async def run_topup(fetcher, targets: pd.DataFrame, out_dir: Path, concurrency: 
                 if n["done"] % 50 == 0:
                     logger.info("%s top-up: %s/%s", fetcher.name, n["done"], len(todo))
 
+    balance_after = None
     try:
         await asyncio.gather(*(one(r) for r in todo.itertuples(index=False)))
     finally:
+        try:
+            balance_after = await fetcher.balance()   # before stop(): needs the client
+        except Exception as exc:  # noqa: BLE001
+            balance_after = {"error": str(exc)[:200]}
         await fetcher.stop()
-    balance_after = await fetcher.balance()
     rows = load_jsonl(jsonl)
     df = pd.DataFrame(rows)
     meta = {"runner": fetcher.name, "git_sha": git_sha(), "n_pages_this_run": n["done"], "n_pages_total": len(rows),

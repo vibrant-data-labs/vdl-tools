@@ -33,6 +33,7 @@ import httpx
 
 from vdl_tools.scrape_enrich.scraper.vendor_pilot._common import (
     RateLimiter,
+    StopRun,
     _fetch_with_retry,
     get_api_key,
 )
@@ -51,9 +52,12 @@ class FirecrawlFetcher(PageFetcher):
     name = "firecrawl"
     default_org_concurrency = 25
 
-    def __init__(self, api_key: str, max_concurrent: int = 25, rpm: float | None = 500):
+    def __init__(self, api_key: str, max_concurrent: int = 25, rpm: float | None = 500,
+                 credit_cap: float | None = 15000):
         self.runner = FirecrawlRunner(api_key, only_main_content=False)
         self.max_concurrent, self.rpm = max_concurrent, rpm
+        self.credit_cap = credit_cap
+        self.credits_used = 0.0   # per-page creditsUsed summed over this process
         self.sem = asyncio.Semaphore(max_concurrent)
         self.limiter = RateLimiter(rpm)
         self.client: httpx.AsyncClient | None = None
@@ -72,12 +76,16 @@ class FirecrawlFetcher(PageFetcher):
     async def run_context(self):
         return {"formats": ["markdown", "rawHtml", "links"], "onlyMainContent": False, "maxAge": 0,
                 "proxy": "auto", "max_concurrent": self.max_concurrent, "rpm": self.rpm,
+                "credit_cap": self.credit_cap,
                 "link_source": "array (filter_anchors + filter_links over data.links); picks_html recorded from rawHtml"}
 
     async def fetch_page(self, url: str, subpath: str, page_type: str) -> PageResult:
+        if self.credit_cap is not None and self.credits_used >= self.credit_cap:
+            raise StopRun(f"credit cap of {self.credit_cap:g} reached ({self.credits_used:g} used this run)")
         async with self.sem:
             await self.limiter.acquire()
             fr = await _fetch_with_retry(self.runner, self.client, url, self.retry_counter)
+        self.credits_used += float(fr.credits or 0)
         page = PageResult(
             url=url, subpath=subpath, page_type=page_type, success=fr.success,
             api_status=fr.api_status, http_status=fr.http_status, text=fr.markdown,
@@ -158,13 +166,16 @@ class FakeFetcher(PageFetcher):
 def _factory(args):
     if args.fake:
         return FakeFetcher()
-    return FirecrawlFetcher(get_api_key("firecrawl"), max_concurrent=args.max_concurrent, rpm=args.rpm or None)
+    return FirecrawlFetcher(get_api_key("firecrawl"), max_concurrent=args.max_concurrent, rpm=args.rpm or None,
+                            credit_cap=args.credit_cap or None)
 
 
 def _extra_args(parser):
     parser.add_argument("--fake", action="store_true", help="deterministic fake vendor: no network, no credits")
     parser.add_argument("--max-concurrent", type=int, default=25, help="requests in flight (Standard: 25 browsers)")
     parser.add_argument("--rpm", type=float, default=500, help="requests per minute (Standard: 500); 0 = unlimited")
+    parser.add_argument("--credit-cap", type=float, default=15000,
+                        help="stop the run once this many credits were billed in this process (0 = no cap)")
 
 
 if __name__ == "__main__":

@@ -336,13 +336,14 @@ async def run_e2e(fetcher: PageFetcher, orgs: pd.DataFrame, out_dir: Path, *,
                                 fetcher.name, progress["n"], len(todo), progress["usable"], progress["pages"],
                                 progress["credits"], el / 60, progress["pages"] / max(el, 1e-6))
 
+    balance_after = None
     try:
         await asyncio.gather(*(one(org) for org in todo.itertuples(index=False)))
     finally:
         t_end = time.monotonic()
         ended = datetime.now(timezone.utc)
+        balance_after = await _safe(fetcher.balance)   # before stop(): the balance call needs the client
         await fetcher.stop()
-    balance_after = await _safe(fetcher.balance)
 
     records = load_jsonl(paths["jsonl"])
     orgs_df = pd.DataFrame([_org_to_row(d) for d in records])
