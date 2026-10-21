@@ -331,6 +331,7 @@ def headline_tables(summary_df: pd.DataFrame) -> str:
     vendors = list(summary_df.vendor.unique())
     out = []
     for key, title, fmt in (
+        ("n", "URLs attempted (a run cut short by credits covers a stratified prefix of the sample)", "{:.0f}"),
         ("usable_share", "Usable: site answered 2xx AND the text passes `classify_text_quality`", "{:.0%}"),
         ("http_2xx_rate", "Share fetched with a 2xx status", "{:.0%}"),
         ("ok_share", "Share whose text passes the gate regardless of status (a 404 page with a long nav can pass)", "{:.0%}"),

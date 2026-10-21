@@ -86,12 +86,44 @@ uses `false`. The cost is nav/footer text in the markdown, which our
 `firecrawl_mainonly` to size that effect.
 
 **Spider** `POST /scrape`: `return_format=['markdown','raw']`,
-`return_page_links=true`, `request='smart'`, `cache=false`,
-`metadata=true`; 20 concurrent. Runner written, not run (no key).
+`return_page_links=true`, `request='smart'` (HTTP first, Chrome only when
+Spider decides it is needed), `cache=false`, `metadata=true`; 20
+concurrent; a 403 (exhausted balance) stops the run. Pay-as-you-go,
+metered on bytes and CPU time, 10,000 credits = $1; the per-page
+`costs.total_cost` is the spend (it matched the balance delta exactly on
+the smoke run). `--request-mode chrome` runs the same sample with
+rendering forced, as `spider_chrome`, because the smart run left most
+JavaScript app shells unrendered.
 
-Both runners talk REST through `httpx` (already a dependency) rather than
-the vendor SDKs: the pilot is throwaway and a new dependency needs a team
-decision first.
+**Olostep** `POST /v1/scrapes`: `formats=['html','markdown']`,
+`links_on_page={}` (absolute URLs), `max_age` default 0 (fresh),
+`remove_css_selectors=["script","style","noscript"]` sent as a JSON
+array; 10 concurrent, API attempts capped at 2, run capped at 1,000
+requests. The setting asked for was `"none"` (keep nav and footer so the
+links array compares with Firecrawl full-page), but `"none"` also leaves
+`<style>` and `<script>` bodies in the markdown (one 6.6k-character page
+came back as 43k characters, mostly CSS), the JSON-*stringified* list the
+docs describe is silently ignored, and `"default"` strips nav links from
+`links_on_page` and timed out more often, so the array form is what ran.
+Target failures come back as the API's own 400 (`dns_resolution_failed`),
+502 (`tls_error`) and 504 (`scrape_poll_timeout`, about 55 s) and are
+recorded, not retried; 402 (`credits_exhausted`) stops the run. 1 credit
+per fetched page, failures free; the API reports no balance and
+`cost_usd` came back null.
+
+**In-house baseline** (`run_inhouse.py`): the production path for an
+index page without the cache: `AsyncScraper.scrape_url` (httpx, then
+Playwright Chromium with stealth on a JS wall or JS shell), then
+`_process_scraped_with_browser_retry` (`unstructured` text extraction,
+browser retry when the text is empty or a bot wall). Same concurrency as
+`scrape_websites_psql` (20 HTTP, 3 browser, 3 per host). Run on the
+laptop (residential IP) and, via `remote_baseline.sh`, on the EC2 box
+`zein_playground` (r5.xlarge, datacenter IP, shared with a running
+ed_tracker job, under `nice`).
+
+All vendor runners talk REST through `httpx` (already a dependency)
+rather than the vendor SDKs: the pilot is throwaway and a new dependency
+needs a team decision first.
 
 ### Metrics (`compare.py`)
 
@@ -130,9 +162,15 @@ From the repo root, in the `vdl-tools-312` env, with
 ```bash
 python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.sample_urls
 python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.run_firecrawl --limit 3     # smoke
-python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.run_firecrawl                 # ~100 min on the free plan
+python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.run_firecrawl                 # ~110 min on the free plan
 python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.run_firecrawl --only-main-content --limit 60
-python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.run_spider
+python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.run_spider                    # ~6 min
+python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.run_spider --request-mode chrome
+python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.run_olostep                   # stops when the plan's credits run out
+python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.run_inhouse --label laptop    # ~5 min
+SSH_OPTS="-i ~/.ssh/key.pem" vdl_tools/scrape_enrich/scraper/vendor_pilot/remote_baseline.sh push  ec2-user@HOST
+SSH_OPTS="-i ~/.ssh/key.pem" vdl_tools/scrape_enrich/scraper/vendor_pilot/remote_baseline.sh run   ec2-user@HOST
+SSH_OPTS="-i ~/.ssh/key.pem" vdl_tools/scrape_enrich/scraper/vendor_pilot/remote_baseline.sh pull  ec2-user@HOST
 python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.compare
 ```
 
@@ -393,5 +431,8 @@ Columns: `firecrawl_mainonly` = Firecrawl default `onlyMainContent=true`, first 
 | `sample_urls.py` | stratified read-only draw from the cache -> `sample_urls.parquet` |
 | `_common.py` | config keys, rate limiter, retry/stop policy, resumable JSONL, run meta, parquet with lineage |
 | `run_firecrawl.py` | Firecrawl v2 scrape runner (`--only-main-content` variant) |
-| `run_spider.py` | Spider.cloud scrape runner |
-| `compare.py` | verdicts, link recall, per-stratum summary -> `comparison_*` |
+| `run_spider.py` | Spider.cloud scrape runner (`--request-mode chrome` variant) |
+| `run_olostep.py` | Olostep scrape runner (request budget, selector list) |
+| `run_inhouse.py` | the in-house scraper on the same sample, no cache writes (`--label laptop|ec2`) |
+| `remote_baseline.sh` | push the package and sample to an EC2 host, run the baseline under `nice`, pull results |
+| `compare.py` | verdicts, usable share, link recall, fetch-mode mix, per-stratum summary and headline pivots -> `comparison_*` |
