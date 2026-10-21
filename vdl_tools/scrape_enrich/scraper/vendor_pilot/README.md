@@ -437,6 +437,89 @@ Columns: `firecrawl` = `onlyMainContent=false`, all 1,000; `firecrawl_mainonly` 
 | status_404 | 0.40 | 0.00 | — | — | 1.00 | 1.00 | 1.00 |
 | ALL | 0.31 | 0.93 | — | — | 0.93 | 1.00 | 1.00 |
 
+## Phase 2: end to end over 2,000 organizations (built, awaiting the paid run)
+
+Phase 1 measured home pages. Phase 2 runs the whole per-org path
+production takes, on a representative (not hard-case) sample, for
+Firecrawl, for the in-house scraper the same day, and against the cache,
+and simulates the hybrid Zein is considering.
+
+**Sample** (`sample_orgs.py`): 2,000 organizations drawn uniformly from
+the US Climate Finance Tracker org parquet,
+`s3://climate-landscape-data/2026_08_04_oe_hierarchy_update/results/cb_cd_li_meta_mapped.parquet`
+(18,480 rows; `prediction_relevant` true and a non-empty `Website`; one
+org per domain; platform and free-mail domains dropped), seed 42. 1,707
+of them are in the cache; their historical `combined_text` verdicts are
+1,406 ok, 268 dead, 13 parked, 13 thin, 7 blocked; the cache holds a
+median of 1 and a mean of 3.0 subpages per org. Each org carries its
+cache row (home status, text verdicts, stored subpaths) for the
+historical comparison. A `--source cache` fallback draws random index
+rows instead.
+
+**Per-org pipeline** (`_e2e.py`, the same for every runner): fetch the
+home page; unless it is a single-page platform, choose subpages with
+`filter_links` over the internal links (`PATHS_TO_KEEP`,
+`max_per_subpath=6`, `subpage_type='about'`), clean each with
+`scrape_websites.__clean_website_path`, join with `urljoin`; fetch each;
+build the combined text with `make_group_text` over the 2xx pages (same
+ordering, token budget and counting prompt as `scrape_websites_psql`);
+classify it with `classify_text_quality`. "Usable" = home 2xx and
+combined verdict ok. Where the internal links come from is recorded per
+org:
+
+- `run_firecrawl_e2e.py`: `POST /v2/scrape` per page with the phase-1
+  settings (`markdown`, `rawHtml`, `links`; `onlyMainContent=false`;
+  `maxAge=0`; `proxy='auto'`). Subpages come from `filter_anchors` +
+  `filter_links` over the vendor's **links array** (`picks_array`); the
+  set production would compute from `rawHtml` is recorded alongside
+  (`picks_html`). Page text = markdown. Concurrency at the Standard plan's
+  limits (25 in flight, 500/min); a 402 stops the run; 429/5xx retries are
+  counted. `--fake` substitutes a deterministic vendor (no network, no
+  credits) for dry runs.
+- `run_inhouse_e2e.py`: production's own path (`AsyncScraper`,
+  `_process_scraped_with_browser_retry`, `extract_website_links` over the
+  fetched HTML, `unstructured` text), no cache writes, 20 HTTP + 3 browser
+  concurrency. Page text = `parsed_html`.
+- `run_hybrid_topup.py`: fetches through Firecrawl exactly the subpages the
+  hybrid would send it (in-house home usable, in-house subpage not) that
+  the vendor-only run did not already fetch, so the hybrid is assembled
+  from real vendor results rather than assumed ones.
+- `compare_e2e.py`: per org and aggregate: usable for vendor, in-house,
+  cache and hybrid; credits (home + subpages, failures free); subpages
+  chosen by each and their overlaps (vendor array vs vendor HTML, vs
+  in-house picks, vs cache subpaths); wall time, pages/second and API
+  retries from the run meta. The hybrid takes the vendor wholesale when
+  the in-house home is not usable (the vendor-only run's home and
+  subpages), otherwise only the in-house subpages that are not usable;
+  its combined text is rebuilt with `make_group_text`; its credits are
+  the vendor pages used.
+
+**Dry run** (2026-10-21): the fake vendor over 40 orgs, the in-house
+runner over 5 (all 5 usable; 36 pages; 6.2 subpages chosen per org), the
+top-up and the comparison all run end to end from the repo root:
+
+```bash
+python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.sample_orgs
+python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.run_firecrawl_e2e --fake --limit 40 --no-resume
+python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.run_inhouse_e2e --label laptop --limit 5
+python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.run_hybrid_topup --fake --inhouse inhouse_laptop
+python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.compare_e2e --vendor fake --inhouse inhouse_laptop
+```
+
+**The paid run** (not started; needs the Standard plan, roughly 9k
+credits: 2,000 homes plus about 3 subpages each at 1 credit per fetched
+page):
+
+```bash
+python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.run_firecrawl_e2e --limit 20   # smoke, ~100 credits
+python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.run_firecrawl_e2e              # resumable
+python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.run_inhouse_e2e --label laptop  # same day
+python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.run_hybrid_topup --inhouse inhouse_laptop
+python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.compare_e2e
+```
+
+<!-- PHASE2 RESULTS -->
+
 ## Caveats and dead ends
 
 - **Firecrawl's `links` array is only usable with `onlyMainContent=false`.**

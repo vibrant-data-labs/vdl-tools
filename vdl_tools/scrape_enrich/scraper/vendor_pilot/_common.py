@@ -20,6 +20,7 @@ import asyncio
 import json
 import subprocess
 import time
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -181,7 +182,10 @@ class VendorRunner:
             )
 
 
-async def _fetch_with_retry(runner: VendorRunner, client: httpx.AsyncClient, url: str) -> FetchResult:
+async def _fetch_with_retry(runner: VendorRunner, client: httpx.AsyncClient, url: str,
+                            retry_counter: "Counter | None" = None) -> FetchResult:
+    """``retry_counter`` (a ``collections.Counter``) gets one count per retried
+    API status, so a run can report how many 429s/5xx it absorbed."""
     t0 = time.monotonic()
     last_error = None
     max_attempts = runner.max_attempts
@@ -193,6 +197,8 @@ async def _fetch_with_retry(runner: VendorRunner, client: httpx.AsyncClient, url
             return result.finalize()
         except ApiRetry as exc:
             last_error = f"{exc} (api_status={exc.api_status})"
+            if retry_counter is not None:
+                retry_counter[str(exc.api_status)] += 1
             if attempt == max_attempts:
                 break
             delay = exc.retry_after if exc.retry_after is not None else min(60, 2 ** attempt)
@@ -265,8 +271,10 @@ async def run_vendor(
     rpm = rpm if rpm is not None else runner.default_rpm
 
     todo, done_keys = plan_run(sample, jsonl_path, limit=limit, resume=resume)
-    if not resume and jsonl_path.exists():
-        jsonl_path.unlink()
+    if not resume:
+        for path in (jsonl_path, meta_path):  # a fresh start discards the history too
+            if path.exists():
+                path.unlink()
     logger.info("%s: %s URLs to fetch (%s already done), concurrency=%s rpm=%s",
                 runner.name, len(todo), len(done_keys), concurrency, rpm)
 
