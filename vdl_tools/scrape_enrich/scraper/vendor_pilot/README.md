@@ -9,7 +9,12 @@ sample, Olostep 73% once its unreported 404s are discounted, Spider 67%
 the recommendation: it is the only vendor that both handles the
 JavaScript-shell and bot-wall pages we fail on today and reports the
 target's real status code, which the text gate needs. See
-[Results](#results) and [Recommendation](#recommendation).
+[Results](#results) and [Recommendation](#recommendation). Phase 2 (2026-10-21) then ran the whole
+per-org path, home plus the subpages our rules pick, over 2,000 tracker
+orgs: Firecrawl 86.0% of orgs usable at 4.67 credits per org, the in-house
+scraper the same day 78.0%, the cache's historical state 82.4%, and an
+in-house-first hybrid 86.6% at 0.81 credits per org. See
+[Phase 2 results](#phase-2-results).
 
 ## The question
 
@@ -437,12 +442,13 @@ Columns: `firecrawl` = `onlyMainContent=false`, all 1,000; `firecrawl_mainonly` 
 | status_404 | 0.40 | 0.00 | — | — | 1.00 | 1.00 | 1.00 |
 | ALL | 0.31 | 0.93 | — | — | 0.93 | 1.00 | 1.00 |
 
-## Phase 2: end to end over 2,000 organizations (built, awaiting the paid run)
+## Phase 2: end to end over 2,000 organizations (run 2026-10-21)
 
 Phase 1 measured home pages. Phase 2 runs the whole per-org path
 production takes, on a representative (not hard-case) sample, for
 Firecrawl, for the in-house scraper the same day, and against the cache,
-and simulates the hybrid Zein is considering.
+and simulates the hybrid Zein is considering. Results are in
+[Phase 2 results](#phase-2-results).
 
 **Sample** (`sample_orgs.py`): 2,000 organizations drawn uniformly from
 the US Climate Finance Tracker org parquet,
@@ -506,9 +512,7 @@ python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.run_hybrid_topup --fake -
 python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.compare_e2e --vendor fake --inhouse inhouse_laptop
 ```
 
-**The paid run** (not started; needs the Standard plan, roughly 9k
-credits: 2,000 homes plus about 3 subpages each at 1 credit per fetched
-page):
+**The paid run** (2026-10-21, Standard plan; 9,348 credits):
 
 ```bash
 python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.run_firecrawl_e2e --limit 20   # smoke, ~100 credits
@@ -518,7 +522,100 @@ python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.run_hybrid_topup --inhous
 python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.compare_e2e
 ```
 
-<!-- PHASE2 RESULTS -->
+### Phase 2 results
+
+2,000 tracker orgs, home plus chosen subpages, the same afternoon.
+"Usable" = home 2xx and the combined text's verdict ok. Credits are per
+fetched page, failures free; the Firecrawl balance moved 100,547 to
+91,199 over the run, exactly the sum of per-page `creditsUsed`.
+
+| run | usable | credits total | credits / org | subpages chosen / org | pages / org | pages/s achieved | median s / org |
+|---|---|---|---|---|---|---|---|
+| Firecrawl only | **86.0%** | 9,348 | 4.67 (median 3, p95 16, max 34) | 3.8 | 4.8 | 5.5 | 19.4 |
+| in-house only (laptop) | 78.0% | | | 3.5 | 4.4 | 5.9 | 3.9 |
+| hybrid: in-house first, Firecrawl on failure | **86.6%** | 1,620 | 0.81 | | | | |
+| cache, historical `combined_text` (1,707 orgs) | 82.4% | | | 3.5 | | | |
+
+On the 1,707 orgs the cache knows, Firecrawl is usable on 85.6%, the
+in-house run on 82.1%, the hybrid on 86.1%, the cache on 82.4%; of the
+1,406 orgs the cache calls ok, Firecrawl is usable on 1,363 (97%). On the
+293 orgs the cache has never scraped, Firecrawl is usable on 88.4% and
+the in-house run on 53.9%.
+
+**Paired per org**, Firecrawl versus the in-house run: usable on both
+1,547, Firecrawl only 173, in-house only 13, neither 267. The 173 are the
+phase-1 story again: the in-house combined text was blocked on 93, dead
+on 52, thin on 26 and garbled on 2, and 140 of them had already gone
+through the Playwright fallback. The 13 in-house-only orgs are 9
+Firecrawl saw as dead, 3 as parked, 1 as thin (8 with a non-2xx home).
+Of the 267 neither reaches, 231 are dead to both and 36 were ok in the
+cache, i.e. sites gone since they were last scraped.
+
+**Subpages.** Firecrawl's links array chose the same subpages as its own
+HTML would: median recall 1.0, mean 0.98 over the 1,185 orgs with picks.
+Against the in-house picks (from different HTML, fetched separately) mean
+recall is 0.89 and Jaccard 0.75 (median 1.0); against the cache's stored
+subpaths Jaccard is 0.67 for Firecrawl and 0.76 for the in-house run.
+Firecrawl chose 3.8 subpages per org, the in-house run 3.5, the cache
+holds 3.5; 664 and 764 orgs respectively got no picks. Subpages answered
+2xx 94% of the time on both sides; their text passed the gate on 97%
+(Firecrawl) and 92% (in-house).
+
+**Throughput and latency.** Firecrawl sustained 5.5 pages/s (330/min)
+at 25 in flight, well under the 500/min cap: the per-org pipeline
+serializes home then subpages, so 25 slots at 2.8 s median gave about a
+third of the theoretical rate. Three API 502s were retried, 55 terminal
+500s and 20 408s recorded, no 429 and no 402; 70 pages went through the
+stealth proxy, billed 1 credit each. Per page, Firecrawl home 2.8 s
+median (p95 6.9), subpage 2.8 s (p95 11.2); in-house home 1.5 s (p95
+43.9), subpage 2.8 s (p95 36.2). The in-house run put 1,219 pages
+through Playwright and failed 686.
+
+**The hybrid.** In-house first; Firecrawl wholesale (its home and its
+subpages) for the 452 orgs whose in-house home was not usable (1,063
+credits); Firecrawl only for the failed subpages of the 280 orgs whose
+home was fine (561 subpages replaced, 557 credits, 120 of them fetched by
+the top-up run since the vendor-only run had not chosen them); nothing
+for the other 1,268 orgs. 86.6% usable, 13 orgs better and 2 worse than
+Firecrawl only, for 17% of the credits. Zero pages were needed that no
+run fetched.
+
+**Combined text size.** Firecrawl's combined text runs 36k characters
+median against 10k in-house: full-page markdown carries nav and footer on
+every page, and Firecrawl chose slightly more subpages. The summarizer's
+token budget absorbs it, but input tokens per org roughly triple.
+Subpages do not need the links array, so requesting
+`onlyMainContent=true` for them (and `false` only for the home page)
+would remove most of the padding at no credit cost; not measured here.
+
+**What it costs at scale.** The cache holds about 130k home URLs. At
+4.67 credits per org a full refresh is about 607k credits: the Scale plan
+($599/month, 1M credits) or Growth ($333/month, 500k) plus about $214 of
+top-ups at $0.002 per credit. The hybrid at 0.81 credits per org is about
+105k credits, the Standard plan ($83/month, 100k) plus a small top-up,
+with the in-house scraper still doing 83% of the work.
+
+**Recommendation after phase 2.** Firecrawl end to end delivers what
+phase 1 promised: 8 points more usable orgs than the in-house scraper the
+same day, 3.6 points more than the cache's historical state, the same
+subpage choices, 1 credit per fetched page, no rate-limit trouble at the
+Standard plan's settings. Two ways to adopt it:
+
+1. **Firecrawl only** behind the cache, as recommended after phase 1.
+   Retires the in-house fetch layer and its laptop fragility; about $550
+   to $600 per full refresh at list prices, far less for incremental runs.
+2. **Hybrid** (in-house first, Firecrawl on failure at home and subpage
+   level). Same quality, 17% of the credits, but it keeps the in-house
+   scraper, Playwright and the bot-wall logic in production, which is the
+   thing this pilot set out to retire; it only makes sense if that layer
+   moves to a server (the EC2 baseline showed the datacenter IP costs
+   little) and someone owns it.
+
+The pilot's recommendation stays Firecrawl only, with the subpage
+`onlyMainContent=true` trim as the first optimization to measure, and the
+hybrid as the fallback if the credit line becomes the constraint.
+
+
 
 ## Caveats and dead ends
 
