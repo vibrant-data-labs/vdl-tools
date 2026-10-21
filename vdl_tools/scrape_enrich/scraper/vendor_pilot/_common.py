@@ -225,6 +225,23 @@ def load_jsonl(path: Path) -> list[dict]:
         return [json.loads(line) for line in fh if line.strip()]
 
 
+def plan_run(sample: pd.DataFrame, jsonl_path: Path, *, limit: int | None = None,
+             resume: bool = True) -> tuple[pd.DataFrame, set]:
+    """Which sampled URLs a run would fetch: the sample in ``sample_order``,
+    cut to ``limit``, minus the keys already in the vendor's JSONL when
+    resuming. Returns ``(todo, done_keys)``."""
+    todo = sample.sort_values("sample_order")
+    if limit:
+        todo = todo.head(limit)
+    done_keys = {r["cleaned_key"] for r in load_jsonl(jsonl_path)} if resume else set()
+    return todo[~todo["cleaned_key"].isin(done_keys)], done_keys
+
+
+def api_calls_so_far(jsonl_path: Path) -> int:
+    """API calls a vendor's JSONL accounts for (one row per URL, ``attempts`` each)."""
+    return sum(int(r.get("attempts") or 1) for r in load_jsonl(jsonl_path))
+
+
 async def run_vendor(
     runner: VendorRunner,
     sample: pd.DataFrame,
@@ -247,13 +264,9 @@ async def run_vendor(
     concurrency = concurrency or runner.default_concurrency
     rpm = rpm if rpm is not None else runner.default_rpm
 
-    todo = sample.sort_values("sample_order")
-    if limit:
-        todo = todo.head(limit)
-    done_keys = {r["cleaned_key"] for r in load_jsonl(jsonl_path)} if resume else set()
+    todo, done_keys = plan_run(sample, jsonl_path, limit=limit, resume=resume)
     if not resume and jsonl_path.exists():
         jsonl_path.unlink()
-    todo = todo[~todo["cleaned_key"].isin(done_keys)]
     logger.info("%s: %s URLs to fetch (%s already done), concurrency=%s rpm=%s",
                 runner.name, len(todo), len(done_keys), concurrency, rpm)
 
@@ -363,6 +376,8 @@ def add_runner_args(parser, runner_cls: type[VendorRunner]):
                         help="max vendor API calls per minute (0 = unlimited)")
     parser.add_argument("--limit", type=int, default=None, help="only the first N sampled URLs (smoke test)")
     parser.add_argument("--no-resume", action="store_true", help="discard previous JSONL results and start over")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="print what the run would fetch (and any budget) without calling the vendor")
 
 
 def run_cli(runner_cls: type[VendorRunner], argv=None, extra_args=None, build=None):
@@ -380,6 +395,17 @@ def run_cli(runner_cls: type[VendorRunner], argv=None, extra_args=None, build=No
     args = parser.parse_args(argv)
     sample = read_dataframe(args.out_dir / SAMPLE_FILENAME)
     runner = build(args) if build else runner_cls(get_api_key(runner_cls.name))
+    if args.dry_run:
+        jsonl_path, _, _ = _results_paths(args.out_dir, runner.name)
+        todo, done_keys = plan_run(sample, jsonl_path, limit=args.limit, resume=not args.no_resume)
+        print(f"{runner.name}: would fetch {len(todo)} URLs ({len(done_keys)} already in {jsonl_path.name}, "
+              f"{api_calls_so_far(jsonl_path) if not args.no_resume else 0} API calls so far); "
+              f"concurrency={args.concurrency} rpm={args.rpm or None}")
+        print(todo["stratum"].value_counts().to_string())
+        extra = asyncio.run(runner.run_context())
+        if extra:
+            print("runner context:", json.dumps(extra, default=str))
+        return
     df = asyncio.run(run_vendor(
         runner, sample, args.out_dir,
         concurrency=args.concurrency, rpm=args.rpm or None,

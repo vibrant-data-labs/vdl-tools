@@ -22,12 +22,16 @@ Olostep answers a bad target with 400 (``dns_resolution_failed``,
 ``invalid_url``), 502 (``tls_error``) or 504 (``scrape_poll_timeout``,
 about 55 s). Those describe the target and are recorded, not retried; 402
 (exhausted key) stops the run. API-level attempts are capped at 2 and the
-whole run at ``--request-budget`` calls (default 1,000) so a run can never
-spend more credits than it was given.
+whole sample at ``--request-budget`` calls (default 1,000) so a run can
+never spend more credits than it was given. Rerunning resumes: URLs already
+in ``olostep_results.jsonl`` are skipped and the calls they took count
+against the budget, so a run that stopped on ``credits_exhausted`` picks up
+where it left off once credits are added.
 
 Run from the repo root::
 
     python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.run_olostep --limit 3   # smoke
+    python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.run_olostep --dry-run   # what a resume would do
     python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.run_olostep
 """
 
@@ -39,9 +43,11 @@ from vdl_tools.scrape_enrich.scraper.vendor_pilot._common import (
     FetchResult,
     StopRun,
     VendorRunner,
+    api_calls_so_far,
     get_api_key,
     run_cli,
 )
+from vdl_tools.shared_tools.tools.logger import logger
 
 # Target-side failures the API reports as its own HTTP status: terminal.
 TERMINAL_API_STATUSES = {400, 502, 504}
@@ -139,13 +145,22 @@ def _build(args):
     selectors = args.remove_css_selectors
     if isinstance(selectors, str) and selectors.strip().startswith("["):
         selectors = json.loads(selectors)
-    return OlostepRunner(get_api_key(OlostepRunner.name), request_budget=args.request_budget,
+    # The budget is for the whole sample across resumed runs: subtract the API
+    # calls the existing JSONL already accounts for (the 2026-10-21 run
+    # stopped at 479 URLs / 479 calls when the free credits ran out).
+    prior_calls = 0 if args.no_resume else api_calls_so_far(args.out_dir / f"{OlostepRunner.name}_results.jsonl")
+    budget = max(0, args.request_budget - prior_calls)
+    if prior_calls:
+        logger.info("olostep: %s API calls already made; %s of the %s-call budget remain",
+                    prior_calls, budget, args.request_budget)
+    return OlostepRunner(get_api_key(OlostepRunner.name), request_budget=budget,
                          remove_css_selectors=selectors)
 
 
 def _extra_args(parser):
     parser.add_argument("--request-budget", type=int, default=1000,
-                        help="hard cap on API calls (retries included) for this run")
+                        help="hard cap on API calls (retries included) for the whole sample; "
+                             "calls already recorded in the JSONL count against it when resuming")
     parser.add_argument("--remove-css-selectors", default=json.dumps(REMOVE_CSS_SELECTORS),
                         help='Olostep remove_css_selectors: "default", "none" or a JSON list of selectors '
                              '(sent as an array)')
