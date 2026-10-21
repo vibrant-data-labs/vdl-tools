@@ -161,10 +161,15 @@ def run_meta_summary(out_dir: Path, vendor: str) -> dict:
     wall = sum(r["wall_seconds_this_run"] for r in runs if r["n_fetched_this_run"])
     billed = 0.0
     unknown = False
+    note = None
     for r in runs:
         before, after = _balance(r.get("credits_before")), _balance(r.get("credits_after"))
         if before is None or after is None:
             unknown = True
+        elif after > before:
+            # A top-up landed mid-run: the balance no longer measures spend.
+            unknown = True
+            note = f"balance rose from {before:g} to {after:g} during a run (top-up); use the per-page cost/credits columns"
         else:
             billed += before - after
     return {
@@ -173,6 +178,7 @@ def run_meta_summary(out_dir: Path, vendor: str) -> dict:
         "wall_seconds": round(wall, 1),
         "pages_per_second": round(n / wall, 3) if wall else None,
         "balance_delta": None if unknown else round(billed, 4),
+        "balance_note": note,
         "balance_before_first_run": runs[0].get("credits_before"),
         "balance_after_last_run": runs[-1].get("credits_after"),
         "stop_reasons": [r["stop_reason"] for r in runs if r.get("stop_reason")],

@@ -6,8 +6,15 @@ Request: ``return_format=['markdown', 'raw']``, ``return_page_links=true``,
 
 Spider is pay-as-you-go, metered on bandwidth ($1/GB) and CPU time, with
 failed requests free (pricing page, 2026-10). Per-response ``costs`` are
-recorded as the API reports them; the account balance is read from
-``GET /data/credits`` before and after the run.
+recorded as the API reports them (``total_cost`` in dollars; 10,000
+credits = $1); the account balance is read from ``GET /data/credits``
+before and after the run.
+
+``smart`` mode fetched most JavaScript app shells over plain HTTP without
+rendering them (95 of the 124 pages that answered 2xx but came back thin
+or empty in the main run were shells with ~3 KB of raw HTML), so
+``--request-mode chrome`` runs the same sample with rendering forced, as
+``spider_chrome``, to price that gap.
 
 Run from the repo root::
 
@@ -36,12 +43,18 @@ class SpiderRunner(VendorRunner):
     default_rpm = None
     timeout_seconds = 120.0
 
+    def __init__(self, api_key: str, request_mode: str = "smart"):
+        super().__init__(api_key)
+        self.request_mode = request_mode
+        if request_mode != "smart":
+            self.name = f"spider_{request_mode}"
+
     async def fetch(self, client: httpx.AsyncClient, url: str) -> FetchResult:
         payload = {
             "url": url,
             "return_format": ["markdown", "raw"],
             "return_page_links": True,
-            "request": "smart",
+            "request": self.request_mode,
             "cache": False,
             "metadata": True,
         }
@@ -99,6 +112,9 @@ class SpiderRunner(VendorRunner):
         response.raise_for_status()
         return response.json()
 
+    async def run_context(self):
+        return {"request_mode": self.request_mode}
+
 
 def _as_float(value):
     try:
@@ -107,5 +123,18 @@ def _as_float(value):
         return None
 
 
+def _build(args):
+    from vdl_tools.scrape_enrich.scraper.vendor_pilot._common import get_api_key
+    return SpiderRunner(get_api_key(SpiderRunner.name), request_mode=args.request_mode)
+
+
+def _extra_args(parser):
+    parser.add_argument(
+        "--request-mode", default="smart", choices=["smart", "http", "chrome"],
+        help="Spider `request`: smart (HTTP, Chrome only when needed; the main run), "
+             "chrome (always render; results go to spider_chrome_*), http",
+    )
+
+
 if __name__ == "__main__":
-    run_cli(SpiderRunner)
+    run_cli(SpiderRunner, extra_args=_extra_args, build=_build)
