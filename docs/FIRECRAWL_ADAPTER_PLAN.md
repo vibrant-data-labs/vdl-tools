@@ -267,12 +267,12 @@ pages and the blocked-by-extension pages the review found.
 
 ### Phase 3: models and migration (1.5 days)
 
-ORM models for `scrape_runs`, `WebPagesScrapedV2`, `WebPagesParsedV2`; Alembic migration
-with the `drop_table` lines for `microapp_configs`, `microapp_domains` and
+ORM models for `scrape_runs`, `WebPagesScrapedV2`, `WebPagesParsedV2` and `OrgSiteKey`
+(section 4); Alembic migration with the `drop_table` lines for `microapp_configs`, `microapp_domains` and
 `grantor_recipient_labeled_set` stripped; `delete_cached_urls(backend=...)` reaching the new
 tables with the existing tests run against both.
 
-### Phase 4: per-org pipeline (4 to 5 days)
+### Phase 4: per-org pipeline and id lookup (5 to 6 days)
 
 `scrape_websites_firecrawl` as in section 3: cache lookup with `max_age_days`, home fetch,
 `same_site_paths(links, final_host)` with `urllib.parse` (exact netloc compare with `www.`
@@ -283,6 +283,13 @@ pages. An orchestration test with the fake backend in the style of `StubBrowserS
 `test_js_shell_fallback.py`: home failure fetches no subpages, vendor error leaves
 `num_errors` at 0, subpage selection from vendor links, verdict persistence, `num_errors`
 reset on re-combine. Delete the dead `choose_org_pages` and `filter_pages`.
+
+Id lookup (D16, VIB-70): the pipeline accepts an optional `org_ids` mapping from home URL to
+`(id_type, id_value)` pairs and upserts `org_site_keys` with the run id and first and last
+seen; a `site_for_org(id_type, id_value)` helper returns the home key, final host, verdict and
+text, newest first; a one-time backfill from `cb_cd_li_meta_mapped` and the ed_tracker org
+frame against existing home keys makes cached orgs resolvable before the first refresh. Test
+that two ids on one site and one id on two historical sites both resolve.
 
 ### Phase 5: validation (3 days plus run time; about 10k credits)
 
@@ -299,7 +306,8 @@ reset on re-combine. Delete the dead `choose_org_pages` and `filter_pages`.
 
 ### Phase 6: readers and the first refresh (2 to 3 days)
 
-Readers that move to the new tables: `climate_landscape/enrichment_pipeline.py`,
+Readers that move to the new tables: `climate_landscape/enrichment_pipeline.py` (which also
+passes its Crunchbase uuid, EIN and NZI id columns as `org_ids`),
 `web_summarization/website_summarization_psql.py` (reads the stored verdict instead of
 reclassifying), `portfolio_comparison/enrichment/scrape.py` (the self-heal path's
 `verify_ssl=False` has no vendor equivalent; `skip_existing=False` only),
@@ -418,11 +426,11 @@ Storage: section 4. Compute: no browser or extractor runs locally; orchestration
 | 1 Client | 2.5 |
 | 2 Text pipeline | 2 |
 | 3 Models and migration | 1.5 |
-| 4 Per-org pipeline | 4 to 5 |
+| 4 Per-org pipeline and id lookup | 5 to 6 |
 | 5 Validation | 3 plus run time |
 | 6 Readers and first refresh | 2 to 3 |
 | 7 Retire in-house path | 2 |
-| Total, this PR's scope | 19 to 22 working days |
+| Total, this PR's scope | 20 to 23 working days |
 | Separate PRs: `filter_links` determinism, #232, #226 | 0.5, 1 to 2, 2 |
 
 Phases 1 through 3 are independent and can run in parallel; Phase 4 needs all three; Phase 5
