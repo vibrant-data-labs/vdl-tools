@@ -142,6 +142,17 @@ because `_format_scraped_sites` and the enrichment pipeline read `response_statu
 `source_keys` (the page rows it was built from), `extractor`, `prompt_token_budget`,
 `text_quality`, `num_errors`, `combined_at`.
 
+`org_site_keys` (added 2026-10-22 at Zein's request): the link from a source org id to the
+site fetched for it, so a Crunchbase uuid, an EIN or an NZI id finds the cached site and text
+when the URL itself is in doubt. Columns: `id_type` (`crunchbase`, `ein`, `nzi`,
+`givingtuesday`, `linkedin`, `coresignal`), `id_value` (normalized: EIN digits only, uuid
+lowercase), `cleaned_home_key`, `source_url`, `final_host`, `run_id`, `first_seen`,
+`last_seen`; primary key (`id_type`, `id_value`, `cleaned_home_key`). One id may map to
+several home keys over time and one home key to several ids; lookups return the newest
+`last_seen` first. The pipeline takes an optional `org_ids` mapping and upserts rows; a
+`site_for_org(id_type, id_value)` helper reads them; a one-time backfill from the project org
+frames makes already-cached orgs resolvable. Linear: D16 (VIB-70).
+
 Notes:
 
 - `rawHtml` is not requested. The pilot fetched it and never used it; the vendor's median is
