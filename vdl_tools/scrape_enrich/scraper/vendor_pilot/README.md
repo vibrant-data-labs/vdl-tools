@@ -617,6 +617,58 @@ hybrid as the fallback if the credit line becomes the constraint.
 
 
 
+## Production adapter notes (decided 2026-10-22)
+
+Design decisions for the Firecrawl adapter behind the cache, settled by
+Zein with the coordinating session. The numbers come from the pilot
+artifacts (phase 1 `firecrawl_results.parquet`, phase 2
+`firecrawl_e2e_pages.parquet`); the results they rest on are in
+[Results](#results) and [Phase 2 results](#phase-2-results).
+
+1. **A new table, not a migration of `web_pages_scraped`.** Same keys
+   (`cleaned_key`, `home_url`, `subpath`, `page_type`) so the cache
+   lookup and `make_group_text` work unchanged; plus `source_url`,
+   `final_url`, `final_host`; `status_code` (`metadata.statusCode`, the
+   target's real code); `markdown` as returned; `parsed_html` (the
+   cleaned text downstream reads); `extractor` (e.g. `firecrawl-md-v1`);
+   `proxy_used`, `credits_used`, `content_type`, `language`,
+   `scrape_id`; `num_errors`, `fetched_at`.
+2. **Store markdown raw; clean at write time into `parsed_html`**: drop
+   image markup, collapse `[label](url)` to `label` unless
+   `add_section_links`, remove blank lines. The cleaner is a pure,
+   versioned function (hence `extractor`), so `parsed_html` can be
+   re-derived from `markdown` by a backfill without re-fetching. Measured
+   on the 8,879 2xx pages of phase 2 with exactly those rules: median
+   11,335 characters raw, 4,896 cleaned (ratio 0.44); a third of the raw
+   length is lines that are nothing but links (menus). The coordinating
+   session's own measurement (11,037 to 4,717) agrees within a few
+   percent.
+3. **Caveat, flagged by Zein: capture the post-redirect URL explicitly.**
+   The pilot runner keeps a subset of the metadata keys (`KEEP_METADATA`
+   in `run_firecrawl.py`) and fills `final_url` from `metadata.url` with
+   `metadata.sourceURL` as the fallback; it stores neither `sourceURL`
+   nor a host separately. The production write path must record
+   `metadata.url`, `metadata.sourceURL` and `final_host`. Phase 1: of 895
+   fetched home pages, 84% came back with a different URL string (mostly
+   scheme, `www.`, trailing slash), 15% differed beyond that, and 11%
+   landed on another host: renames (givathaviva.org to usfogh.org),
+   platform moves (thepurplecarrot.com to purplecarrot.com) and hijacked
+   domains (laramiecountypartnership.org to a gambling site). This feeds
+   org dedupe and junk-domain detection and replaces `website_quality`'s
+   separate redirect pass.
+4. **`onlyMainContent`**: false on the home page (the links array needs
+   it), true on subpages to drop repeated nav and footer. Unmeasured;
+   verify on a small sample before relying on it.
+5. **Gate and limits**: `metadata.statusCode` 2xx before the text gate;
+   `SCRAPE_*` 500s are terminal; honor the plan's concurrency and
+   requests per minute; failures are free.
+6. **`rawHtml` off by default**: median 164 kB per fetched home page in
+   phase 1 and 190 kB per 2xx page in phase 2, about 75 to 90 GB for the
+   490k-page cache.
+7. **Firecrawl only first**; the in-house-first hybrid (86.6% usable at
+   17% of the credits in phase 2) is a later optimization if credits
+   become the constraint.
+
 ## Caveats and dead ends
 
 - **Firecrawl's `links` array is only usable with `onlyMainContent=false`.**
