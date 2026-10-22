@@ -136,11 +136,18 @@ because `_format_scraped_sites` and the enrichment pipeline read `response_statu
 | `extractor` | `firecrawl-md-v1`, bumped with the cleaner, cap or dedupe rules | |
 | `text_quality` | per-page verdict | #198 |
 | `proxy_used`, `credits_used`, `content_type`, `language`, `scrape_id` | metadata | |
-| `num_errors`, `fetched_at` | ours; see section 6 for what increments `num_errors` | |
+| `num_errors`, `fetched_at` | ours; see section 6 for what increments `num_errors`; `fetched_at` is the date of the stored text | |
+| `last_attempt_at`, `last_attempt_result`, `attempts_since_fetch` | the newest attempt, kept apart from the stored text (section 6, last known good) | |
 
 `web_pages_parsed_v2`: `cleaned_home_key` (PK), `home_url`, `run_id`, `combined_text`,
 `source_keys` (the page rows it was built from), `extractor`, `prompt_token_budget`,
-`text_quality`, `num_errors`, `combined_at`.
+`text_quality`, `num_errors`, `combined_at`, `last_attempt_at`, `last_attempt_result`.
+
+`web_pages_history_v2` (added 2026-10-22 at Zein's request): `cleaned_key`, `fetched_at`,
+`run_id`, `extractor`, `markdown`, `parsed_html`, `text_quality`. Written only when a newer
+good fetch replaces a page's text; one previous version kept per page, older ones removed
+under the #150 TTL policy. It is what makes a re-scrape safe (the old text is never the only
+copy) and what the material-change gate on summaries compares against.
 
 `org_site_keys` (added 2026-10-22 at Zein's request): the link from a source org id to the
 site fetched for it, so a Crunchbase uuid, an EIN or an NZI id finds the cached site and text
@@ -217,8 +224,18 @@ main-content-only run already showed about 26% less prose and 3 pages flipping t
   request as `invalid_url` with no credit spent.
 - The LinkedIn fallback in the enrichment pipeline keys off `failure_reason` and
   `text_quality` and skips `vendor_error`.
-- `max_age_days` on `fetched_at` defines "refresh": with `skip_existing=True` a second refresh
-  today costs nothing and returns stale text; with `False` it refetches dead domains.
+- `max_age_days` on `fetched_at` defines "refresh": rows older than the cutoff are re-fetched,
+  younger ones are served from the cache, and `--dry-run` reports how many rows the cutoff
+  would refetch and what they would cost. Today `skip_existing=True` returns stale text at no
+  cost and `False` refetches dead domains; neither asks about age.
+- Last known good: a re-fetch never overwrites good text with a failure. The text columns
+  change only when the new fetch passes the status gate and the text gate; every attempt
+  updates `last_attempt_at` and `last_attempt_result`, and a replaced text is copied to
+  `web_pages_history_v2` first. A page that was fine in March and blocked in June keeps its
+  March text, says so through the attempt columns, and is retried only when
+  `retry_failed_after_days` has elapsed on `last_attempt_at`, so a blocked site is neither
+  lost nor hammered. Today, with `skip_existing=False`, `session.merge` on the page key
+  replaces the row and the earlier text is gone.
 - A successful re-combine sets `num_errors = 0` (#228); the same one-line fix goes into the
   old path.
 - Retention: old `scrape_runs` and superseded page rows follow the TTL policy that the RDS
@@ -267,8 +284,8 @@ pages and the blocked-by-extension pages the review found.
 
 ### Phase 3: models and migration (1.5 days)
 
-ORM models for `scrape_runs`, `WebPagesScrapedV2`, `WebPagesParsedV2` and `OrgSiteKey`
-(section 4); Alembic migration with the `drop_table` lines for `microapp_configs`, `microapp_domains` and
+ORM models for `scrape_runs`, `WebPagesScrapedV2`, `WebPagesParsedV2`, `OrgSiteKey` and
+`WebPagesHistoryV2` (section 4); Alembic migration with the `drop_table` lines for `microapp_configs`, `microapp_domains` and
 `grantor_recipient_labeled_set` stripped; `delete_cached_urls(backend=...)` reaching the new
 tables with the existing tests run against both.
 
@@ -282,7 +299,9 @@ subpage fetches, gate, clean, dedupe, cap, combine, verdicts, run record, commit
 pages. An orchestration test with the fake backend in the style of `StubBrowserScraper` in
 `test_js_shell_fallback.py`: home failure fetches no subpages, vendor error leaves
 `num_errors` at 0, subpage selection from vendor links, verdict persistence, `num_errors`
-reset on re-combine. Delete the dead `choose_org_pages` and `filter_pages`.
+reset on re-combine, a blocked re-fetch keeps the previous text and writes the attempt
+columns, a `max_age_days` cutoff refetches only older rows. Delete the dead
+`choose_org_pages` and `filter_pages`.
 
 Id lookup (D16, VIB-70): the pipeline accepts an optional `org_ids` mapping from home URL to
 `(id_type, id_value)` pairs and upserts `org_site_keys` with the run id and first and last
