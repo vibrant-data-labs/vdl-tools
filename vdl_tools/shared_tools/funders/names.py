@@ -29,6 +29,7 @@ TRAILING_JUNK_RE = re.compile(r"[\s.,;:|/\\&-]+$")
 CARE_OF_RE = re.compile(r"\s*(?:c/o|\b(?:attn|attention)\b:?).*$", re.IGNORECASE)
 CO_SUFFIX_RE = re.compile(r"\s+co$")
 
+SOCIAL_DOMAINS = frozenset({"facebook.com", "linkedin.com", "twitter.com", "x.com", "instagram.com"})
 US_STATES = {
     "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR", "california": "CA",
     "colorado": "CO", "connecticut": "CT", "delaware": "DE", "district of columbia": "DC",
@@ -55,14 +56,20 @@ def clean_funder_text(name):
     return name
 
 
-def funder_filed_name(name, name_secondary=None, dba_name=None):
-    """The complete filed name of a Giving Tuesday granter from its three name lines.
+def funder_name_and_dba(name, name_secondary=None, dba_name=None):
+    """The complete filed name of a Giving Tuesday granter and its DBA, from the three name lines.
 
     Line 2 often finishes a name cut at the field width ("COMMUNITY FOUNDATION OF" +
-    "ELKHART COUNTY INC"); a "C/O ..." tail is care-of text, not part of the name.
+    "ELKHART COUNTY INC"); a "C/O ..." tail is care-of text, not part of the name. The DBA is
+    ``""`` when there is none.
     """
-    organization, _ = resolve_name_lines(_clean(name), _clean(name_secondary), _clean(dba_name))
-    return clean_funder_text(CARE_OF_RE.sub("", organization))
+    organization, dba = resolve_name_lines(_clean(name), _clean(name_secondary), _clean(dba_name))
+    return clean_funder_text(CARE_OF_RE.sub("", organization)), clean_funder_text(dba)
+
+
+def funder_filed_name(name, name_secondary=None, dba_name=None):
+    """The complete filed name of a Giving Tuesday granter (see ``funder_name_and_dba``)."""
+    return funder_name_and_dba(name, name_secondary, dba_name)[0]
 
 
 def funder_key(name):
@@ -95,3 +102,12 @@ def us_state(value):
     if value.upper() in US_STATES.values():
         return value.upper()
     return US_STATES.get(value.lower())
+
+
+def website_domain(url):
+    """Lowercase host without ``www.``; ``None`` for a blank, a placeholder or a social network."""
+    url = _clean(url).lower()
+    if not url or " " in url or url in {"n/a", "na", "none"}:
+        return None
+    host = re.sub(r"^[a-z]+://", "", url).split("/")[0].removeprefix("www.")
+    return None if "." not in host or host in SOCIAL_DOMAINS else host

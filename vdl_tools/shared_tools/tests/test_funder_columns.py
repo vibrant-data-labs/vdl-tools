@@ -1,8 +1,19 @@
 import pandas as pd
 
-from vdl_tools.shared_tools.funders.columns import build_funder_columns, collect_funders
+from vdl_tools.scrape_enrich.display_name import PROMPT, PROMPT_FILED_NAME, PROMPT_SHARED_SITE
+from vdl_tools.shared_tools.funders import columns
+from vdl_tools.shared_tools.funders.columns import build_funder_columns, collect_funders, pick_funder_names
 
 CLEVELAND_CB = "11111111-1111-1111-1111-111111111111"
+
+
+def attributes(ids, state=None, website=None):
+    """What ``attributes_of`` returns: ``state`` and ``website`` for each id, ``None`` where unknown."""
+    state, website = state or {}, website or {}
+    return pd.DataFrame(
+        {"state": [state.get(i) for i in ids], "website": [website.get(i) for i in ids]},
+        index=pd.Index(ids, name="funder_id"),
+    )
 
 
 def granter(ein, name1, name2=None, dba=None):
@@ -90,7 +101,7 @@ def test_a_leftover_that_is_the_cut_off_start_of_a_funder_on_the_same_org_is_dro
 
 def test_funders_that_share_a_name_get_their_state_added():
     states = {"ein:566040787": "NC", "ein:233018741": "OH"}
-    out = build_funder_columns(frame(), min_occurrences=1, state_of=lambda ids: pd.Series([states.get(i) for i in ids]))
+    out = build_funder_columns(frame(), min_occurrences=1, attributes_of=lambda ids: attributes(ids, state=states))
     names = dict(zip(out.loc[0, "Funder_Ids"], out.loc[0, "Funders"]))
     assert names["ein:566040787"] == "SMITH FAMILY FOUNDATION (NC)"
     assert dict(zip(out.loc[1, "Funder_Ids"], out.loc[1, "Funders"]))["ein:233018741"] == "SMITH FAMILY FOUNDATION (OH)"
@@ -98,5 +109,101 @@ def test_funders_that_share_a_name_get_their_state_added():
 
 
 def test_a_shared_name_with_no_known_state_keeps_its_name():
-    out = build_funder_columns(frame(), min_occurrences=1, state_of=lambda ids: pd.Series([None] * len(ids)))
+    out = build_funder_columns(frame(), min_occurrences=1, attributes_of=lambda ids: attributes(ids))
     assert out.loc[0, "Funders"][1] == "SMITH FAMILY FOUNDATION"
+
+
+class FakePicker:
+    """Stands in for ``pick_display_names``: records each call and answers from ``answers``."""
+
+    def __init__(self, answers, confidence="high", source="legal_name"):
+        self.answers, self.confidence, self.source, self.calls = answers, confidence, source, []
+
+    def __call__(self, rows, session, name_col, id_col, prompt=None, **kwargs):
+        self.calls.append({"prompt": prompt, "rows": rows.copy(), **kwargs})
+        found = [(i, self.answers[i]) for i in rows[id_col] if i in self.answers]
+        return pd.DataFrame(
+            {id_col: [i for i, _ in found], "display_name": [a for _, a in found],
+             "confidence": self.confidence, "source": self.source}
+        )
+
+
+def test_a_gt_funder_with_a_dba_or_website_goes_to_the_organization_prompt(monkeypatch):
+    picker = FakePicker({"ein:111111111": "Zest Education", "ein:222222222": "Plain Foundation"})
+    monkeypatch.setattr(columns, "pick_display_names", picker)
+    names = pd.Series({"ein:111111111": "THE OPPORTUNITY TRUST", "ein:222222222": "PLAIN FOUNDATION"})
+    out = pick_funder_names(
+        names,
+        dbas=pd.Series({"ein:111111111": "ZEST EDUCATION"}),
+        websites=pd.Series({"ein:111111111": "https://www.zesteducation.org/"}),
+        session=None,
+    )
+    by_prompt = {c["prompt"]: list(c["rows"]["funder_id"]) for c in picker.calls}
+    assert by_prompt == {PROMPT: ["ein:111111111"], PROMPT_FILED_NAME: ["ein:222222222"]}
+    org_call = next(c for c in picker.calls if c["prompt"] == PROMPT)
+    assert org_call["rows"]["website"].tolist() == ["zesteducation.org"]
+    assert org_call["rows"]["dba"].tolist() == ["ZEST EDUCATION"]
+    assert out.to_dict() == {"ein:111111111": "Zest Education", "ein:222222222": "Plain Foundation"}
+
+
+def test_funders_that_share_a_website_get_the_shared_site_prompt_with_their_siblings(monkeypatch):
+    picker = FakePicker({"ein:111111111": "Mercy Health North"})
+    monkeypatch.setattr(columns, "pick_display_names", picker)
+    names = pd.Series({"ein:111111111": "MERCY HEALTH NORTH", "ein:222222222": "MERCY HEALTH SOUTH"})
+    websites = pd.Series({"ein:111111111": "mercy.net", "ein:222222222": "https://www.mercy.net"})
+    pick_funder_names(names, pd.Series(dtype=object), websites, session=None)
+    (call,) = [c for c in picker.calls if c["prompt"] == PROMPT_SHARED_SITE]
+    assert call["siblings_col"] == "siblings"
+    row = call["rows"].set_index("funder_id")["siblings"]
+    assert row["ein:111111111"] == ["MERCY HEALTH SOUTH"]
+    assert row["ein:222222222"] == ["MERCY HEALTH NORTH"]
+
+
+def test_a_low_confidence_answer_is_not_used(monkeypatch):
+    monkeypatch.setattr(columns, "pick_display_names", FakePicker({"ein:111111111": "Somebody Else"}, confidence="low"))
+    names = pd.Series({"ein:111111111": "SHETOME CORP"})
+    out = pick_funder_names(names, pd.Series({"ein:111111111": "KATHERINE S & FARRA ALFORD CORP"}), pd.Series(dtype=object), None)
+    assert out.empty
+
+
+def test_a_crunchbase_funder_is_not_sent_for_its_website_only_its_casing(monkeypatch):
+    picker = FakePicker({"cb:11111111-1111-1111-1111-111111111111": "Acme Ventures"})
+    monkeypatch.setattr(columns, "pick_display_names", picker)
+    names = pd.Series({"cb:11111111-1111-1111-1111-111111111111": "ACME VENTURES", "cb:22222222-2222-2222-2222-222222222222": "Mixed Case Fund"})
+    websites = pd.Series({"cb:11111111-1111-1111-1111-111111111111": "acme.vc", "cb:22222222-2222-2222-2222-222222222222": "mixed.vc"})
+    pick_funder_names(names, pd.Series(dtype=object), websites, None)
+    assert [c["prompt"] for c in picker.calls] == [PROMPT_FILED_NAME]
+    assert list(picker.calls[0]["rows"]["funder_id"]) == ["cb:11111111-1111-1111-1111-111111111111"]
+
+
+def test_a_filed_name_answer_that_replaces_a_word_is_not_used(monkeypatch):
+    monkeypatch.setattr(columns, "pick_display_names", FakePicker({"ein:111111111": "Hofer Family Foundation"}))
+    names = pd.Series({"ein:111111111": "HOEFER FAMILY FOUNDATION"})
+    assert pick_funder_names(names, pd.Series(dtype=object), pd.Series(dtype=object), None).empty
+
+
+def test_the_dba_of_a_granter_reaches_the_model_through_build_funder_columns(monkeypatch):
+    picker = FakePicker({"ein:566040787": "Smith Family Fund"})
+    monkeypatch.setattr(columns, "pick_display_names", picker)
+    df = frame()
+    df.at[0, "granters"] = [granter("340714585", "THE CLEVELAND FOUNDATION"), granter("566040787", "SMITH FAMILY FOUNDATION", None, "SMITH FAMILY FUND")]
+    out = build_funder_columns(df, min_occurrences=1, session=object(), attributes_of=lambda ids: attributes(ids))
+    org_call = next(c for c in picker.calls if c["prompt"] == PROMPT)
+    assert org_call["rows"]["dba"].tolist() == ["SMITH FAMILY FUND"]
+    assert "Smith Family Fund" in out.loc[0, "Funders"]
+
+
+def test_a_dba_with_no_website_and_no_shared_word_is_not_used_and_the_name_is_recased(monkeypatch):
+    picker = FakePicker({"ein:111111111": "H & N BLECHNER MEMORIAL FUND"}, source="dba")
+    monkeypatch.setattr(columns, "pick_display_names", picker)
+    names = pd.Series({"ein:111111111": "JANE CAROL BRESSLER CHARITABLE FUND"})
+    out = pick_funder_names(names, pd.Series({"ein:111111111": "H & N BLECHNER MEMORIAL FUND"}), pd.Series(dtype=object), None)
+    assert [c["prompt"] for c in picker.calls] == [PROMPT, PROMPT_FILED_NAME]
+    assert out.empty  # the filed-name answer (the fake's) drops a word, so it is refused too
+
+
+def test_a_dba_confirmed_by_a_website_is_used(monkeypatch):
+    monkeypatch.setattr(columns, "pick_display_names", FakePicker({"ein:111111111": "The Long Center"}, source="dba"))
+    names = pd.Series({"ein:111111111": "GREATER AUSTIN PERFORMING ARTS CENTER INC"})
+    out = pick_funder_names(names, pd.Series({"ein:111111111": "THE LONG CENTER"}), pd.Series({"ein:111111111": "thelongcenter.org"}), None)
+    assert out.to_dict() == {"ein:111111111": "The Long Center"}
