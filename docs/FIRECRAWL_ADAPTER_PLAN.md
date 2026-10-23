@@ -59,13 +59,19 @@ Out of scope, each with its own PR or issue so this one stays reviewable:
   is used by matching code on domains that are never scraped).
 - #232 (blank and malformed website fields in data prep). The client's `invalid_url` guard
   in this plan is the backstop, not the fix.
-- Retiring `website_quality`'s separate redirect and liveness pass. It needs every project on
-  the new tables and it replaces a deliberate fresh check; Phase 7 at the earliest.
 - The in-house-first hybrid. Both reviews reject it: it splits one org's pages across two
   extractors (1,268 orgs in-house, 452 Firecrawl, 280 mixed in the phase 2 replay) to save
   roughly $80 to $230 per refresh, and it needs the code Phase 7 deletes.
 - Embedding-based page selection to replace the English `PATHS_TO_KEEP` allow-list.
 - Coresignal Multi-source fields for dedupe and dead-site fallback.
+
+Deferred to Phase 7, not out of scope: retiring `website_quality`'s separate redirect and
+liveness pass (D15). It asks "alive right now" at gate time with a deliberate fresh check,
+reaches orgs and candidate domains the scraper never touches, and reads the parsed table, so
+it can only be replaced once every project is on the new tables and the refresh cadence makes
+`last_attempt_at` a trustworthy liveness signal. A cheaper interim step belongs in Phase 6 if
+the 30-minute cold rebuild bites: read `final_host` and the attempt columns from v2 for orgs
+with a recent row and probe only the residue.
 
 ## 3. Target architecture
 
@@ -176,42 +182,213 @@ Notes:
 
 ## 5. Text pipeline
 
-These rules were tested against the pilot artifacts during review and are the part of the
-plan that most affects the LLM outputs.
+This section is written for colleagues who did not sit in the pilot. The vendor fixes
+fetching: it gets us the rendered page for sites where our scraper gets a JavaScript shell or
+a bot wall. The text it returns is not yet the text we want to summarize. The rules below turn
+it into that text. Every number here was measured on the 9,317 pages of the 2,000-org phase 2
+run or in the data-scientist review of those artifacts.
 
-**Gate order.** Run the parked and wall markers from `text_quality.py` on plain text with link
-labels kept (`markdown_to_plain`), before cleaning: dropping menu-only link lines deletes
-labels like "buy this domain" and turned two parked pages `ok` in the review's replay. Add a
-marker for Firecrawl's own "ERR_BLOCKED_BY_CLIENT / blocked by an extension" page, which
-sites redirecting to ad domains return and which passed as `ok` on about 5 of 2,000 orgs;
-that marker needs no length cap. Only the thin check runs on the cleaned text.
+### 5.1 What Firecrawl's markdown contains
 
-**Cleaner** (`markdown_clean.py`, pure, `CLEANER_VERSION`). Drop image markup, collapse
-`[label](url)` to `label` unless `add_section_links`, drop menu-only link lines, remove blank
-lines, then the existing `clean_scraped_text`. On the phase 2 pages the median page goes from
-11,037 characters raw to about 3,400 (4,793 without the menu-line drop); in-house today is
-2,649.
+Firecrawl renders the page in a browser and converts the whole document to markdown. That is
+the right default for a general tool and the wrong input for a summarizer, because the
+document carries everything a visitor sees, not only what the page is about. Four kinds of
+non-content appear in nearly every page.
 
-**Per-org cap and cross-page dedupe.** `make_group_text` budgets against gpt-4.1-mini's
-1,047,576-token window, so it never truncates today: on raw markdown 331 of 2,000 orgs exceed
-32k tokens and carry 64% of all tokens, and one site alone is a million. Add a per-org cap of
-8k tokens on cleaned text and remove lines repeated across an org's pages (41% of characters
-on raw markdown, 18% after cleaning, 6% in-house). Ship cap, dedupe and cleaner under one
-`extractor` version so caches bust once.
+**The navigation menu, as a bulleted list of links.** The top of one theatre's home page is
+twenty-odd lines like these before any sentence of content, and the same block repeats at
+the top of every subpage of the site:
+
+```
+- [VISIT](https://example.org/visit)
+- [80th Anniversary Season](https://example.org/80th-anniversary-season)
+- [GET INVOLVED](https://example.org/get-involved)
+- [MEMBERSHIP](https://example.org/membership)
+- [ABOUT US](https://example.org/about)
+```
+
+**Duplicated header blocks.** Responsive sites render the header once per screen size, and
+every copy survives conversion. One Squarespace site opens with its logo, a "Get the App"
+link and the menu toggle three times over:
+
+```
+[![Logo](https://images.squarespace-cdn.com/.../logo.png)](https://example.com/)
+[Get the App](https://apps.apple.com/us/app/.../id1462604065)
+Open MenuClose Menu
+[![Logo](https://images.squarespace-cdn.com/.../logo.png)](https://example.com/)
+[Get the App](https://apps.apple.com/us/app/.../id1462604065)
+Open MenuClose Menu
+```
+
+**The footer.** Address, phone, copyright, designer credit, and the site builder's own
+"top of page" and "bottom of page" markers.
+
+**Image markup and link URLs inside the content.** A hero carousel becomes a run of lines
+like the ones below, each carrying a long CDN URL. These survive the vendor's
+`onlyMainContent=true` setting, because images and links in the body are main content as far
+as the vendor is concerned:
+
+```
+![s1 img 3.png](https://images.squarespace-cdn.com/content/v1/63204c8f.../s1+img+3.png)
+![Frame 215.png](https://images.squarespace-cdn.com/content/v1/63204c8f.../Frame+215.png)
+Slide 1Slide 1 (current slide)Slide 2Slide 2 (current slide)Slide 3Slide 3 (current slide)
+```
+
+For contrast, our in-house extraction of that theatre's home page is 515 characters: the
+headings and two sentences, with no menu, no footer and no URLs. `unstructured` skips header
+and footer regions and emits text only. So the text every existing summary and taxonomy
+assignment was built on is lean, and the vendor's is not. The cleaning below closes that gap.
+
+### 5.2 Why cleaning is necessary
+
+Median characters per page on the phase 2 run:
+
+| Component | Home pages | Subpages | All pages |
+|---|---|---|---|
+| Raw markdown | 9,281 | 11,173 | 11,037 |
+| Image markup | 1,554 | 1,116 | 1,251 |
+| URL part of links | 2,533 | 4,039 | 3,846 |
+| Menu-only link lines | 2,088 | 3,750 | 3,529 |
+| After stripping images and link URLs | 3,873 | 4,829 | 4,717 |
+| After also dropping menu-only lines | | | ~3,400 |
+| In-house text, same run | | | 2,649 |
+
+Roughly half of every page is URL markup and a third is menu lines, with overlap between
+the two. Subpages carry more menu than home pages because the whole site navigation repeats
+on each one. Per organization the picture is worse than per page: raw markdown is 21,980
+tokens on average against 4,692 for in-house text (4.7x); 331 of 2,000 orgs exceed 32k
+tokens and together carry 64% of all tokens; one site alone is 1.01 million tokens. Lines
+repeated across an org's own pages are 41% of its characters raw, 18% after cleaning, 6% in
+in-house text.
+
+Each of the four consequences is a sufficient reason on its own.
+
+- **Cost.** Summarizer input per 30k orgs on gpt-4.1-mini: in-house about $48, raw markdown
+  about $232, cleaned $71 to $90, cleaned plus deduped plus capped about $43. Every summary
+  change also re-runs the summary of summaries, the taxonomy mapping and the relevance model,
+  so the multiplier applies downstream too.
+- **Quality.** The model reads "VISIT · MEMBERSHIP · SUPPORT US" and CDN paths as content.
+  Menu labels are the same across most nonprofits, so they dilute what distinguishes an org,
+  and on a long page they push the mission text thousands of tokens down the prompt. Nothing
+  bounds that today: `make_group_text` budgets against the model's 1,047,576-token window, so
+  a million-token page goes to the model whole.
+- **Gate calibration.** The thresholds in `text_quality.py` were measured on in-house text: a
+  page under 200 characters is thin, a wall page is under 1,000. On full-page markdown a bot
+  wall padded with 3k characters of menu URLs no longer looks like a wall, and a 404 page with
+  a long navigation passes the thin check: 40% of known-404 pages read "ok" on full-page
+  markdown in phase 1. That is why the status gate runs before the text gate, and why the
+  markers run on plain text rather than markdown.
+- **Determinism and the cache.** The LLM cache is keyed on a hash of the input text. Image
+  URLs on site-builder CDNs can carry size, format and signed parameters that differ between
+  fetches of an unchanged page; leaving them in makes identical pages hash differently and
+  defeats the cache. Stripping URLs is a large part of what makes "same page, same text" hold.
+
+### 5.3 The decisions, and what each one beat
+
+**Take markdown from the vendor, not HTML into our own extractor.** The alternative was to
+request `rawHtml` and keep `unstructured`. `unstructured` is the heaviest dependency in the
+package and one of the things this project retires; its `<p>` and `<section>` fallback is
+the cause of today's empty extractions on div-only site builders; and the vendor's markdown
+comes from the rendered DOM, so it sees content our fallback never will. Raw HTML is also 164
+to 190 kB per page, about 75 GB across the cache, for nothing we would read.
+
+**Full page on the home page, main content only on subpages, pending Q2.** The simplest
+option, `onlyMainContent=true` everywhere, strips the navigation from the links array as well
+as from the text: on a Wix probe it returned 0 internal links against 8, and link recall
+against our own extraction fell from 0.93 to 0.31. Our subpage rules live on exactly those
+navigation links, so the home page must be fetched full page. The opposite option, full page
+everywhere, keeps the largest padding term, the 3,750 median characters of menu on every
+subpage. Subpages do not need the links array, so main content there is pure gain if recall
+holds. Phase 1's 60-URL main-content-only run showed about 26% less prose and 3 pages
+flipping to thin, which is why D9 measures sentence recall of the in-house text inside the
+main-content subpages before Q2 decides, rather than trusting the usable rate, which cannot
+tell a 36k-character text from a 10k one.
+
+**Clean in our code, not with vendor options.** Vendor-side filtering is coarse and depends
+on each site's structure, and it would make the stored text depend on vendor behaviour we
+cannot version. Our cleaner is a pure function with a version constant and golden tests, and
+because the raw markdown is stored next to the cleaned text, a cleaner change re-derives
+`parsed_html` for every row by backfill without spending a credit.
+
+**Gate before clean.** The order is: status gate on `metadata.statusCode`, then the parked
+and wall markers on plain text with link labels kept (`markdown_to_plain`), then the cleaner,
+then the thin check on the cleaned text. The reason is concrete: dropping menu-only link
+lines deletes labels like "buy this domain", and in the review's replay two parked pages
+turned `ok` because of it. A Firecrawl-specific error page, "ERR_BLOCKED_BY_CLIENT / blocked
+by an extension", which sites redirecting to ad domains return, passed as `ok` on about 5 of
+2,000 orgs; it gets its own marker with no length cap.
+
+**The cleaner steps** (`markdown_clean.py`, `CLEANER_VERSION`), each with what it removes:
+
+- Drop image markup `![alt](url)`. The alt text is file names ("s1 img 3.png") and each URL
+  tokenizes into dozens of tokens.
+- Collapse `[label](url)` to `label`. The label is real text, often the only text on
+  navigation-heavy sites and genuine content in body links; the URL is noise. Callers that
+  need links keep them through the existing `add_section_links` flag.
+- Drop menu-only lines, lines that consist of nothing but a link or a list-item link. These
+  are navigation items and they repeat on every page.
+- Remove blank lines, then run the existing `clean_scraped_text` normalization that in-house
+  text already passes through.
+
+Result: the median page goes from 11,037 characters to about 3,400 (4,793 without the
+menu-line drop), against 2,649 for in-house text.
+
+**Cross-page dedupe.** The same header, footer and navigation appear on every page of an
+org, and some of it survives the per-page rules as plain text ("Open MenuClose Menu"). Even
+after cleaning, 18% of an org's characters are lines repeated across its pages. The combine
+step keeps the first occurrence of each normalized line, home page first, and drops later
+repeats.
+
+**A per-org cap of 8k tokens.** `make_group_text` never truncates today. In-house combined
+text has a median near 10k characters, about 2.5k tokens, so 8k tokens (about 32k characters)
+covers the largest real organizations while bounding the pathological ones; a summary is a
+few sentences and does not improve with more input; and the cost lands near $43 per 30k orgs.
+The cut is deterministic: home page first, then subpages in `deterministic_len_key` order,
+truncated from the end, so what gets cut is the same on every run.
 
 **Deterministic page selection.** `filter_links` iterates `set(links)` before applying
 `max_per_subpath`, so which pages survive the cap depends on the hash seed; the review
 reproduced three different `/news` picks with three seeds, and a section hits the cap for
-241 of 2,000 orgs. Sort with `deterministic_len_key` before capping. This is a live bug in the
-shared code and should land as its own small PR before Phase 4, since it changes the in-house
+241 of 2,000 orgs. Sorting with `deterministic_len_key` before capping fixes it (D8, PR
+#238). This is a live bug in shared code and lands on its own, since it changes the in-house
 path too. About 17% of picks are news, blog or resources posts whose content churns between
 refreshes; capping those at one or two per org is a candidate change, measured separately.
 
-**`onlyMainContent` on subpages.** Full page on the home page (the links array needs it);
-main content only on subpages is the proposal, validated in Phase 5 with sentence recall of
-the in-house text inside the main-content subpages plus the duplicated-line share, not with
-the usable rate, which cannot tell a 36k-character text from a 10k one. Phase 1's 60-URL
-main-content-only run already showed about 26% less prose and 3 pages flipping to thin.
+**One version for the whole text pipeline.** Cleaner, dedupe and cap ship under one
+`extractor` value (`firecrawl-md-v1`) and are bumped together, so the LLM caches bust once
+per version rather than once per tweak.
+
+### 5.4 The order of operations
+
+```
+per page, from the Firecrawl response
+  |- status gate ............ metadata.statusCode 2xx? otherwise a failure row and no text
+  |- markdown_to_plain ...... link labels kept, URLs removed; used by the markers only
+  |- parked / wall / blocked  text_quality markers on that plain text
+  |- clean_markdown v1 ...... images out, links to labels, menu lines out, blanks out,
+  |                           then clean_scraped_text
+  |- thin check ............. on the cleaned text
+  '- store .................. markdown (raw), parsed_html (cleaned), text_quality, extractor
+
+per org, from this run's pages
+  |- order .................. home page first, then subpages by deterministic_len_key
+  |- cross-page dedupe ...... drop lines already seen in an earlier page of this org
+  |- cap .................... 8k tokens, cut from the end
+  '- make_group_text ........ combined_text, classify_text_quality, web_pages_parsed_v2
+```
+
+The diagram shows why the raw markdown is stored and the cleaned text is what everyone
+reads: every step below "store" is a pure function of stored inputs and can be replayed.
+
+### 5.5 What stays reversible
+
+- `extractor` on every row names the version that produced `parsed_html`; a newer cleaner
+  re-derives every row from stored `markdown` by backfill, with no credits spent.
+- Golden tests on saved pilot markdown cover the parked pages and the blocked-by-extension
+  pages the review found, plus a determinism test: two runs over the same pages, identical
+  bytes.
+- `web_pages_history_v2` keeps the previous good text of each page, so a cleaner regression
+  that reaches production can be rolled back as well as re-derived.
 
 ## 6. Error and refresh semantics
 
