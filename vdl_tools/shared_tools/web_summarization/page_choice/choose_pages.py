@@ -77,20 +77,18 @@ def filter_links(
         "/privacy-policy",
 
 
+    When a top-level path has more bottom pages than max_per_subpath, the
+    shortest paths are kept (ties broken by the md5 of the path), so the pick
+    depends only on the set of links, not on their order or on the hash seed.
+
     Parameters
     ----------
-    org_pages_records : list[dict]
-        A list of dictionaries with the keys:
-        [
-            "type",
-            "source",
-            "subpath",
-            "text",        
-        ]
+    links : list[str]
+        Internal paths of the site, with or without leading/trailing slashes
     keep_paths : set[str]
         Set of words that must exist somewhere in the path
     max_per_subpath : int, optional
-        Maximium number of bottom pages to keep for each top level page, by default 4
+        Maximium number of bottom pages to keep for each top level page, by default 8
 
     Returns
     -------
@@ -100,9 +98,15 @@ def filter_links(
     if not keep_paths:
         return links
 
-    # Filter duplicates if any
     keep_paths = set(keep_paths)
-    links = [x.strip('/') for x in set(links)]
+    # Dedupe, then fix the order. Everything below follows the order of this
+    # list: the prefix counter, the ties in its most_common(), and the
+    # per-section cap, which keeps the first max_per_subpath bottom pages it
+    # meets. set() iteration order changes with PYTHONHASHSEED, so without the
+    # sort a section over the cap got different pages on each run and machine,
+    # and the scrape cache (keyed by path) filled up with different subpages.
+    # Shortest path first, md5 of the path to break ties.
+    links = sorted((x.strip('/') for x in set(links)), key=deterministic_len_key)
 
     def _link_part_in_keep_paths(link_parts, keep_paths):
         return len(set(link_parts).intersection(keep_paths)) > 0
