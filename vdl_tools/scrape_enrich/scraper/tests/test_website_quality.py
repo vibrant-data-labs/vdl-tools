@@ -1,3 +1,8 @@
+import datetime as dt
+
+import pandas as pd
+
+from vdl_tools.scrape_enrich import website_quality as wq
 from vdl_tools.scrape_enrich.website_junk_rules import is_junk_summary
 from vdl_tools.scrape_enrich.website_quality import (
     _save_cache,
@@ -40,12 +45,72 @@ def test_junk_summary_checks_the_orgs_own_records():
     assert not is_junk_summary("Example School teaches K-8 students.", "Example School")
 
 
+def _entry(final_domain, alive, checked, alive_checked=None):
+    return {
+        "final_domain": final_domain,
+        "alive": alive,
+        "checked": checked,
+        "alive_checked": alive_checked or checked,
+    }
+
+
 def test_domain_cache_round_trips_and_keeps_another_runs_newer_checks(tmp_path):
     uri = tmp_path / "website_domain_cache.parquet"
     assert load_domain_cache(uri) == {}
-    old = {"final_domain": "example.org", "alive": False, "checked": "2026-01-01"}
-    new = {"final_domain": "example.org", "alive": True, "checked": "2026-10-01"}
+    old = _entry("example.org", False, "2026-01-01")
+    new = _entry("example.org", True, "2026-10-01")
     # another project saved a newer check for example.org meanwhile
     _save_cache({"example.org": new}, uri)
-    _save_cache({"example.org": old, "other.org": old}, uri)
+    _save_cache({"example.org": dict(old), "other.org": dict(old)}, uri)
     assert load_domain_cache(uri) == {"example.org": new, "other.org": old}
+
+
+def test_cache_saved_before_alive_checked_existed_still_loads(tmp_path):
+    uri = tmp_path / "website_domain_cache.parquet"
+    pd.DataFrame(
+        [{"domain": "example.org", "final_domain": "example.org", "alive": True, "checked": "2026-05-01"}]
+    ).to_parquet(uri)
+    assert load_domain_cache(uri) == {"example.org": _entry("example.org", True, "2026-05-01")}
+
+
+def test_redirect_and_liveness_each_keep_the_newer_answer(tmp_path):
+    uri = tmp_path / "website_domain_cache.parquet"
+    # another run re-checked liveness yesterday; this run re-resolved the redirect today
+    _save_cache({"example.org": _entry("example.org", False, "2026-09-01", "2026-10-22")}, uri)
+    _save_cache({"example.org": _entry("moved.org", True, "2026-10-23", "2026-09-01")}, uri)
+    assert load_domain_cache(uri) == {
+        "example.org": _entry("moved.org", False, "2026-10-23", "2026-10-22"),
+    }
+
+
+def test_fresh_check_reuses_recent_answers_and_saves_new_ones(tmp_path, monkeypatch):
+    uri = tmp_path / "website_domain_cache.parquet"
+    today = dt.date.today()
+    recent = (today - dt.timedelta(days=1)).isoformat()
+    stale = (today - dt.timedelta(days=30)).isoformat()
+    _save_cache({
+        "recent.org": _entry("recent.org", False, stale, recent),
+        "stale.org": _entry("moved.org", False, stale),
+    }, uri)
+    probed = []
+
+    def fake_url_alive(domain):
+        probed.append(domain)
+        return True
+
+    monkeypatch.setattr(wq, "url_alive", fake_url_alive)
+
+    fresh = wq.fresh_alive_check(["recent.org", "stale.org", "uncached.org", ""], uri)
+
+    assert fresh == {"recent.org": False, "stale.org": True, "uncached.org": True}
+    assert sorted(probed) == ["stale.org", "uncached.org"]
+    # the liveness answer is renewed; the 30-day-old redirect is not
+    assert load_domain_cache(uri) == {
+        "recent.org": _entry("recent.org", False, stale, recent),
+        "stale.org": _entry("moved.org", True, stale, today.isoformat()),
+    }
+
+    # a rerun the same day probes nothing that is cached
+    probed.clear()
+    assert wq.fresh_alive_check(["recent.org", "stale.org"], uri) == {"recent.org": False, "stale.org": True}
+    assert probed == []
