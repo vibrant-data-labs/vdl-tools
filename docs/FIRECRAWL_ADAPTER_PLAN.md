@@ -137,11 +137,14 @@ because `_format_scraped_sites` and the enrichment pipeline read `response_statu
 | `text_quality` | per-page verdict | #198 |
 | `proxy_used`, `credits_used`, `content_type`, `language`, `scrape_id` | metadata | |
 | `num_errors`, `fetched_at` | ours; see section 6 for what increments `num_errors`; `fetched_at` is the date of the stored text | |
-| `last_attempt_at`, `last_attempt_result`, `attempts_since_fetch` | the newest attempt, kept apart from the stored text (section 6, last known good) | |
+| `last_attempt_at`, `last_attempt_result`, `attempts_since_fetch` | the newest attempt, kept apart from the stored text; result is `ok`, `gone` (404, 410, dead host), `unknown` (blocked, 429, 5xx, vendor error) or `invalid_url` (section 6) | |
+| `superseded_at` | set when a newer home fetch no longer picks this page (section 6, subpages follow the home page) | |
 
 `web_pages_parsed_v2`: `cleaned_home_key` (PK), `home_url`, `run_id`, `combined_text`,
 `source_keys` (the page rows it was built from), `extractor`, `prompt_token_budget`,
-`text_quality`, `num_errors`, `combined_at`, `last_attempt_at`, `last_attempt_result`.
+`text_quality`, `num_errors`, `combined_at`, `last_attempt_at`, `last_attempt_result`,
+`stale_reason` (`home_gone` when the home page now answers 404, 410 or a dead host and the
+stored text is the last known good).
 
 `web_pages_history_v2` (added 2026-10-22 at Zein's request): `cleaned_key`, `fetched_at`,
 `run_id`, `extractor`, `markdown`, `parsed_html`, `text_quality`. Written only when a newer
@@ -236,6 +239,21 @@ main-content-only run already showed about 26% less prose and 3 pages flipping t
   `retry_failed_after_days` has elapsed on `last_attempt_at`, so a blocked site is neither
   lost nor hammered. Today, with `skip_existing=False`, `session.merge` on the page key
   replaces the row and the earlier text is gone.
+- Subpages follow the home page. Each refresh re-derives the subpage set from today's links,
+  and the combined text is built only from the pages that run picked and fetched, recorded in
+  `source_keys`, never from every row under the home key. A page no longer linked is marked
+  `superseded_at` and leaves the text; one still linked that answers 404 or 410 is `gone` and
+  leaves the text; one that is blocked, rate-limited, 5xx or vendor-errored is `unknown` and
+  keeps its last good text in place. The home page follows the same rule one level up: a gone
+  home keeps the org's last text with `stale_reason = home_gone` and generates no new summary;
+  a blocked home changes nothing and is retried on schedule. Today a vanished subpage stays in
+  the combined text because the combine reads every row under the home key.
+- Material change. When a refresh produces new combined text for an org, the summarizer and
+  everything downstream (summary of summaries, taxonomy mapping, relevance) re-run only if the
+  text changed materially: a different page set, or line-shingle Jaccard against the previous
+  text under 0.9. Otherwise the previous summary is kept and the new text is stored with its
+  date. A cost control on the LLM calls, never on the scrape; it needs the previous text,
+  which `web_pages_history_v2` keeps.
 - A successful re-combine sets `num_errors = 0` (#228); the same one-line fix goes into the
   old path.
 - Retention: old `scrape_runs` and superseded page rows follow the TTL policy that the RDS
@@ -300,7 +318,8 @@ pages. An orchestration test with the fake backend in the style of `StubBrowserS
 `test_js_shell_fallback.py`: home failure fetches no subpages, vendor error leaves
 `num_errors` at 0, subpage selection from vendor links, verdict persistence, `num_errors`
 reset on re-combine, a blocked re-fetch keeps the previous text and writes the attempt
-columns, a `max_age_days` cutoff refetches only older rows. Delete the dead
+columns, a vanished subpage and a 404 subpage both drop out of the next combined text while
+a blocked subpage stays, a `max_age_days` cutoff refetches only older rows. Delete the dead
 `choose_org_pages` and `filter_pages`.
 
 Id lookup (D16, VIB-70): the pipeline accepts an optional `org_ids` mapping from home URL to
@@ -344,8 +363,9 @@ First refresh, two options for the team:
   since every org's summary, summary of summaries, taxonomy mapping and relevance call will
   re-run.
 
-Either way, later full refreshes with `maxAge=0` should carry a material-change gate: keep the
-previous summary when the line-shingle Jaccard against the previous text is at least 0.9.
+Either way, the summarizer call path carries the material-change gate of section 6: the LLM
+re-runs only when the page set changed or the line-shingle Jaccard against the previous text
+is under 0.9; otherwise the previous summary is kept.
 
 ### Phase 7: retire the in-house path (2 days)
 
