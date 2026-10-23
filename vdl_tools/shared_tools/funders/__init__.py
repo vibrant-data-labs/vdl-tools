@@ -1,1 +1,1 @@
-"""Funder logic shared by the loaders: names today, ids, types and metrics under D1."""
+"""Funder helpers shared by the loaders: ids, names, and the per-org funder columns."""
