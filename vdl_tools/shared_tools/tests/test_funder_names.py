@@ -1,6 +1,6 @@
 import pytest
 
-from vdl_tools.scrape_enrich.funder_names import (
+from vdl_tools.shared_tools.funders.names import (
     clean_funder_text,
     funder_filed_name,
     funder_key,
