@@ -59,13 +59,19 @@ Out of scope, each with its own PR or issue so this one stays reviewable:
   is used by matching code on domains that are never scraped).
 - #232 (blank and malformed website fields in data prep). The client's `invalid_url` guard
   in this plan is the backstop, not the fix.
-- Retiring `website_quality`'s separate redirect and liveness pass. It needs every project on
-  the new tables and it replaces a deliberate fresh check; Phase 7 at the earliest.
 - The in-house-first hybrid. Both reviews reject it: it splits one org's pages across two
   extractors (1,268 orgs in-house, 452 Firecrawl, 280 mixed in the phase 2 replay) to save
   roughly $80 to $230 per refresh, and it needs the code Phase 7 deletes.
 - Embedding-based page selection to replace the English `PATHS_TO_KEEP` allow-list.
 - Coresignal Multi-source fields for dedupe and dead-site fallback.
+
+Deferred to Phase 7, not out of scope: retiring `website_quality`'s separate redirect and
+liveness pass (D15). It asks "alive right now" at gate time with a deliberate fresh check,
+reaches orgs and candidate domains the scraper never touches, and reads the parsed table, so
+it can only be replaced once every project is on the new tables and the refresh cadence makes
+`last_attempt_at` a trustworthy liveness signal. A cheaper interim step belongs in Phase 6 if
+the 30-minute cold rebuild bites: read `final_host` and the attempt columns from v2 for orgs
+with a recent row and probe only the residue.
 
 ## 3. Target architecture
 
