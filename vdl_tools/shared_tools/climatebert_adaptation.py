@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import requests
 
 import pandas as pd
@@ -13,12 +15,71 @@ from vdl_tools.shared_tools.tools.logger import logger
 
 
 import json
+import time
 
 
 ADAPTATION_MODEL_2023_ID = "7qk99z93"
 CPI_ADAPTATION_MODEL_2024_ID = "owp290lq"
 TW_ADAPTATION_MODEL_2024_ID = "5wold9vw"
 BASE_API_URL = "https://model-{model_id}.api.baseten.co/production/predict"
+DEPLOYMENTS_API_URL = "https://api.baseten.co/v1/models/{model_id}/deployments"
+# Parallel chunks queue behind each other while new replicas cold-start (~50s
+# per chunk on CPU, ~95s to start a replica). Baseten holds a queued request
+# for up to 1200s, so the client waits long enough not to give up first.
+PREDICT_TIMEOUT = 600
+
+# Baseten deployment statuses. SCALED_TO_ZERO and WAKING_UP still serve: the
+# first request spins a replica up.
+_LIVE_STATUSES = {"ACTIVE", "SCALED_TO_ZERO", "WAKING_UP"}
+_BROKEN_STATUSES = {"BUILD_FAILED", "BUILD_STOPPED", "DEPLOY_FAILED", "FAILED", "UNHEALTHY"}
+
+
+def ensure_deployment_active(model_id, api_key, timeout=900, poll_interval=15):
+    """Make sure the model's production deployment will serve predictions.
+
+    A deactivated deployment answers every predict call with a 400, which
+    `bulk_predict` caches as a per-org error and does not retry. So check
+    first: activate an INACTIVE deployment and wait for it to come up; raise
+    if it is broken or not live within ``timeout`` seconds. Returns the
+    deployment as the management API describes it (``status``,
+    ``autoscaling_settings``, ...).
+    """
+    headers = {"Authorization": f"Api-Key {api_key}"}
+    deployments_url = DEPLOYMENTS_API_URL.format(model_id=model_id)
+    deadline = time.monotonic() + timeout
+    activated = False
+    while True:
+        resp = requests.get(f"{deployments_url}/production", headers=headers, timeout=30)
+        resp.raise_for_status()
+        deployment = resp.json()
+        status = deployment["status"]
+        if status in _LIVE_STATUSES:
+            if activated:
+                logger.info("Baseten deployment %s of model %s is now %s", deployment["id"], model_id, status)
+            return deployment
+        if status in _BROKEN_STATUSES:
+            raise RuntimeError(f"Baseten deployment {deployment['id']} of model {model_id} is {status}")
+        # DEACTIVATING has to finish before it can be activated again.
+        if status == "INACTIVE" and not activated:
+            logger.warning(
+                "Baseten deployment %s of model %s is INACTIVE, activating it",
+                deployment["id"], model_id,
+            )
+            resp = requests.post(
+                f"{deployments_url}/{deployment['id']}/activate",
+                headers=headers,
+                json={},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            activated = True
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"Baseten deployment {deployment['id']} of model {model_id} "
+                f"still {status} after {timeout}s"
+            )
+        time.sleep(poll_interval)
+
 
 # Stable pseudo-prompt: the ClimateBERT classifier has no prompt, but the cache
 # keys rows by (prompt_id, given_id, text_id, model_name). Do not edit this
@@ -171,7 +232,7 @@ class AdaptationMitigationCache(PromptResponseCacheSQL):
             BASE_API_URL.format(model_id=self.model),
             headers={"Authorization": f"Api-Key {self.api_key}"},
             json=payload,
-            timeout=120,
+            timeout=PREDICT_TIMEOUT,
         )
         if not resp.ok:
             raise Exception(
@@ -207,9 +268,10 @@ class AdaptationMitigationCache(PromptResponseCacheSQL):
     ) -> dict:
         """Return {given_id: prediction}, running the model only on cache misses.
 
-        Misses are sent to Baseten in chunks of ``chunk_size``; each chunk is
-        upserted and committed before the next, so an interrupted run resumes
-        from the cache (same recovery property the JSON file gave us).
+        Misses are sent to Baseten in chunks of ``chunk_size``, as many at a
+        time as the deployment's ``max_replica``; each chunk is upserted and
+        committed as soon as it returns, so an interrupted run resumes from the
+        cache (same recovery property the JSON file gave us).
         """
         given_ids_texts = list({(str(g), t) for g, t in given_ids_texts})
         requested_given_ids = {g for g, _ in given_ids_texts}
@@ -239,31 +301,53 @@ class AdaptationMitigationCache(PromptResponseCacheSQL):
             "Adaptation/mitigation: %s cached, %s to run", len(res), len(unfound)
         )
 
-        for chunk in chunked(unfound, chunk_size):
-            try:
-                predictions = self._post_batch(chunk)
-            except Exception as ex:
-                logger.error("Baseten chunk failed: %s", ex)
-                self._upsert_error_rows([
-                    self._build_error_row(
-                        given_id, text, {"message": str(ex)}, request_kwargs={},
-                    )
-                    for given_id, text in chunk
-                ])
-                self.session.commit()
-                continue
+        # Outside the per-chunk try: a dead deployment should stop the run,
+        # not become an error row for every org.
+        max_workers = 1
+        if unfound:
+            deployment = ensure_deployment_active(self.model, self.api_key)
+            # One chunk in flight per replica the deployment can scale to.
+            max_workers = (deployment.get("autoscaling_settings") or {}).get("max_replica") or 1
+            logger.info("Adaptation/mitigation: sending %s chunks at a time", max_workers)
 
-            success_rows = [
-                self._build_success_row(
-                    given_id, text, _BasetenPrediction(prediction), request_kwargs={},
-                )
-                for (given_id, text), prediction in zip(chunk, predictions)
-            ]
-            self._upsert_success_rows(success_rows)
-            self.session.commit()
-            for (given_id, _), prediction in zip(chunk, predictions):
-                res[given_id] = prediction
-            logger.info("Saved predictions %s to %s", len(res) - len(chunk), len(res))
+        # Chunks are posted from worker threads; every database write stays on
+        # this thread, since the session is not thread-safe.
+        pool = ThreadPoolExecutor(max_workers=max_workers)
+        try:
+            futures = {
+                pool.submit(self._post_batch, chunk): chunk
+                for chunk in chunked(unfound, chunk_size)
+            }
+            for future in as_completed(futures):
+                chunk = futures[future]
+                try:
+                    predictions = future.result()
+                except Exception as ex:
+                    logger.error("Baseten chunk failed: %s", ex)
+                    self._upsert_error_rows([
+                        self._build_error_row(
+                            given_id, text, {"message": str(ex)}, request_kwargs={},
+                        )
+                        for given_id, text in chunk
+                    ])
+                    self.session.commit()
+                    continue
+
+                success_rows = [
+                    self._build_success_row(
+                        given_id, text, _BasetenPrediction(prediction), request_kwargs={},
+                    )
+                    for (given_id, text), prediction in zip(chunk, predictions)
+                ]
+                self._upsert_success_rows(success_rows)
+                self.session.commit()
+                for (given_id, _), prediction in zip(chunk, predictions):
+                    res[given_id] = prediction
+                logger.info("Saved predictions %s to %s", len(res) - len(chunk), len(res))
+        finally:
+            # On an interrupt, drop the queued chunks instead of running them
+            # all with nobody saving the results.
+            pool.shutdown(cancel_futures=True)
 
         # The text_id-based lookup can match rows cached under other given_ids
         # (identical text on two orgs) — return only what was asked for.
