@@ -149,8 +149,8 @@ stored text is the last known good).
 `web_pages_history_v2` (added 2026-10-22 at Zein's request): `cleaned_key`, `fetched_at`,
 `run_id`, `extractor`, `markdown`, `parsed_html`, `text_quality`. Written only when a newer
 good fetch replaces a page's text; one previous version kept per page, older ones removed
-under the #150 TTL policy. It is what makes a re-scrape safe (the old text is never the only
-copy) and what the material-change gate on summaries compares against.
+under the #150 TTL policy. It is what makes a re-scrape safe: the old text is never the only
+copy.
 
 `org_site_keys` (added 2026-10-22 at Zein's request): the link from a source org id to the
 site fetched for it, so a Crunchbase uuid, an EIN or an NZI id finds the cached site and text
@@ -248,12 +248,14 @@ main-content-only run already showed about 26% less prose and 3 pages flipping t
   home keeps the org's last text with `stale_reason = home_gone` and generates no new summary;
   a blocked home changes nothing and is retried on schedule. Today a vanished subpage stays in
   the combined text because the combine reads every row under the home key.
-- Material change. When a refresh produces new combined text for an org, the summarizer and
-  everything downstream (summary of summaries, taxonomy mapping, relevance) re-run only if the
-  text changed materially: a different page set, or line-shingle Jaccard against the previous
-  text under 0.9. Otherwise the previous summary is kept and the new text is stored with its
-  date. A cost control on the LLM calls, never on the scrape; it needs the previous text,
-  which `web_pages_history_v2` keeps.
+- Deterministic text. The same page set with the same page texts produces byte-identical
+  combined text: picks are sorted (D8), the cleaner, dedupe and cap are pure functions with
+  stable ordering, and pages are combined in `deterministic_len_key` order as today. That is
+  what makes the hash-keyed LLM cache (`prompt_response`, keyed on prompt, org and a uuid of
+  the input text) hit, with no gate in front of it. When the text does change, the summary
+  and everything downstream re-run; that cost is accepted. A material-change gate (keep the
+  previous summary when the new text is nearly identical) was proposed in review and
+  rejected on 2026-10-23 as more machinery than the saving is worth.
 - A successful re-combine sets `num_errors = 0` (#228); the same one-line fix goes into the
   old path.
 - Retention: old `scrape_runs` and superseded page rows follow the TTL policy that the RDS
@@ -363,9 +365,9 @@ First refresh, two options for the team:
   since every org's summary, summary of summaries, taxonomy mapping and relevance call will
   re-run.
 
-Either way, the summarizer call path carries the material-change gate of section 6: the LLM
-re-runs only when the page set changed or the line-shingle Jaccard against the previous text
-is under 0.9; otherwise the previous summary is kept.
+Either way, there is no gate between new text and the LLM: when an org's combined text
+changes, its summary and everything downstream re-run, and unchanged text hits the cache
+because the text pipeline is deterministic (section 6).
 
 ### Phase 7: retire the in-house path (2 days)
 
