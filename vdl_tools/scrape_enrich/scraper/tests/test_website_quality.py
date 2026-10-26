@@ -87,7 +87,7 @@ def test_fresh_check_reuses_recent_answers_and_saves_new_ones(tmp_path, monkeypa
     uri = tmp_path / "website_domain_cache.parquet"
     today = dt.date.today()
     recent = (today - dt.timedelta(days=1)).isoformat()
-    stale = (today - dt.timedelta(days=30)).isoformat()
+    stale = (today - dt.timedelta(days=wq.FRESH_VALID_DAYS + 10)).isoformat()
     _save_cache({
         "recent.org": _entry("recent.org", False, stale, recent),
         "stale.org": _entry("moved.org", False, stale),
@@ -104,7 +104,7 @@ def test_fresh_check_reuses_recent_answers_and_saves_new_ones(tmp_path, monkeypa
 
     assert fresh == {"recent.org": False, "stale.org": True, "uncached.org": True}
     assert sorted(probed) == ["stale.org", "uncached.org"]
-    # the liveness answer is renewed; the 30-day-old redirect is not
+    # the liveness answer is renewed; the old redirect is not
     assert load_domain_cache(uri) == {
         "recent.org": _entry("recent.org", False, stale, recent),
         "stale.org": _entry("moved.org", True, stale, today.isoformat()),

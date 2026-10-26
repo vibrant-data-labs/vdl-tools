@@ -106,7 +106,10 @@ def check_domain(domain):
 # re-resolving redirects.
 CACHE_COLS = ["domain", "final_domain", "alive", "checked", "alive_checked"]
 CACHE_VALID_DAYS = 90
-FRESH_VALID_DAYS = 3
+# Liveness answers are reused for as long as redirects (Zein, 2026-10-26): a site
+# that goes down keeps its link for up to 90 days. alive_checked stays its own
+# date so a liveness-only recheck does not extend the redirect's validity.
+FRESH_VALID_DAYS = 90
 SAVE_EVERY = 2000
 MAX_WORKERS = 32
 # Liveness probes mostly wait on the network (and on dead sites' timeouts)
@@ -184,11 +187,11 @@ def resolve_domains(domains, uri, refresh=False, max_workers=MAX_WORKERS):
 def fresh_alive_check(
     domains, uri, cache=None, valid_days=FRESH_VALID_DAYS, max_workers=FRESH_MAX_WORKERS,
 ):
-    """``url_alive`` as of the last ``valid_days`` days, not the 90-day cache.
+    """``url_alive`` for every domain, reusing answers from the last ``valid_days`` days.
 
-    A site up 90 days ago may be down today, but a rerun the same week need
-    not re-probe every site: answers from the last ``valid_days`` days are
-    reused, and new ones are saved to the shared cache at ``uri``. Only run
+    Answers newer than the cutoff (90 days by default, the same window as the
+    redirect cache) are reused; the rest are probed and saved to the shared
+    cache at ``uri`` under their own date, ``alive_checked``. Only run
     on domains with scraped text; the others lose their link anyway.
     """
     domains = sorted({d for d in domains if d})
@@ -481,9 +484,8 @@ def gate_websites(
     ``domain_cache_uri``: the shared domain cache (local or ``s3://``).
     ``decisions_path``: the curated decisions CSV; ``review_path``: the review
     xlsx to write. Both optional. Look all three up in the project's paths config.
-    ``fresh_check`` re-probes domains with scraped text unless they were
-    checked in the last ``FRESH_VALID_DAYS`` days, instead of trusting the
-    90-day cache.
+    ``fresh_check`` re-probes domains with scraped text whose liveness answer
+    is older than ``FRESH_VALID_DAYS`` days.
     """
     cache = (
         resolve_for_frame(df, domain_cache_uri) if resolve
