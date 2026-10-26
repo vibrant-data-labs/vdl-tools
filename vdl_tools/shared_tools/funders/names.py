@@ -29,7 +29,6 @@ TRAILING_JUNK_RE = re.compile(r"[\s.,;:|/\\&-]+$")
 CARE_OF_RE = re.compile(r"\s*(?:c/o|\b(?:attn|attention)\b:?).*$", re.IGNORECASE)
 CO_SUFFIX_RE = re.compile(r"\s+co$")
 
-SOCIAL_DOMAINS = frozenset({"facebook.com", "linkedin.com", "twitter.com", "x.com", "instagram.com"})
 US_STATES = {
     "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR", "california": "CA",
     "colorado": "CO", "connecticut": "CT", "delaware": "DE", "district of columbia": "DC",
@@ -102,12 +101,3 @@ def us_state(value):
     if value.upper() in US_STATES.values():
         return value.upper()
     return US_STATES.get(value.lower())
-
-
-def website_domain(url):
-    """Lowercase host without ``www.``; ``None`` for a blank, a placeholder or a social network."""
-    url = _clean(url).lower()
-    if not url or " " in url or url in {"n/a", "na", "none"}:
-        return None
-    host = re.sub(r"^[a-z]+://", "", url).split("/")[0].removeprefix("www.")
-    return None if "." not in host or host in SOCIAL_DOMAINS else host

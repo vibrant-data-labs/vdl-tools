@@ -14,6 +14,7 @@ import re
 import numpy as np
 import pandas as pd
 
+from vdl_tools.scrape_enrich.url_keys import website_domain
 from vdl_tools.scrape_enrich.display_name import PROMPT, PROMPT_FILED_NAME, PROMPT_SHARED_SITE, pick_display_names
 from vdl_tools.shared_tools.funders.ids import normalize_ein, slugify
 from vdl_tools.shared_tools.funders.names import (
@@ -21,7 +22,6 @@ from vdl_tools.shared_tools.funders.names import (
     funder_key,
     funder_name_and_dba,
     pick_spelling,
-    website_domain,
 )
 
 logger = logging.getLogger(__name__)
@@ -146,7 +146,7 @@ def pick_funder_names(names, dbas, websites, session, texts=None, limit=None):
             "funder_id": names.index,
             "name": names.values,
             "dba": names.index.map(dbas).fillna(""),
-            "website": names.index.map(websites).map(website_domain),
+            "website": names.index.map(websites).map(website_domain).map(lambda d: d or None),
         }
     )
     has_evidence = inputs["funder_id"].str.startswith("ein:") & ((inputs["dba"] != "") | inputs["website"].notna())

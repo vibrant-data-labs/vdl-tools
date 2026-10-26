@@ -221,3 +221,12 @@ def test_scraped_text_is_shown_to_the_model_for_funders_that_have_it(monkeypatch
     texts_sent = org_call["rows"].set_index("funder_id")["text"]
     assert texts_sent["ein:111111111"] == "Zest Education supports schools."
     assert pd.isna(texts_sent["ein:222222222"])
+
+
+def test_a_placeholder_or_platform_website_is_not_evidence(monkeypatch):
+    picker = FakePicker({})
+    monkeypatch.setattr(columns, "pick_display_names", picker)
+    names = pd.Series({"ein:111111111": "PLAIN FOUNDATION", "ein:222222222": "OTHER FOUNDATION"})
+    websites = pd.Series({"ein:111111111": "N/A", "ein:222222222": "https://www.facebook.com/otherfoundation"})
+    pick_funder_names(names, pd.Series(dtype=object), websites, None)
+    assert [c["prompt"] for c in picker.calls] == [PROMPT_FILED_NAME]

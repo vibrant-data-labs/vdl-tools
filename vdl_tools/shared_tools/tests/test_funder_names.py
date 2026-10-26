@@ -7,7 +7,6 @@ from vdl_tools.shared_tools.funders.names import (
     funder_name_and_dba,
     pick_spelling,
     us_state,
-    website_domain,
 )
 
 
@@ -80,10 +79,3 @@ def test_us_state():
 def test_funder_name_and_dba():
     assert funder_name_and_dba("THE OPPORTUNITY TRUST", None, "ZEST EDUCATION") == ("THE OPPORTUNITY TRUST", "ZEST EDUCATION")
     assert funder_name_and_dba("WALTON FAMILY FOUNDATION") == ("WALTON FAMILY FOUNDATION", "")
-
-
-def test_website_domain():
-    assert website_domain("https://www.Abstract.com/about") == "abstract.com"
-    assert website_domain("N/A") is None
-    assert website_domain("https://facebook.com/x") is None
-    assert website_domain(None) is None
