@@ -185,9 +185,12 @@ def clean_tags(df, tagCol, delimeter="|"):
     df[tagCol] = df[tagCol].apply(
         lambda x: [s.strip() for s in x if len(s) > 0]
     )  # remove spaces and empty elements - list comprehension
+    # get unique tags in first-seen order, and join back into string of tags.
+    # Not set(): its order changes per process (PYTHONHASHSEED), which reshuffles
+    # " // " descriptions on every run and misses every text-keyed cache downstream.
     df[tagCol] = df[tagCol].apply(
-        lambda x: delimeter.join(list(set(x)))
-    )  # get unique tags, and join back into string of tags
+        lambda x: delimeter.join(dict.fromkeys(x))
+    )
     return df[tagCol]
 
 
@@ -203,8 +206,8 @@ def clean_tag_cols(df, tagCols, delimeter):
 def clean_tag_list(df, tagCol, replace={}):
     # remove empty tags and duplicates reformat as pipe-separated string of unique tags
     # returns new tags
-    # remove spaces and empty elements - list comprehension
-    tags = df[tagCol].apply(lambda x: [s.strip() for s in list(set(x)) if (s and len(s.strip()) > 0)])
+    # remove spaces and empty elements - list comprehension (first-seen order; see clean_tags)
+    tags = df[tagCol].apply(lambda x: [s.strip() for s in dict.fromkeys(x) if (s and len(s.strip()) > 0)])
     if len(replace) > 0:
         tags = tags.apply(lambda x: [replace.get(s, s) for s in x])
     return tags
