@@ -65,13 +65,16 @@ Out of scope, each with its own PR or issue so this one stays reviewable:
 - Embedding-based page selection to replace the English `PATHS_TO_KEEP` allow-list.
 - Coresignal Multi-source fields for dedupe and dead-site fallback.
 
-Deferred to Phase 7, not out of scope: retiring `website_quality`'s separate redirect and
-liveness pass (D15). It asks "alive right now" at gate time with a deliberate fresh check,
-reaches orgs and candidate domains the scraper never touches, and reads the parsed table, so
-it can only be replaced once every project is on the new tables and the refresh cadence makes
-`last_attempt_at` a trustworthy liveness signal. A cheaper interim step belongs in Phase 6 if
-the 30-minute cold rebuild bites: read `final_host` and the attempt columns from v2 for orgs
-with a recent row and probe only the residue.
+Deferred to Phase 7, not out of scope: retiring the redirect half of `website_quality`
+(D15). The pass has two halves. The redirect half (`resolve_domains`, `final_domain`, the
+90-day `checked`) duplicates `final_host`, which the new tables record on every fetch, and
+goes at Phase 7 once every project reads the new tables. The liveness half stays: PR #242
+(2026-10-23) made it cheap by reusing answers through an `alive_checked` date in the S3
+domain cache, with one shared SSL context and 96 workers, and on 2026-10-26 the reuse window
+was set to 90 days, the same as the redirect cache. That leaves two liveness clocks, the
+domain cache's `alive_checked` and the new tables' `last_attempt_at`; section 6 keeps them on
+the same 90-day meaning, and D15 feeds attempt results into the probe so it runs only for
+domains without a recent attempt.
 
 ## 3. Target architecture
 
@@ -414,8 +417,15 @@ reads: every step below "store" is a pure function of stored inputs and can be r
   `web_pages_history_v2` first. A page that was fine in March and blocked in June keeps its
   March text, says so through the attempt columns, and is retried only when
   `retry_failed_after_days` has elapsed on `last_attempt_at`, so a blocked site is neither
-  lost nor hammered. Today, with `skip_existing=False`, `session.merge` on the page key
+  lost nor hammered. `retry_failed_after_days` defaults to 90, the same window as
+  `FRESH_VALID_DAYS` and `CACHE_VALID_DAYS` in `website_quality` after PR #242, so a page's
+  attempt record and the domain cache's liveness answer mean the same thing: an answer is
+  trusted for 90 days. Today, with `skip_existing=False`, `session.merge` on the page key
   replaces the row and the earlier text is gone.
+- Liveness evidence. A 2xx fetch within the window counts as alive, a `gone` attempt as dead,
+  and `fresh_alive_check` probes only domains with neither. Until D15 wires that in, the
+  domain cache and the attempt columns are independent and may disagree for a domain whose
+  site changed between the two checks.
 - Subpages follow the home page. Each refresh re-derives the subpage set from today's links,
   and the combined text is built only from the pages that run picked and fetched, recorded in
   `source_keys`, never from every row under the home key. A page no longer linked is marked
@@ -560,8 +570,10 @@ After every project has run once on the new pipeline:
   `transformers` stay: they are direct dependencies used elsewhere.
 - `wikipedia/scraper.py` is the other Selenium user: port it to `Wikipedia-API` (already a
   dependency) or keep Selenium for it alone.
-- Retire `website_quality`'s redirect pass and its S3 domain cache in favor of `final_url`
-  and `failure_reason` (#227 follow-up).
+- Retire the redirect half of `website_quality` (`resolve_domains`, `final_domain`) in favor
+  of `final_host` and `failure_reason` (#227 follow-up), and feed the attempt columns into
+  `fresh_alive_check` so the probe runs only for domains without a recent attempt. The S3
+  domain cache shrinks to what the probe still needs.
 - Close #175 and #229 as superseded; close #139 with the new `same_site_paths`. The
   characterization tests #139 refers to are on an unmerged remote branch, not main.
 - Snapshot the old `web_pages_scraped` and `web_pages_parsed` to S3, then drop them.
@@ -570,7 +582,8 @@ After every project has run once on the new pipeline:
 
 | Item | Where it lives | Addressed in |
 |---|---|---|
-| #227 store final URL and failure reason | TODOs in `async_scraper.py` and `scrape_websites.py` | Phase 3 schema, Phase 4 writes, Phase 7 retires the redirect pass |
+| #227 store final URL and failure reason | TODOs in `async_scraper.py` and `scrape_websites.py` | Phase 3 schema, Phase 4 writes, Phase 7 retires the redirect half of `website_quality` |
+| PR #242 reuse liveness answers (`alive_checked`, 90-day window, shared SSL context) | `website_quality.py` | Stays; Phase 7 feeds attempt results into it; `retry_failed_after_days` matches its window |
 | #228 re-combine does not reset `num_errors` | combine loop | Phase 4, both paths |
 | #229 host security-check pages | ~850 ed_tracker domains | Phase 5 measurement; stealth only if measured |
 | #175 fixed 2 s browser wait | `_fetch_browser_impl` | Superseded at Phase 7 |
