@@ -207,3 +207,17 @@ def test_a_dba_confirmed_by_a_website_is_used(monkeypatch):
     names = pd.Series({"ein:111111111": "GREATER AUSTIN PERFORMING ARTS CENTER INC"})
     out = pick_funder_names(names, pd.Series({"ein:111111111": "THE LONG CENTER"}), pd.Series({"ein:111111111": "thelongcenter.org"}), None)
     assert out.to_dict() == {"ein:111111111": "The Long Center"}
+
+
+def test_scraped_text_is_shown_to_the_model_for_funders_that_have_it(monkeypatch):
+    picker = FakePicker({"ein:111111111": "Zest Education"})
+    monkeypatch.setattr(columns, "pick_display_names", picker)
+    names = pd.Series({"ein:111111111": "THE OPPORTUNITY TRUST", "ein:222222222": "OTHER FOUNDATION"})
+    websites = pd.Series({"ein:111111111": "zest.org", "ein:222222222": "other.org"})
+    texts = pd.Series({"ein:111111111": "Zest Education supports schools."})
+    pick_funder_names(names, pd.Series(dtype=object), websites, None, texts=texts)
+    org_call = next(c for c in picker.calls if c["prompt"] == PROMPT)
+    assert org_call["text_col"] == "text"
+    texts_sent = org_call["rows"].set_index("funder_id")["text"]
+    assert texts_sent["ein:111111111"] == "Zest Education supports schools."
+    assert pd.isna(texts_sent["ein:222222222"])

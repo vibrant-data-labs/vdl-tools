@@ -126,7 +126,7 @@ def _accepted(picks, rows):
     return usable["display_name"], set(inputs.index) - set(usable.index)
 
 
-def pick_funder_names(names, dbas, websites, session, limit=None):
+def pick_funder_names(names, dbas, websites, session, texts=None, limit=None):
     """``funder_id`` -> the name the model chose, for the funders it should look at.
 
     Giving Tuesday funders (``ein:``) with a DBA or a website go to the organization prompt, which
@@ -137,6 +137,8 @@ def pick_funder_names(names, dbas, websites, session, limit=None):
     that drops or replaces a word is not used.
 
     ``dbas`` and ``websites`` are ``funder_id`` -> DBA and website (missing or blank for none).
+    ``texts`` is ``funder_id`` -> the start of the website's scraped text, shown to the model as for orgs;
+    without it the model only sees the domain.
     ``limit`` sends only a random sample of that size from each group (siblings still come from all funders).
     """
     inputs = pd.DataFrame(
@@ -158,6 +160,9 @@ def pick_funder_names(names, dbas, websites, session, limit=None):
         evidence = evidence.sample(min(limit, len(evidence)), random_state=0)
     shared = evidence["siblings"].map(len) > 0
     kwargs = dict(name_col="name", id_col="funder_id", dba_col="dba", website_col="website", max_errors=5)
+    if texts is not None:
+        evidence["text"] = evidence["funder_id"].map(texts)
+        kwargs["text_col"] = "text"
     picked, rejected = [], set()
     for rows, extra in ((evidence[~shared], {"prompt": PROMPT}),
                         (evidence[shared], {"prompt": PROMPT_SHARED_SITE, "siblings_col": "siblings"})):
@@ -212,7 +217,8 @@ def build_funder_columns(df, min_occurrences=2, session=None, attributes_of=None
 
     A funder linked to fewer than ``min_occurrences`` orgs is dropped; no org row is. Names are
     each funder's display name, so one funder has one spelling. ``attributes_of`` maps a list of funder
-    ids to a frame indexed by id with the columns ``state`` and ``website``. With it, funders that share a
+    ids to a frame indexed by id with the columns ``state`` and ``website``, and optionally ``text`` (the
+    start of the website's scraped text). With it, funders that share a
     display name get their state added to it; with it and a database ``session``, the model also sees each
     Giving Tuesday funder's DBA and website (see ``pick_funder_names``). Without ``attributes_of`` the model
     only fixes the casing of the names that are still ALL CAPS.
@@ -225,7 +231,8 @@ def build_funder_columns(df, min_occurrences=2, session=None, attributes_of=None
     if session is not None:
         dbas = long[long["dba"] != ""].groupby("funder_id")["dba"].agg(pick_spelling)
         websites = attributes["website"] if attributes is not None else pd.Series(dtype=object)
-        names = funder_display_names(long, pick_funder_names(names[keep], dbas, websites, session))
+        texts = attributes["text"] if attributes is not None and "text" in attributes else None
+        names = funder_display_names(long, pick_funder_names(names[keep], dbas, websites, session, texts))
     if attributes is not None:
         names.update(add_state_to_shared_names(names[keep], attributes["state"]))
     logger.info(
