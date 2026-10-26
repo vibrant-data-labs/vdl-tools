@@ -52,6 +52,10 @@ def email_domain(url):
 # client and 403 to a browser.
 SCRAPER_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=5.0)
 VERIFY_SSL = True
+# One context for every probe. Building one loads the CA bundle (~30 ms of
+# CPU); one per request kept the probe CPU-bound at about one core, so more
+# threads only made each probe slower.
+SSL_CONTEXT = httpx.create_ssl_context(verify=VERIFY_SSL)
 
 
 def _answers(url, timeout=SCRAPER_TIMEOUT):
@@ -59,7 +63,7 @@ def _answers(url, timeout=SCRAPER_TIMEOUT):
     try:
         with httpx.stream(
             "GET", url, follow_redirects=True, timeout=timeout,
-            verify=VERIFY_SSL, headers=BROWSER_HEADERS,
+            verify=SSL_CONTEXT, headers=BROWSER_HEADERS,
         ) as resp:
             return resp.status_code not in (404, 410)
     except httpx.TimeoutException:
@@ -88,21 +92,33 @@ def url_alive(host, timeout=SCRAPER_TIMEOUT):
 
 def check_domain(domain):
     """Final domain after redirects, and whether the site is up."""
+    today = dt.date.today().isoformat()
     return {
         "final_domain": website_domain(resolve_redirect(domain)) or domain,
         "alive": url_alive(domain),
-        "checked": dt.date.today().isoformat(),
+        "checked": today,
+        "alive_checked": today,
     }
 
 
-CACHE_COLS = ["domain", "final_domain", "alive", "checked"]
+# ``checked`` dates the whole check (redirect + liveness); ``alive_checked``
+# dates the liveness answer alone, which fresh_alive_check renews without
+# re-resolving redirects.
+CACHE_COLS = ["domain", "final_domain", "alive", "checked", "alive_checked"]
 CACHE_VALID_DAYS = 90
+# Liveness answers are reused for as long as redirects (Zein, 2026-10-26): a site
+# that goes down keeps its link for up to 90 days. alive_checked stays its own
+# date so a liveness-only recheck does not extend the redirect's validity.
+FRESH_VALID_DAYS = 90
 SAVE_EVERY = 2000
 MAX_WORKERS = 32
+# Liveness probes mostly wait on the network (and on dead sites' timeouts)
+# once they share SSL_CONTEXT: ~8 ms of CPU per domain.
+FRESH_MAX_WORKERS = 96
 
 
 def load_domain_cache(uri):
-    """``domain -> {final_domain, alive, checked}`` from a local or ``s3://`` parquet ({} when absent).
+    """``domain -> {final_domain, alive, checked, alive_checked}`` from a local or ``s3://`` parquet ({} when absent).
 
     Keyed by domain, so one file serves every project.
     """
@@ -110,17 +126,31 @@ def load_domain_cache(uri):
         df = read_dataframe(uri)
     except FileNotFoundError:
         return {}
+    # Rows saved before alive_checked existed: liveness was tested with the rest.
+    alive_checked = df["alive_checked"].fillna(df["checked"]) if "alive_checked" in df else df["checked"]
     return {
-        r.domain: {"final_domain": r.final_domain, "alive": bool(r.alive), "checked": r.checked}
-        for r in df.itertuples(index=False)
+        r.domain: {
+            "final_domain": r.final_domain,
+            "alive": bool(r.alive),
+            "checked": r.checked,
+            "alive_checked": a,
+        }
+        for r, a in zip(df.itertuples(index=False), alive_checked)
     }
 
 
 def _save_cache(cache, uri):
-    """Write the cache, first merging in newer checks another run saved meanwhile."""
+    """Write the cache, first merging in newer checks another run saved meanwhile.
+
+    The redirect (``final_domain``, ``checked``) and the liveness answer
+    (``alive``, ``alive_checked``) each keep whichever is newer.
+    """
     for domain, entry in load_domain_cache(uri).items():
-        if domain not in cache or entry["checked"] > cache[domain]["checked"]:
-            cache[domain] = entry
+        ours = cache.setdefault(domain, entry)
+        if entry["checked"] > ours["checked"]:
+            ours.update(final_domain=entry["final_domain"], checked=entry["checked"])
+        if entry["alive_checked"] > ours["alive_checked"]:
+            ours.update(alive=entry["alive"], alive_checked=entry["alive_checked"])
     write_dataframe(
         pd.DataFrame(
             [{"domain": d, **entry} for d, entry in sorted(cache.items())],
@@ -154,17 +184,44 @@ def resolve_domains(domains, uri, refresh=False, max_workers=MAX_WORKERS):
     return cache
 
 
-def fresh_alive_check(domains, max_workers=MAX_WORKERS):
-    """``url_alive`` right now, bypassing the cache: a site up 90 days ago may be down today.
+def fresh_alive_check(
+    domains, uri, cache=None, valid_days=FRESH_VALID_DAYS, max_workers=FRESH_MAX_WORKERS,
+):
+    """``url_alive`` for every domain, reusing answers from the last ``valid_days`` days.
 
-    Only run on domains with scraped text; the others lose their link anyway.
+    Answers newer than the cutoff (90 days by default, the same window as the
+    redirect cache) are reused; the rest are probed and saved to the shared
+    cache at ``uri`` under their own date, ``alive_checked``. Only run
+    on domains with scraped text; the others lose their link anyway.
     """
     domains = sorted({d for d in domains if d})
-    out = {}
+    cache = load_domain_cache(uri) if cache is None else cache
+    cutoff = (dt.date.today() - dt.timedelta(days=valid_days)).isoformat()
+    out = {
+        d: cache[d]["alive"] for d in domains
+        if d in cache and cache[d]["alive_checked"] >= cutoff
+    }
+    todo = [d for d in domains if d not in out]
+    logger.info(
+        "Website quality: %d domain(s) checked in the last %d days, %d to re-check",
+        len(out), valid_days, len(todo),
+    )
+    if not todo:
+        return out
+    today = dt.date.today().isoformat()
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(url_alive, d): d for d in domains}
-        for future in concurrent.futures.as_completed(futures):
-            out[futures[future]] = future.result()
+        futures = {pool.submit(url_alive, d): d for d in todo}
+        for i, future in enumerate(concurrent.futures.as_completed(futures), start=1):
+            domain = futures[future]
+            out[domain] = future.result()
+            # Only cached domains are written back: without a resolved
+            # final_domain there is no full entry to update.
+            if domain in cache:
+                cache[domain].update(alive=out[domain], alive_checked=today)
+            if i % SAVE_EVERY == 0:
+                _save_cache(cache, uri)
+                logger.info("Website quality: re-checked %d/%d", i, len(todo))
+    _save_cache(cache, uri)
     return out
 
 
@@ -427,7 +484,8 @@ def gate_websites(
     ``domain_cache_uri``: the shared domain cache (local or ``s3://``).
     ``decisions_path``: the curated decisions CSV; ``review_path``: the review
     xlsx to write. Both optional. Look all three up in the project's paths config.
-    ``fresh_check`` re-probes domains with scraped text instead of trusting the cache.
+    ``fresh_check`` re-probes domains with scraped text whose liveness answer
+    is older than ``FRESH_VALID_DAYS`` days.
     """
     cache = (
         resolve_for_frame(df, domain_cache_uri) if resolve
@@ -439,7 +497,7 @@ def gate_websites(
     evidence = website_evidence(df, cache, scraped, id_col=id_col)
     if fresh_check:
         live_domains = evidence.loc[evidence["scraped_chars"].fillna(0) > 0, "domain"]
-        fresh = fresh_alive_check(live_domains)
+        fresh = fresh_alive_check(live_domains, domain_cache_uri, cache=cache)
         logger.info(
             "Website quality: fresh-checked %d domain(s) with scraped text, %d alive",
             len(fresh), sum(fresh.values()),
