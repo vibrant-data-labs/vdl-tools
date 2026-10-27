@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from vdl_tools.scrape_enrich.url_keys import website_domain
-from vdl_tools.scrape_enrich.display_name import PROMPT, PROMPT_FILED_NAME, PROMPT_SHARED_SITE, pick_display_names
+from vdl_tools.scrape_enrich.display_name import pick_names
 from vdl_tools.shared_tools.funders.ids import normalize_ein, slugify
 from vdl_tools.shared_tools.funders.names import (
     clean_funder_text,
@@ -106,40 +106,35 @@ def _words(name):
     return set(re.findall(r"[a-z0-9]+", str(name).lower())) - GENERIC_WORDS
 
 
-def _accepted(picks, rows):
-    """``funder_id`` -> name for the answers of ``pick_display_names`` that can be used, and the ids that cannot.
+def _unsupported_dba(answers, rows):
+    """True for a DBA chosen for a funder with no website and no word in common with its filed name.
 
-    A ``low`` confidence answer is not used. Neither is a DBA chosen for a funder with no website and
-    no word in common with its filed name: with no website to confirm it, the DBA is often another
-    fund or program the filer manages ("JANE CAROL BRESSLER CHARITABLE FUND" with "H & N BLECHNER
-    MEMORIAL FUND").
+    With no website to confirm it, the DBA is often another fund or program the filer manages
+    ("JANE CAROL BRESSLER CHARITABLE FUND" with "H & N BLECHNER MEMORIAL FUND").
     """
     inputs = rows.set_index("funder_id")
-    answers = picks.set_index("funder_id")
-    unsupported_dba = [
-        f for f in answers.index
-        if answers.at[f, "source"] == "dba" and not isinstance(inputs.at[f, "website"], str)
-        and not _words(inputs.at[f, "name"]) & _words(answers.at[f, "display_name"])
-    ]
-    usable = answers[(answers["confidence"] != "low") & (answers["display_name"].str.strip() != "")]
-    usable = usable.drop(index=[f for f in unsupported_dba if f in usable.index])
-    return usable["display_name"], set(inputs.index) - set(usable.index)
+    return pd.Series(
+        [
+            source == "dba" and not isinstance(inputs.at[f, "website"], str)
+            and not _words(inputs.at[f, "name"]) & _words(answer)
+            for f, source, answer in zip(answers["funder_id"], answers["source"], answers["display_name"])
+        ],
+        index=answers.index,
+    )
 
 
-def pick_funder_names(names, dbas, websites, session, texts=None, limit=None):
+def pick_funder_names(names, dbas, websites, session, texts=None, domain_cache=None):
     """``funder_id`` -> the name the model chose, for the funders it should look at.
 
-    Giving Tuesday funders (``ein:``) with a DBA or a website go to the organization prompt, which
-    chooses among the filed name, the DBA and the website, so it may replace the filed name; when
-    other funders use the same website it names this one, not the network. An answer that is not
-    used (see ``_accepted``) and the other names that are still ALL CAPS go to the filed-name prompt,
-    which keeps every word of the filed name and fixes casing, a legal suffix and a cut-off; an answer
-    that drops or replaces a word is not used.
+    Giving Tuesday funders (``ein:``) with a DBA or a website go through ``pick_names`` with the choice
+    of name, so the model may replace the filed name with the DBA or the website's name; a DBA it
+    cannot confirm is not used (``_unsupported_dba``). The other names that are still ALL CAPS only get
+    their casing fixed, keeping every word.
 
     ``dbas`` and ``websites`` are ``funder_id`` -> DBA and website (missing or blank for none).
-    ``texts`` is ``funder_id`` -> the start of the website's scraped text, shown to the model as for orgs;
-    without it the model only sees the domain.
-    ``limit`` sends only a random sample of that size from each group (siblings still come from all funders).
+    ``texts`` is ``funder_id`` -> the start of the website's scraped text; without it the model only
+    sees the domain. ``domain_cache`` (``website_quality.load_domain_cache``) groups funders whose
+    websites redirect to one site.
     """
     inputs = pd.DataFrame(
         {
@@ -150,45 +145,19 @@ def pick_funder_names(names, dbas, websites, session, texts=None, limit=None):
         }
     )
     has_evidence = inputs["funder_id"].str.startswith("ein:") & ((inputs["dba"] != "") | inputs["website"].notna())
-    evidence = inputs[has_evidence].copy()
-    by_site = evidence.dropna(subset=["website"]).groupby("website")["name"].agg(list)
-    evidence["siblings"] = [
-        [n for n in by_site.get(site, []) if n != name] if isinstance(site, str) else []
-        for site, name in zip(evidence["website"], evidence["name"])
-    ]
-    if limit:
-        evidence = evidence.sample(min(limit, len(evidence)), random_state=0)
-    shared = evidence["siblings"].map(len) > 0
-    kwargs = dict(name_col="name", id_col="funder_id", dba_col="dba", website_col="website", max_errors=5)
+    kwargs = dict(dba_col="dba", website_col="website", max_errors=5)
     if texts is not None:
-        evidence["text"] = evidence["funder_id"].map(texts)
+        inputs["text"] = inputs["funder_id"].map(texts)
         kwargs["text_col"] = "text"
-    picked, rejected = [], set()
-    for rows, extra in ((evidence[~shared], {"prompt": PROMPT}),
-                        (evidence[shared], {"prompt": PROMPT_SHARED_SITE, "siblings_col": "siblings"})):
-        if len(rows):
-            accepted, refused = _accepted(pick_display_names(rows, session, **kwargs, **extra), rows)
-            picked.append(accepted)
-            rejected |= refused
-
-    caps = inputs[(~has_evidence | inputs["funder_id"].isin(rejected)) & inputs["name"].map(lambda n: n.isupper() and len(n) > 4)]
-    if limit:
-        caps = caps.iloc[:limit]
-    if len(caps):
-        answer = pick_display_names(
-            caps, session, name_col="name", id_col="funder_id", prompt=PROMPT_FILED_NAME, max_errors=5
-        ).set_index("funder_id")["display_name"]
-        filed = caps.set_index("funder_id")["name"].reindex(answer.index)
-        kept = pd.Series(
-            [funder_key(f) in funder_key(a) for f, a in zip(filed, answer)], index=answer.index, dtype=bool
-        )
-        logger.info("Funder names: %d filed-name answers removed or replaced a word and were not used", int((~kept).sum()))
-        picked.append(answer[kept])
-    logger.info(
-        "Funder names: %d funders with a DBA or website (%d share a website), %d ALL CAPS without",
-        len(evidence), int(shared.sum()), len(caps),
+    chosen = pick_names(
+        inputs[has_evidence], session, "funder_id", "name", domain_cache=domain_cache, refuse=_unsupported_dba, **kwargs
     )
-    return pd.concat(picked) if picked else pd.Series(dtype=str)
+    caps = inputs[~has_evidence & inputs["name"].map(lambda n: n.isupper() and len(n) > 4)]
+    cased = pick_names(caps, session, "funder_id", "name", choose=False, max_errors=5)
+    logger.info(
+        "Funder names: %d funders with a DBA or website, %d ALL CAPS without", int(has_evidence.sum()), len(caps)
+    )
+    return pd.concat([chosen, cased])
 
 
 def add_state_to_shared_names(names, states):
@@ -212,7 +181,7 @@ def add_state_to_shared_names(names, states):
     return names
 
 
-def build_funder_columns(df, min_occurrences=2, session=None, attributes_of=None):
+def build_funder_columns(df, min_occurrences=2, session=None, attributes_of=None, domain_cache=None):
     """Add ``Funder_Ids`` and rebuild ``Investors``, ``Donors`` and ``Funders`` from funder ids.
 
     A funder linked to fewer than ``min_occurrences`` orgs is dropped; no org row is. Names are
@@ -220,8 +189,8 @@ def build_funder_columns(df, min_occurrences=2, session=None, attributes_of=None
     ids to a frame indexed by id with the columns ``state`` and ``website``, and optionally ``text`` (the
     start of the website's scraped text). With it, funders that share a
     display name get their state added to it; with it and a database ``session``, the model also sees each
-    Giving Tuesday funder's DBA and website (see ``pick_funder_names``). Without ``attributes_of`` the model
-    only fixes the casing of the names that are still ALL CAPS.
+    Giving Tuesday funder's DBA and website (see ``pick_funder_names``, which ``domain_cache`` goes to).
+    Without ``attributes_of`` the model only fixes the casing of the names that are still ALL CAPS.
     """
     long = collect_funders(df)
     names = funder_display_names(long)
@@ -232,7 +201,7 @@ def build_funder_columns(df, min_occurrences=2, session=None, attributes_of=None
         dbas = long[long["dba"] != ""].groupby("funder_id")["dba"].agg(pick_spelling)
         websites = attributes["website"] if attributes is not None else pd.Series(dtype=object)
         texts = attributes["text"] if attributes is not None and "text" in attributes else None
-        names = funder_display_names(long, pick_funder_names(names[keep], dbas, websites, session, texts))
+        names = funder_display_names(long, pick_funder_names(names[keep], dbas, websites, session, texts, domain_cache))
     if attributes is not None:
         names.update(add_state_to_shared_names(names[keep], attributes["state"]))
     logger.info(

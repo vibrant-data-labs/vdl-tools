@@ -1,7 +1,7 @@
 import pandas as pd
 
 from vdl_tools.scrape_enrich.display_name import PROMPT, PROMPT_FILED_NAME, PROMPT_SHARED_SITE
-from vdl_tools.shared_tools.funders import columns
+from vdl_tools.scrape_enrich import display_name
 from vdl_tools.shared_tools.funders.columns import build_funder_columns, collect_funders, pick_funder_names
 
 CLEVELAND_CB = "11111111-1111-1111-1111-111111111111"
@@ -130,7 +130,7 @@ class FakePicker:
 
 def test_a_gt_funder_with_a_dba_or_website_goes_to_the_organization_prompt(monkeypatch):
     picker = FakePicker({"ein:111111111": "Zest Education", "ein:222222222": "Plain Foundation"})
-    monkeypatch.setattr(columns, "pick_display_names", picker)
+    monkeypatch.setattr(display_name, "pick_display_names", picker)
     names = pd.Series({"ein:111111111": "THE OPPORTUNITY TRUST", "ein:222222222": "PLAIN FOUNDATION"})
     out = pick_funder_names(
         names,
@@ -148,7 +148,7 @@ def test_a_gt_funder_with_a_dba_or_website_goes_to_the_organization_prompt(monke
 
 def test_funders_that_share_a_website_get_the_shared_site_prompt_with_their_siblings(monkeypatch):
     picker = FakePicker({"ein:111111111": "Mercy Health North"})
-    monkeypatch.setattr(columns, "pick_display_names", picker)
+    monkeypatch.setattr(display_name, "pick_display_names", picker)
     names = pd.Series({"ein:111111111": "MERCY HEALTH NORTH", "ein:222222222": "MERCY HEALTH SOUTH"})
     websites = pd.Series({"ein:111111111": "mercy.net", "ein:222222222": "https://www.mercy.net"})
     pick_funder_names(names, pd.Series(dtype=object), websites, session=None)
@@ -160,7 +160,7 @@ def test_funders_that_share_a_website_get_the_shared_site_prompt_with_their_sibl
 
 
 def test_a_low_confidence_answer_is_not_used(monkeypatch):
-    monkeypatch.setattr(columns, "pick_display_names", FakePicker({"ein:111111111": "Somebody Else"}, confidence="low"))
+    monkeypatch.setattr(display_name, "pick_display_names", FakePicker({"ein:111111111": "Somebody Else"}, confidence="low"))
     names = pd.Series({"ein:111111111": "SHETOME CORP"})
     out = pick_funder_names(names, pd.Series({"ein:111111111": "KATHERINE S & FARRA ALFORD CORP"}), pd.Series(dtype=object), None)
     assert out.empty
@@ -168,7 +168,7 @@ def test_a_low_confidence_answer_is_not_used(monkeypatch):
 
 def test_a_crunchbase_funder_is_not_sent_for_its_website_only_its_casing(monkeypatch):
     picker = FakePicker({"cb:11111111-1111-1111-1111-111111111111": "Acme Ventures"})
-    monkeypatch.setattr(columns, "pick_display_names", picker)
+    monkeypatch.setattr(display_name, "pick_display_names", picker)
     names = pd.Series({"cb:11111111-1111-1111-1111-111111111111": "ACME VENTURES", "cb:22222222-2222-2222-2222-222222222222": "Mixed Case Fund"})
     websites = pd.Series({"cb:11111111-1111-1111-1111-111111111111": "acme.vc", "cb:22222222-2222-2222-2222-222222222222": "mixed.vc"})
     pick_funder_names(names, pd.Series(dtype=object), websites, None)
@@ -177,14 +177,14 @@ def test_a_crunchbase_funder_is_not_sent_for_its_website_only_its_casing(monkeyp
 
 
 def test_a_filed_name_answer_that_replaces_a_word_is_not_used(monkeypatch):
-    monkeypatch.setattr(columns, "pick_display_names", FakePicker({"ein:111111111": "Hofer Family Foundation"}))
+    monkeypatch.setattr(display_name, "pick_display_names", FakePicker({"ein:111111111": "Hofer Family Foundation"}))
     names = pd.Series({"ein:111111111": "HOEFER FAMILY FOUNDATION"})
     assert pick_funder_names(names, pd.Series(dtype=object), pd.Series(dtype=object), None).empty
 
 
 def test_the_dba_of_a_granter_reaches_the_model_through_build_funder_columns(monkeypatch):
     picker = FakePicker({"ein:566040787": "Smith Family Fund"})
-    monkeypatch.setattr(columns, "pick_display_names", picker)
+    monkeypatch.setattr(display_name, "pick_display_names", picker)
     df = frame()
     df.at[0, "granters"] = [granter("340714585", "THE CLEVELAND FOUNDATION"), granter("566040787", "SMITH FAMILY FOUNDATION", None, "SMITH FAMILY FUND")]
     out = build_funder_columns(df, min_occurrences=1, session=object(), attributes_of=lambda ids: attributes(ids))
@@ -195,7 +195,7 @@ def test_the_dba_of_a_granter_reaches_the_model_through_build_funder_columns(mon
 
 def test_a_dba_with_no_website_and_no_shared_word_is_not_used_and_the_name_is_recased(monkeypatch):
     picker = FakePicker({"ein:111111111": "H & N BLECHNER MEMORIAL FUND"}, source="dba")
-    monkeypatch.setattr(columns, "pick_display_names", picker)
+    monkeypatch.setattr(display_name, "pick_display_names", picker)
     names = pd.Series({"ein:111111111": "JANE CAROL BRESSLER CHARITABLE FUND"})
     out = pick_funder_names(names, pd.Series({"ein:111111111": "H & N BLECHNER MEMORIAL FUND"}), pd.Series(dtype=object), None)
     assert [c["prompt"] for c in picker.calls] == [PROMPT, PROMPT_FILED_NAME]
@@ -203,7 +203,7 @@ def test_a_dba_with_no_website_and_no_shared_word_is_not_used_and_the_name_is_re
 
 
 def test_a_dba_confirmed_by_a_website_is_used(monkeypatch):
-    monkeypatch.setattr(columns, "pick_display_names", FakePicker({"ein:111111111": "The Long Center"}, source="dba"))
+    monkeypatch.setattr(display_name, "pick_display_names", FakePicker({"ein:111111111": "The Long Center"}, source="dba"))
     names = pd.Series({"ein:111111111": "GREATER AUSTIN PERFORMING ARTS CENTER INC"})
     out = pick_funder_names(names, pd.Series({"ein:111111111": "THE LONG CENTER"}), pd.Series({"ein:111111111": "thelongcenter.org"}), None)
     assert out.to_dict() == {"ein:111111111": "The Long Center"}
@@ -211,7 +211,7 @@ def test_a_dba_confirmed_by_a_website_is_used(monkeypatch):
 
 def test_scraped_text_is_shown_to_the_model_for_funders_that_have_it(monkeypatch):
     picker = FakePicker({"ein:111111111": "Zest Education"})
-    monkeypatch.setattr(columns, "pick_display_names", picker)
+    monkeypatch.setattr(display_name, "pick_display_names", picker)
     names = pd.Series({"ein:111111111": "THE OPPORTUNITY TRUST", "ein:222222222": "OTHER FOUNDATION"})
     websites = pd.Series({"ein:111111111": "zest.org", "ein:222222222": "other.org"})
     texts = pd.Series({"ein:111111111": "Zest Education supports schools."})
@@ -225,7 +225,7 @@ def test_scraped_text_is_shown_to_the_model_for_funders_that_have_it(monkeypatch
 
 def test_a_placeholder_or_platform_website_is_not_evidence(monkeypatch):
     picker = FakePicker({})
-    monkeypatch.setattr(columns, "pick_display_names", picker)
+    monkeypatch.setattr(display_name, "pick_display_names", picker)
     names = pd.Series({"ein:111111111": "PLAIN FOUNDATION", "ein:222222222": "OTHER FOUNDATION"})
     websites = pd.Series({"ein:111111111": "N/A", "ein:222222222": "https://www.facebook.com/otherfoundation"})
     pick_funder_names(names, pd.Series(dtype=object), websites, None)

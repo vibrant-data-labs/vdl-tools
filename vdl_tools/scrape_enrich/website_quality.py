@@ -116,6 +116,13 @@ def load_domain_cache(uri):
     }
 
 
+def final_domain(url, domain_cache):
+    """The domain ``url`` ends up on, from ``domain_cache`` (``load_domain_cache``); its own domain when the
+    cache does not know it, ``None`` when it has none (see ``url_keys.website_domain``)."""
+    domain = website_domain(url)
+    return ((domain_cache or {}).get(domain) or {}).get("final_domain") or domain if domain else None
+
+
 def _save_cache(cache, uri):
     """Write the cache, first merging in newer checks another run saved meanwhile."""
     for domain, entry in load_domain_cache(uri).items():

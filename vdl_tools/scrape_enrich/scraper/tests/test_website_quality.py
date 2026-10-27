@@ -49,3 +49,13 @@ def test_domain_cache_round_trips_and_keeps_another_runs_newer_checks(tmp_path):
     _save_cache({"example.org": new}, uri)
     _save_cache({"example.org": old, "other.org": old}, uri)
     assert load_domain_cache(uri) == {"example.org": new, "other.org": old}
+
+
+def test_final_domain_follows_the_cache_and_falls_back_to_the_domain():
+    from vdl_tools.scrape_enrich.website_quality import final_domain
+
+    cache = {"old.org": {"final_domain": "new.org"}}
+    assert final_domain("https://www.old.org/about", cache) == "new.org"
+    assert final_domain("other.org", cache) == "other.org"
+    assert final_domain("other.org", None) == "other.org"
+    assert final_domain("na", cache) is None
