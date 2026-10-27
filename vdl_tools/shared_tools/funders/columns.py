@@ -181,16 +181,18 @@ def add_state_to_shared_names(names, states):
     return names
 
 
-def build_funder_columns(df, min_occurrences=2, session=None, attributes_of=None, domain_cache=None):
-    """Add ``Funder_Ids`` and rebuild ``Investors``, ``Donors`` and ``Funders`` from funder ids.
+def funder_names(df, min_occurrences=2, session=None, attributes_of=None, domain_cache=None):
+    """The names of the funders linked to at least ``min_occurrences`` orgs, indexed by ``funder_id``.
 
-    A funder linked to fewer than ``min_occurrences`` orgs is dropped; no org row is. Names are
-    each funder's display name, so one funder has one spelling. ``attributes_of`` maps a list of funder
-    ids to a frame indexed by id with the columns ``state`` and ``website``, and optionally ``text`` (the
-    start of the website's scraped text). With it, funders that share a
-    display name get their state added to it; with it and a database ``session``, the model also sees each
-    Giving Tuesday funder's DBA and website (see ``pick_funder_names``, which ``domain_cache`` goes to).
-    Without ``attributes_of`` the model only fixes the casing of the names that are still ALL CAPS.
+    ``display_name`` is chosen once for every place that shows the funder (the player, the dashboard):
+    the best spelling among its names, else the model's choice. ``label`` is what the player shows: the
+    display name with the state added where several funders share it ("Smith Family Foundation (NC)").
+
+    ``attributes_of`` maps a list of funder ids to a frame indexed by id with the columns ``state`` and
+    ``website``, and optionally ``text`` (the start of the website's scraped text). With it, funders that
+    share a display name get their state in the label; with it and a database ``session``, the model also
+    sees each Giving Tuesday funder's DBA and website (see ``pick_funder_names``, which ``domain_cache``
+    goes to). Without ``attributes_of`` the model only fixes the casing of the names that are still ALL CAPS.
     """
     long = collect_funders(df)
     names = funder_display_names(long)
@@ -202,13 +204,23 @@ def build_funder_columns(df, min_occurrences=2, session=None, attributes_of=None
         websites = attributes["website"] if attributes is not None else pd.Series(dtype=object)
         texts = attributes["text"] if attributes is not None and "text" in attributes else None
         names = funder_display_names(long, pick_funder_names(names[keep], dbas, websites, session, texts, domain_cache))
-    if attributes is not None:
-        names.update(add_state_to_shared_names(names[keep], attributes["state"]))
+    names = names[keep]
+    labels = add_state_to_shared_names(names, attributes["state"]) if attributes is not None else names
     logger.info(
-        "Funders: %d ids, %d linked to >= %d orgs; %d display names are shared by more than one id",
-        len(n_orgs), len(keep), min_occurrences, int(names[names.index.isin(keep)].duplicated().sum()),
+        "Funders: %d ids, %d linked to >= %d orgs; %d labels are shared by more than one id",
+        len(n_orgs), len(keep), min_occurrences, int(labels.duplicated().sum()),
     )
-    long = long[long["funder_id"].isin(keep)].assign(display=lambda d: d["funder_id"].map(names))
+    return pd.DataFrame({"display_name": names, "label": labels}).rename_axis("funder_id")
+
+
+def build_funder_columns(df, labels):
+    """Add ``Funder_Ids`` and rebuild ``Investors``, ``Donors`` and ``Funders`` from funder ids.
+
+    ``labels`` is ``funder_id`` -> the name to show (``funder_names(df)["label"]``), so one funder has
+    one spelling. A funder not in it is dropped; no org row is.
+    """
+    long = collect_funders(df)
+    long = long[long["funder_id"].isin(labels.index)].assign(display=lambda d: d["funder_id"].map(labels))
     names_by_pos = {}
     for source, col in (("investor", "Investors"), ("donor", "Donors")):
         names_by_pos[col] = long[long["source"] == source].groupby("pos")["display"].agg(lambda s: list(dict.fromkeys(s)))
