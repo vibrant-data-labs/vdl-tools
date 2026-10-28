@@ -15,7 +15,7 @@ Fresh remote references were inspected on 2026-10-28. The original main checkout
 
 ## Pinned taxonomy inputs
 
-Zein chose upgrading to the newest taxonomy versions on 2026-10-28. Climate Landscape vendors the reviewed workbooks and records their repository revisions and SHA-256 values in `data/taxonomy/activity_jev_sources.json`.
+Zein chose upgrading to the newest taxonomy versions on 2026-10-28. Shared-data owns the reviewed workbooks under `data/taxonomies/oneearth` and `data/taxonomies/Drawdown`. Their source repository revisions and SHA-256 values live alongside them in `data/taxonomies/activity_jev_sources.json`. Climate Landscape references these shared files through `paths.ini`; it stores no taxonomy payloads.
 
 | Taxonomy | Newest committed workbook reviewed | Included nodes through Solution |
 | -- | -- | -- |
