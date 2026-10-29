@@ -27,8 +27,10 @@ def get_url(
     password,
     database,
 ):
+    # Name the driver explicitly: SQLAlchemy 2.1 changed the bare "postgresql"
+    # default from psycopg2 to psycopg (v3), which this project does not install.
     return URL.create(
-        'postgresql',
+        'postgresql+psycopg2',
         username=user,
         password=password,
         port=port,
