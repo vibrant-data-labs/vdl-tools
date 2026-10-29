@@ -1,1 +1,1 @@
-"""Activity-level Jev mapping through Solution, with offline match policies."""
+"""General JEV subject mapping, independent taxonomy loaders and optional exports."""

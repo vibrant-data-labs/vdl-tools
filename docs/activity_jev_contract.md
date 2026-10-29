@@ -1,6 +1,28 @@
 # Activity extraction and Jev mapping · D1 / VIB-78
 
-Implementation contract, 2026-10-28. Canonical project spec: [Linear](https://linear.app/vibrant-data-labs/document/spec-activity-parsing-and-jev-taxonomy-mapping-d415afa01680).
+Implementation contract, updated 2026-10-29. Canonical project spec: [Linear](https://linear.app/vibrant-data-labs/document/spec-general-jev-taxonomy-mapping-d415afa01680).
+
+## General mapping boundary and independent loading
+
+`map_subjects(subjects, taxonomy, policy=...)` accepts supplied text with `subject_id`
+and returns scores, statuses and paths. Extraction, entity grouping, compatibility
+columns and funding are separate optional operations. `Taxonomy` and the parameterized
+`load_workbook` reader accept configured levels and explicit built questions; the core
+has no fixed Solution ceiling. One- and four-level Education fixtures demonstrate
+direct organization input without core changes.
+
+`one_earth.load_taxonomy` and `drawdown.load_taxonomy` load only their own definitions
+and question modules. The old `load_taxonomy(name, path)` API is a lazy compatibility
+dispatcher. Climate Landscape validates the selected job's workbook and pin entry
+inside that job, with no combined eager taxonomy preflight. Shared-data may hold both
+inputs; a missing or invalid sibling input does not block the selected loader.
+
+`ExtractionResult.save/load` persists a checksummed extraction independently. Climate
+Landscape gives each job its own directory and manifest; failed jobs do not discard
+completed sibling results. Reruns can reuse a saved extraction. Explicit snapshot
+assembly joins organization IDs and verifies integrity/base-data compatibility; it
+can preserve approved legacy columns for an unselected taxonomy. No assembly or
+mapping function promotes production outputs.
 
 ## Source revisions
 
@@ -38,9 +60,9 @@ Activity IDs are SHA-256 over `[extraction_run_id, org_uid, activity_index]`; th
 
 ## Scores and policies
 
-`ActivityTaxonomy` holds three level columns, level specs, exact node questions, workbook hash, path and variant. Nodes use hashes of taxonomy name plus full ancestor path, preventing same-name children from colliding.
+`Taxonomy` (`ActivityTaxonomy` is a compatibility alias) holds configured path columns, level specs, exact node questions, payload hash, path, variant and optional subject kind. Nodes use hashes of taxonomy name plus full ancestor path, preventing same-name children from colliding. The two first-adopter loaders select three levels through Solution.
 
-`ScoringResult` holds every successful `(activity_id, node_id, probability)` plus one usage/status record per activity/request group. Each group records the question hash and returned model. Successful raw gateway responses remain in the existing SQL cache. Jev's gateway alias is not a version pin; the observed response metadata must be retained when judging reproducibility.
+`ScoringResult` holds every successful `(subject_id, node_id, probability)` plus one usage/status record per subject/request group. Activity compatibility APIs retain `activity_id`. Generic cache IDs include caller namespace, subject identity and supplied state; existing activity cache IDs remain usable. Each group records the question hash and returned model. Successful raw gateway responses remain in the existing SQL cache. Jev's gateway alias is not a version pin; retain observed response metadata when judging reproducibility.
 
 Questions are packed deterministically under a 48k cl100k token estimate, with activity state limited to 8k. This leaves context headroom under the gateway's nominal 64k limit; tokenizer estimates are not a contractual guarantee. Oversized individual questions fail instead of truncating definitions. This replaces Drawdown's October-specific fixed sector groups with reusable bounded groups.
 
@@ -52,7 +74,7 @@ The initial, versioned development policy follows the inspected activity prototy
 * One Earth: no third tier or descent by default.
 * Drawdown: recursively admit children at 0.6 under matched parents, through Solution only.
 
-These are implementation baselines, not validated production thresholds. `apply_policy` makes no requests and rejects a different workbook/variant. The shared CLI can reselect a stored scoring run without SQL or API access.
+These are first-adopter implementation baselines, not validated production thresholds or universal defaults. `select_matches` and the compatibility `apply_policy` make no requests and reject different payloads, variants or questions. The shared CLI accepts generic supplied subjects and a taxonomy JSON specification as well as the built-in activity loaders; it can reselect a stored scoring run without SQL or API access.
 
 ## Rollup and consumer outputs
 

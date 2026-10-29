@@ -9,8 +9,8 @@ from dataclasses import asdict, dataclass
 import pandas as pd
 import tiktoken
 
-from ...activity_extraction.pipeline import fingerprint
-from .taxonomies import ActivityTaxonomy
+from ...fingerprints import fingerprint
+from .taxonomies import Taxonomy
 
 JEV_MODEL = "typesafe-ai/jev"
 
@@ -59,7 +59,7 @@ def _noul_values(raw, questions):
     return values
 
 
-def question_sets(taxonomy: ActivityTaxonomy, *, max_tokens: int = 48_000) -> dict[str, dict]:
+def question_sets(taxonomy: Taxonomy, *, max_tokens: int = 48_000) -> dict[str, dict]:
     """Deterministic bounded requests, unlike source Drawdown's fixed sector groups.
 
     cl100k estimates reserve at least 16k of the gateway's 64k context for state,
@@ -146,8 +146,8 @@ def sql_request(
         return rows
 
 
-def score_activities(
-    activities,
+def score_subjects(
+    subjects,
     taxonomy,
     *,
     request_runner=None,
@@ -156,29 +156,41 @@ def score_activities(
     read_from_cache=True,
     write_to_cache=True,
     max_question_tokens=48_000,
+    namespace="",
 ) -> ScoringResult:
-    """Keep every probability and one status per activity/request, including failures.
+    """Keep every probability and one status per subject/request, including failures.
 
-    Cache IDs derive from organization + state, independently of extraction run IDs.
+    Cache IDs derive from caller namespace, subject ID and supplied state.
     A missing/invalid question makes its entire request incomplete. Selection later
-    refuses an activity with any incomplete group, preventing biased partial matches.
+    refuses a subject with any incomplete group, preventing biased partial matches.
     """
-    required = {"activity_id", "cache_id", "state"}
-    if missing := required - set(activities):
-        raise ValueError(f"Missing activity columns: {sorted(missing)}")
-    if activities.activity_id.isna().any() or activities.activity_id.duplicated().any():
-        raise ValueError("Activity IDs must be non-null and unique")
+    subjects = subjects.copy()
+    required = {"subject_id", "state"}
+    if missing := required - set(subjects):
+        raise ValueError(f"Missing subject columns: {sorted(missing)}")
+    if subjects.subject_id.isna().any() or subjects.subject_id.duplicated().any():
+        raise ValueError("Subject IDs must be non-null and unique")
+    if "cache_id" not in subjects:
+        subjects["cache_id"] = [
+            fingerprint([namespace, str(r.subject_id), r.state]) for r in subjects.itertuples()
+        ]
+    if (
+        taxonomy.subject_kind
+        and "kind" in subjects
+        and not subjects.kind.eq(taxonomy.subject_kind).all()
+    ):
+        raise ValueError("Subject kind does not match taxonomy question wording")
     groups = question_sets(taxonomy, max_tokens=max_question_tokens)
     encoding = tiktoken.get_encoding("cl100k_base")
-    for row in activities.to_dict("records"):
+    for row in subjects.to_dict("records"):
         if not isinstance(row["state"], str) or not row["state"].strip():
-            raise ValueError("Activity state cannot be empty")
+            raise ValueError("Subject state cannot be empty")
         if len(encoding.encode(row["state"], disallowed_special=())) > 8_000:
-            raise ValueError(f"Activity state exceeds token budget: {row['activity_id']}")
-    if activities.groupby("cache_id").state.nunique().gt(1).any():
-        raise ValueError("A cache ID cannot refer to multiple activity states")
+            raise ValueError(f"Subject state exceeds token budget: {row['subject_id']}")
+    if subjects.groupby("cache_id").state.nunique().gt(1).any():
+        raise ValueError("A cache ID cannot refer to multiple subject states")
     pairs = list(
-        activities[["cache_id", "state"]].drop_duplicates().itertuples(index=False, name=None)
+        subjects[["cache_id", "state"]].drop_duplicates().itertuples(index=False, name=None)
     )
     runner = request_runner or sql_request
     scores, usage = [], []
@@ -187,7 +199,7 @@ def score_activities(
             runner(
                 questions,
                 pairs,
-                prompt_name=f"{taxonomy.name} Jev activities ({taxonomy.variant}) {group}",
+                prompt_name=f"{taxonomy.name} Jev {'activities' if taxonomy.subject_kind == 'activity' else 'subjects'} ({taxonomy.variant}) {group}",
                 max_workers=max_workers,
                 read_from_cache=read_from_cache,
                 write_to_cache=write_to_cache,
@@ -197,8 +209,8 @@ def score_activities(
             else {}
         )
         question_hash = fingerprint(questions)
-        for activity in activities.to_dict("records"):
-            row = rows.get(activity["cache_id"]) or {}
+        for subject in subjects.to_dict("records"):
+            row = rows.get(subject["cache_id"]) or {}
             error, values = None, {}
             try:
                 values = _noul_values(row.get("response_text"), questions)
@@ -215,7 +227,7 @@ def score_activities(
             token_usage = token_usage if isinstance(token_usage, dict) else {}
             usage.append(
                 {
-                    "activity_id": activity["activity_id"],
+                    "subject_id": subject["subject_id"],
                     "request_group": group,
                     "question_sha256": question_hash,
                     "n_questions": len(questions),
@@ -228,7 +240,7 @@ def score_activities(
             if error is None:
                 scores.extend(
                     {
-                        "activity_id": activity["activity_id"],
+                        "subject_id": subject["subject_id"],
                         "node_id": node,
                         "prob": p,
                         "request_group": group,
@@ -237,12 +249,12 @@ def score_activities(
                     for node, p in values.items()
                 )
     score_frame = pd.DataFrame(
-        scores, columns=["activity_id", "node_id", "prob", "request_group", "question_sha256"]
+        scores, columns=["subject_id", "node_id", "prob", "request_group", "question_sha256"]
     )
     usage_frame = pd.DataFrame(
         usage,
         columns=[
-            "activity_id",
+            "subject_id",
             "request_group",
             "question_sha256",
             "n_questions",
@@ -257,6 +269,9 @@ def score_activities(
         usage_frame,
         {
             "taxonomy": taxonomy.name,
+            "questions_sha256": taxonomy.questions_sha256,
+            "max_question_tokens": max_question_tokens,
+            "subject_kind": taxonomy.subject_kind,
             "taxonomy_path": taxonomy.path,
             "taxonomy_sha256": taxonomy.sha256,
             "question_variant": taxonomy.variant,
@@ -264,7 +279,7 @@ def score_activities(
             "question_sets": {g: fingerprint(q) for g, q in groups.items()},
             "n_nodes": len(taxonomy.nodes),
             "n_groups": len(groups),
-            "n_activities": len(activities),
+            "n_subjects": len(subjects),
             "n_failed_requests": int(usage_frame.error.notna().sum()),
         },
     )
@@ -274,19 +289,17 @@ def _path(row, columns):
     return tuple(row[c] for c in columns if pd.notna(row[c]) and row[c] != "")
 
 
-def drop_implied(paths, columns, *, id_col="activity_id"):
+def drop_implied(paths, columns, *, id_col="subject_id"):
     """The source Drawdown prefix rule, preserving full parent identity."""
     keys = [(row[id_col], _path(row, columns)) for row in paths.to_dict("records")]
     implied = {(uid, key[:depth]) for uid, key in keys for depth in range(1, len(key))}
     return paths.loc[[key not in implied for key in keys]].copy()
 
 
-def apply_policy(
-    result: ScoringResult, taxonomy: ActivityTaxonomy, policy: MatchPolicy
-) -> pd.DataFrame:
+def select_matches(result: ScoringResult, taxonomy: Taxonomy, policy: MatchPolicy) -> pd.DataFrame:
     """Two-tier own-node selection and optional source Drawdown descendant recovery.
 
-    Never issues API calls. Scores of every node are required for an activity before
+    Never issues API calls. Scores of every node are required for a subject before
     applying fallback thresholds. Ancestors of accepted nodes are implied, regardless
     of the ancestors' own scores, as in both source prototypes.
     """
@@ -295,46 +308,70 @@ def apply_policy(
         or result.lineage.get("question_variant") != taxonomy.variant
     ):
         raise ValueError("Stored scores belong to a different taxonomy or question variant")
-    failed = set(result.usage.loc[result.usage.error.notna(), "activity_id"])
-    rows = result.scores[~result.scores.activity_id.isin(failed)]
-    if rows.duplicated(["activity_id", "node_id"]).any():
-        raise ValueError("Duplicate activity/node scores")
+    questions_match = result.lineage.get("questions_sha256") == taxonomy.questions_sha256
+    if "questions_sha256" not in result.lineage:
+        # Older saved activity runs recorded hashes per request group instead.
+        groups = question_sets(
+            taxonomy, max_tokens=result.lineage.get("max_question_tokens", 48_000)
+        )
+        questions_match = result.lineage.get("question_sets") == {
+            group: fingerprint(questions) for group, questions in groups.items()
+        }
+    if not questions_match:
+        raise ValueError("Stored scores belong to different taxonomy questions; re-run scoring")
+    if result.lineage.get("subject_kind", taxonomy.subject_kind) != taxonomy.subject_kind:
+        raise ValueError("Stored scores belong to a different subject kind")
+    failed = set(result.usage.loc[result.usage.error.notna(), "subject_id"])
+    rows = result.scores[~result.scores.subject_id.isin(failed)]
+    expected_subjects = set(result.usage.subject_id) - failed
+    if set(rows.subject_id) != expected_subjects:
+        raise ValueError("Incomplete subject scores cannot be matched; re-run scoring")
+    if any(
+        isinstance(p, bool)
+        or not isinstance(p, (int, float))
+        or not math.isfinite(p)
+        or not 0 <= p <= 1
+        for p in rows.prob
+    ):
+        raise ValueError("Stored probabilities must be finite values in [0, 1]")
+    if rows.duplicated(["subject_id", "node_id"]).any():
+        raise ValueError("Duplicate subject/node scores")
     expected = set(taxonomy.nodes.node_id)
-    for _, group in rows.groupby("activity_id"):
+    for _, group in rows.groupby("subject_id"):
         if set(group.node_id) != expected:
             raise ValueError("Incomplete node scores cannot be matched; re-run scoring")
     scores = rows.merge(taxonomy.nodes, on="node_id", validate="many_to_one")
     matched, chosen = set(), []
     for tier, minimum in enumerate(policy.thresholds, start=1):
-        hits = scores[(~scores.activity_id.isin(matched)) & (scores.prob >= minimum)]
+        hits = scores[(~scores.subject_id.isin(matched)) & (scores.prob >= minimum)]
         chosen.extend(hits.assign(tier=tier, match_origin="own").to_dict("records"))
-        matched.update(hits.activity_id)
+        matched.update(hits.subject_id)
     if policy.descend is not None:
-        have = {(r["activity_id"], _path(r, taxonomy.columns)) for r in chosen}
-        for depth in (1, 2):
+        have = {(r["subject_id"], _path(r, taxonomy.columns)) for r in chosen}
+        for depth in range(1, len(taxonomy.columns)):
             parents = {(aid, path[:depth]) for aid, path in have if len(path) >= depth}
             candidates = scores[(scores.depth == depth) & (scores.prob >= policy.descend)]
             for r in candidates.to_dict("records"):
                 branch = _path(r, taxonomy.columns)
-                key = (r["activity_id"], branch)
-                if (r["activity_id"], branch[:-1]) in parents and key not in have:
+                key = (r["subject_id"], branch)
+                if (r["subject_id"], branch[:-1]) in parents and key not in have:
                     chosen.append(
                         {**r, "tier": len(policy.thresholds) + 1, "match_origin": "descend"}
                     )
                     have.add(key)
-    columns = ["activity_id", "node_id", *taxonomy.columns, "depth", "prob", "tier", "match_origin"]
+    columns = ["subject_id", "node_id", *taxonomy.columns, "depth", "prob", "tier", "match_origin"]
     paths = pd.DataFrame(chosen, columns=columns)
-    paths = drop_implied(paths, taxonomy.columns).drop_duplicates(["activity_id", "node_id"])
-    origins = {(r["activity_id"], r["node_id"]): r["match_origin"] for r in chosen}
+    paths = drop_implied(paths, taxonomy.columns).drop_duplicates(["subject_id", "node_id"])
+    origins = {(r["subject_id"], r["node_id"]): r["match_origin"] for r in chosen}
     node_by_path = {_path(r, taxonomy.columns): r for r in taxonomy.nodes.to_dict("records")}
-    probabilities = {(r["activity_id"], r["node_id"]): r["prob"] for r in scores.to_dict("records")}
+    probabilities = {(r["subject_id"], r["node_id"]): r["prob"] for r in scores.to_dict("records")}
     ancestor_records = []
     for row in paths.to_dict("records"):
         branch = _path(row, taxonomy.columns)
         ancestors = []
         for depth in range(1, len(branch) + 1):
             node = node_by_path[branch[:depth]]
-            key = (row["activity_id"], node["node_id"])
+            key = (row["subject_id"], node["node_id"])
             ancestors.append(
                 {
                     "node_id": node["node_id"],
@@ -346,6 +383,28 @@ def apply_policy(
         ancestor_records.append(ancestors)
     paths["ancestor_matches"] = ancestor_records
     paths["policy_sha256"] = policy.sha256
-    return paths.sort_values(["activity_id", *taxonomy.columns], na_position="first").reset_index(
+    return paths.sort_values(["subject_id", *taxonomy.columns], na_position="first").reset_index(
         drop=True
     )
+
+
+def score_activities(activities, taxonomy, **kwargs):
+    """Compatibility wrapper for stored activity tables."""
+    scored = score_subjects(
+        activities.rename(columns={"activity_id": "subject_id"}), taxonomy, **kwargs
+    )
+    return ScoringResult(
+        scored.scores.rename(columns={"subject_id": "activity_id"}),
+        scored.usage.rename(columns={"subject_id": "activity_id"}),
+        scored.lineage,
+    )
+
+
+def apply_policy(result, taxonomy, policy):
+    """Compatibility wrapper returning activity IDs."""
+    scored = ScoringResult(
+        result.scores.rename(columns={"activity_id": "subject_id"}),
+        result.usage.rename(columns={"activity_id": "subject_id"}),
+        result.lineage,
+    )
+    return select_matches(scored, taxonomy, policy).rename(columns={"subject_id": "activity_id"})

@@ -1,22 +1,17 @@
-"""Pinned taxonomy adapters; question wording comes from the two source repos."""
+"""Taxonomy data and a parameterized workbook reader, independent of any taxonomy."""
 
-from __future__ import annotations
-
-import hashlib
 from dataclasses import dataclass
+from importlib import import_module
 from pathlib import Path
+import hashlib
 
 import pandas as pd
 
-from ...activity_extraction.pipeline import fingerprint
-from . import drawdown_questions as dd
-from . import oneearth_questions as oe
-
-SOLUTION_PROPERTIES = ("CATEGORY", "CLIMATE POLLUTANTS", "SPEED OF ACTION")
+from ...fingerprints import fingerprint
 
 
 @dataclass
-class ActivityTaxonomy:
+class Taxonomy:
     name: str
     columns: tuple[str, ...]
     levels: list[dict]
@@ -24,43 +19,82 @@ class ActivityTaxonomy:
     sha256: str
     path: str
     variant: str
+    subject_kind: str | None = None
+
+    def __post_init__(self):
+        self.columns = tuple(self.columns)
+        if not self.columns or len(set(self.columns)) != len(self.columns):
+            raise ValueError("Taxonomy levels must be nonempty and unique")
+        required = {"node_id", "depth", "level", "name", "question", *self.columns}
+        if required - set(self.nodes):
+            raise ValueError(f"Missing taxonomy node columns: {sorted(required - set(self.nodes))}")
+        if (
+            self.nodes.empty
+            or self.nodes.node_id.isna().any()
+            or self.nodes.node_id.duplicated().any()
+        ):
+            raise ValueError("Taxonomy node IDs must be nonempty and unique")
+        paths = set()
+        for row in self.nodes.to_dict("records"):
+            depth = row["depth"]
+            if (
+                isinstance(depth, bool)
+                or not isinstance(depth, int)
+                or not 0 <= depth < len(self.columns)
+            ):
+                raise ValueError("Taxonomy node depth is outside configured levels")
+            values = [row[c] for c in self.columns]
+            if any(pd.isna(v) or not str(v).strip() for v in values[: depth + 1]):
+                raise ValueError("Taxonomy path has a blank ancestor")
+            if any(pd.notna(v) and v != "" for v in values[depth + 1 :]):
+                raise ValueError("Taxonomy path extends beyond its node depth")
+            branch = tuple(values[: depth + 1])
+            if branch in paths:
+                raise ValueError(f"Duplicate taxonomy path: {branch}")
+            paths.add(branch)
+            if not isinstance(row["question"], dict) or not row["question"].get("instructions"):
+                raise ValueError("Every taxonomy node needs an explicit question")
+        for branch in paths:
+            if len(branch) > 1 and branch[:-1] not in paths:
+                raise ValueError(f"Orphan taxonomy path: {branch}")
+        if len(self.levels) != len(self.columns):
+            raise ValueError("Taxonomy level definitions do not match path columns")
+        if any(
+            level.get("output_col") != column
+            for level, column in zip(self.levels, self.columns, strict=True)
+        ):
+            raise ValueError("Taxonomy level output columns do not match path columns")
+
+    @property
+    def questions_sha256(self):
+        return fingerprint({str(r.node_id): r.question for r in self.nodes.itertuples()})
 
 
-def _activity_wording(template: str) -> str:
-    for old, new in oe.ACTIVITY_WORDING:
-        template = template.replace(old, new)
-    if "organization" in template.lower():
-        raise ValueError("Organization wording remains in an activity question template")
-    return template
+ActivityTaxonomy = Taxonomy  # Backward-compatible public name.
 
 
-def load_taxonomy(name: str, path, *, variant: str | None = None) -> ActivityTaxonomy:
-    """Read only the first three sheets; exclude full descendant branches consistently.
-
-    Full paths identify nodes, including repeated child names in different branches.
-    Inputs are explicit paths, never latest-file globs or source-repo imports.
-    """
-    if name == "one_earth":
-        columns = ("Pillar", "Sub-Pillar", "Solution")
-        sheets = ("Pillars", "SubPillars", "Solutions")
-        level_names = ("Pillar", "SubPillar", "Solution")
-        variant = variant or "cc_routing"
-        if variant not in oe.QUESTION_VARIANTS:
-            raise ValueError(f"Unknown One Earth question variant: {variant}")
-    elif name == "drawdown":
-        columns = ("Sector", "Cluster", "Solution")
-        sheets = ("Sectors", "SectorClusters", "Solutions")
-        level_names = ("Sector", "SectorCluster", "Solution")
-        variant = variant or "stewardship_yes"
-        if variant not in dd.QUESTION_VARIANTS:
-            raise ValueError(f"Unknown Drawdown question variant: {variant}")
-    else:
-        raise ValueError(f"Unknown taxonomy: {name}")
+def load_workbook(
+    name,
+    path,
+    *,
+    columns,
+    sheets,
+    question_builder,
+    variant="base",
+    level_names=None,
+    attributes=(),
+    subject_kind=None,
+):
+    """Read explicitly configured sheets; suppress excluded descendant paths."""
+    columns, sheets = tuple(columns), tuple(sheets)
+    level_names = tuple(level_names or columns)
+    if not columns or len(columns) != len(sheets) or len(level_names) != len(columns):
+        raise ValueError("Configure one sheet and level name per path column")
     path = Path(path)
     payload = path.read_bytes()
     if payload.startswith(b"version https://git-lfs.github.com/spec/"):
         raise ValueError(f"Taxonomy is an unresolved Git LFS pointer: {path}")
-    rows, prefixes = [], set()
+    rows, included, known = [], set(), set()
     with pd.ExcelFile(path) as book:
         for depth, sheet in enumerate(sheets):
             table = pd.read_excel(book, sheet_name=sheet)
@@ -68,133 +102,66 @@ def load_taxonomy(name: str, path, *, variant: str | None = None) -> ActivityTax
             if missing := set(required) - set(table):
                 raise ValueError(f"{sheet} is missing columns: {sorted(missing)}")
             for raw in table.to_dict("records"):
-                excluded = pd.to_numeric(raw.get("Exclude", 0), errors="coerce")
-                if excluded == 1:
-                    continue
-                if any(pd.isna(raw[c]) or not str(raw[c]).strip() for c in required):
-                    raise ValueError(f"Blank path or definition in {sheet}")
+                if any(pd.isna(raw[c]) or not str(raw[c]).strip() for c in columns[: depth + 1]):
+                    raise ValueError(f"Blank path in {sheet}")
                 branch = tuple(str(raw[c]).strip() for c in columns[: depth + 1])
-                if depth and branch[:-1] not in prefixes:
-                    # An explicitly excluded ancestor excludes its descendants.
-                    # An orphan otherwise indicates a malformed taxonomy.
-                    parent_table = pd.read_excel(book, sheet_name=sheets[depth - 1])
-                    parent_rows = parent_table
-                    for c, value in zip(columns, branch[:-1], strict=False):
-                        parent_rows = parent_rows[parent_rows[c].astype(str).str.strip() == value]
-                    if parent_rows.empty:
-                        raise ValueError(f"Orphan taxonomy path: {branch}")
-                    continue
-                if branch in prefixes:
+                if branch in known:
                     raise ValueError(f"Duplicate taxonomy path: {branch}")
-                prefixes.add(branch)
-                row = {
-                    "node_id": fingerprint([name, branch])[:24],
-                    "level": columns[depth],
-                    "depth": depth,
-                    "name": branch[-1],
-                    "Definition": str(raw["Definition"]).strip(),
-                    **{c: branch[i] if i <= depth else None for i, c in enumerate(columns)},
-                }
-                for c in SOLUTION_PROPERTIES:
-                    row[c] = raw.get(c) if pd.notna(raw.get(c)) else None
-                rows.append(row)
+                known.add(branch)
+                if depth and branch[:-1] not in known:
+                    raise ValueError(f"Orphan taxonomy path: {branch}")
+                if pd.to_numeric(raw.get("Exclude", 0), errors="coerce") == 1:
+                    continue
+                if depth and branch[:-1] not in included:
+                    continue
+                if pd.isna(raw["Definition"]) or not str(raw["Definition"]).strip():
+                    raise ValueError(f"Blank definition in {sheet}")
+                included.add(branch)
+                rows.append(
+                    {
+                        "node_id": fingerprint([name, branch])[:24],
+                        "level": columns[depth],
+                        "depth": depth,
+                        "name": branch[-1],
+                        "Definition": str(raw["Definition"]).strip(),
+                        **{c: branch[i] if i <= depth else None for i, c in enumerate(columns)},
+                        **{c: raw.get(c) if pd.notna(raw.get(c)) else None for c in attributes},
+                    }
+                )
     if not rows:
         raise ValueError("Taxonomy has no included nodes")
-    nodes = pd.DataFrame(rows)
-    if name == "one_earth":
-        nodes = _one_earth_questions(nodes, columns, variant)
-    else:
-        nodes = _drawdown_questions(nodes, columns, variant)
+    nodes = question_builder(pd.DataFrame(rows), columns, variant)
     levels = [
-        {
-            "idx": i,
-            "name": level_names[i],
-            "key_col": c,
-            "output_col": c,
-            "sheet": sheets[i],
-            "parent_filters": list(columns[:i]),
-        }
+        dict(
+            idx=i,
+            name=level_names[i],
+            key_col=c,
+            output_col=c,
+            sheet=sheets[i],
+            parent_filters=list(columns[:i]),
+        )
         for i, c in enumerate(columns)
     ]
-    return ActivityTaxonomy(
-        name, columns, levels, nodes, hashlib.sha256(payload).hexdigest(), str(path), variant
+    return Taxonomy(
+        name,
+        columns,
+        levels,
+        nodes,
+        hashlib.sha256(payload).hexdigest(),
+        str(path),
+        variant,
+        subject_kind,
     )
 
 
-def _one_earth_questions(nodes, columns, variant):
-    nodes = nodes.copy()
-    definitions = {
-        tuple(r[c] for c in columns[:2]): r["Definition"]
-        for r in nodes.to_dict("records")
-        if r["depth"] == 1
-    }
-    questions = []
-    for r in nodes.to_dict("records"):
-        ancestors = [f'{c} "{r[c]}"' for c in columns[: r["depth"]]]
-        parent = f" (within {', '.join(ancestors)})" if ancestors else ""
-        text = _activity_wording(oe.NODE_QUESTION).format(
-            level=r["level"],
-            name=r["name"],
-            parent=parent,
-            definition=r["Definition"],
-        )
-        criteria = None
-        if variant != "base" and r["depth"] == 2 and r["Sub-Pillar"].startswith(oe.CC_PREFIX):
-            fill = {
-                "name": r["name"],
-                "subpillar": r["Sub-Pillar"],
-                "subpillar_definition": definitions[(r["Pillar"], r["Sub-Pillar"])],
-            }
-            if variant in ("cc_condition", "cc_routing"):
-                text += _activity_wording(oe.CC_CONDITION).format(**fill)
-            else:
-                criteria = {
-                    "true": _activity_wording(oe.CC_CRITERIA_TRUE).format(**fill),
-                    "false": _activity_wording(oe.CC_CRITERIA_FALSE).format(**fill),
-                }
-        if variant == "cc_routing" and (r["level"], r["name"]) in oe.ROUTING_CRITERIA:
-            criteria = {
-                k: _activity_wording(v)
-                for k, v in oe.ROUTING_CRITERIA[(r["level"], r["name"])].items()
-            }
-        question = {"type": "noul", "instructions": text}
-        if criteria:
-            question["criteria"] = criteria
-        questions.append(question)
-    nodes["question"] = questions
-    return nodes
+def load_taxonomy(name, path, *, variant=None):
+    """Compatibility dispatcher importing only the selected built-in configuration.
 
-
-def _drawdown_questions(nodes, columns, variant):
-    nodes = nodes.copy()
-    questions, applied = [], set()
-    changes = dd.QUESTION_VARIANTS[variant]
-    for r in nodes.to_dict("records"):
-        ancestors = [f'{c} "{r[c]}"' for c in columns[: r["depth"]]]
-        parent = f" (within {', '.join(ancestors)})" if ancestors else ""
-        question = {
-            "type": "noul",
-            "instructions": dd.NODE_QUESTION.format(
-                level=r["level"],
-                name=r["name"],
-                parent=parent,
-                definition=r["Definition"],
-            ),
-        }
-        key = (r["level"], r["name"])
-        if key in changes:
-            if key in applied:
-                raise ValueError(f"Question variant matches an ambiguous node name: {key}")
-            applied.add(key)
-            change = changes[key]
-            if "condition" in change:
-                question["instructions"] += " " + change["condition"]
-            if "criteria" in change:
-                question["criteria"] = dict(change["criteria"])
-        questions.append(question)
-    if set(changes) - applied:
+    New taxonomies pass a Taxonomy directly or use load_workbook with their builder.
+    This convenience function is not used by the generic scorer or selector.
+    """
+    if name not in ("one_earth", "drawdown"):
         raise ValueError(
-            f"Question variant {variant} does not fit taxonomy: {set(changes) - applied}"
+            f"Unknown built-in taxonomy: {name}; supply a Taxonomy or use load_workbook"
         )
-    nodes["question"] = questions
-    return nodes
+    return import_module(f"{__package__}.{name}").load_taxonomy(path, variant=variant)

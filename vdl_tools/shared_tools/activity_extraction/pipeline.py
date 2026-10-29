@@ -11,6 +11,7 @@ import pandas as pd
 from .extraction import OrgInput, build_inputs, render_profile
 from .general import GENERAL_EXTRACTION_PROMPT
 from .structured_cache import run_structured
+from ..fingerprints import fingerprint
 
 STATE_FIELDS = {
     "activity": "Activity",
@@ -20,13 +21,6 @@ STATE_FIELDS = {
     "sector": "Sector",
     "methods": "Methods",
 }
-
-
-def fingerprint(value) -> str:
-    """Stable JSON fingerprint; also used for run and request provenance."""
-    return hashlib.sha256(
-        json.dumps(value, sort_keys=True, ensure_ascii=False, default=str).encode()
-    ).hexdigest()
 
 
 def activity_state(row) -> str:
@@ -39,6 +33,49 @@ class ExtractionResult:
     organizations: pd.DataFrame
     activities: pd.DataFrame
     lineage: dict
+
+    def save(self, directory):
+        """Persist an immutable extraction snapshot separately from taxonomy jobs."""
+        from pathlib import Path
+
+        directory = Path(directory)
+        directory.mkdir(parents=True, exist_ok=True)
+        files = ("activity_extraction_orgs.parquet", "activity_extraction_activities.parquet")
+        marker = directory / "extraction_manifest.json"
+        if marker.exists() or any((directory / name).exists() for name in files):
+            raise FileExistsError(f"Extraction snapshot already exists: {directory}")
+        for frame, name in zip((self.organizations, self.activities), files, strict=True):
+            frame.to_parquet(directory / name, index=False)
+        marker.write_text(
+            json.dumps(
+                {
+                    "lineage": self.lineage,
+                    "files": {
+                        name: hashlib.sha256((directory / name).read_bytes()).hexdigest()
+                        for name in files
+                    },
+                },
+                indent=2,
+                default=str,
+            )
+            + "\n"
+        )
+
+    @classmethod
+    def load(cls, directory):
+        """Load a completed snapshot without a model, website cache or taxonomy."""
+        from pathlib import Path
+
+        directory = Path(directory)
+        manifest = json.loads((directory / "extraction_manifest.json").read_text())
+        files = ("activity_extraction_orgs.parquet", "activity_extraction_activities.parquet")
+        for name in files:
+            if (
+                hashlib.sha256((directory / name).read_bytes()).hexdigest()
+                != manifest["files"][name]
+            ):
+                raise ValueError(f"Extraction snapshot checksum mismatch: {name}")
+        return cls(*(pd.read_parquet(directory / name) for name in files), manifest["lineage"])
 
 
 def extract_frame(
