@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from ...fingerprints import fingerprint
+from ...tools.unique_ids import create_deterministic_sha256
 
 
 @dataclass
@@ -106,7 +106,7 @@ class Taxonomy:
     @property
     def questions_sha256(self):
         """Hash of every node's question, keyed by node ID; changes when wording changes."""
-        return fingerprint({str(r.node_id): r.question for r in self.nodes.itertuples()})
+        return create_deterministic_sha256({str(r.node_id): r.question for r in self.nodes.itertuples()})
 
 
 def load_workbook(
@@ -152,7 +152,7 @@ def load_workbook(
     Taxonomy
         A row with ``Exclude == 1`` and all of its descendants are omitted. Every
         other row becomes a node whose ``node_id`` is the first 24 hex characters of
-        the fingerprint of ``[name, full path]``.
+        the SHA-256 of ``[name, full path]``.
 
     Raises
     ------
@@ -194,7 +194,7 @@ def load_workbook(
                 included.add(branch)
                 rows.append(
                     {
-                        "node_id": fingerprint([name, branch])[:24],
+                        "node_id": create_deterministic_sha256([name, branch])[:24],
                         "level": columns[depth],
                         "depth": depth,
                         "name": branch[-1],

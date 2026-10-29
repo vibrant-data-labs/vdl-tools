@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass
 import pandas as pd
 import tiktoken
 
-from ...fingerprints import fingerprint
+from ...tools.unique_ids import create_deterministic_sha256
 from .taxonomies import Taxonomy
 
 JEV_MODEL = "typesafe-ai/jev"
@@ -54,7 +54,7 @@ class MatchPolicy:
     @property
     def sha256(self):
         """Fingerprint of the policy fields; recorded on every selected path."""
-        return fingerprint(asdict(self))
+        return create_deterministic_sha256(asdict(self))
 
 
 @dataclass
@@ -248,7 +248,7 @@ def score_subjects(
     subjects : pandas.DataFrame
         One row per subject with ``subject_id`` (unique, non-null) and ``state`` (the
         text Jev judges, at most 8 000 cl100k tokens). Optional ``cache_id`` replaces
-        the derived key ``fingerprint([namespace, subject_id, state])``; optional
+        the derived key ``create_deterministic_sha256([namespace, subject_id, state])``; optional
         ``kind`` must equal ``taxonomy.subject_kind`` when both are set.
     taxonomy : Taxonomy
         Supplies the questions and the identity recorded in ``lineage``.
@@ -289,7 +289,7 @@ def score_subjects(
         raise ValueError("Subject IDs must be non-null and unique")
     if "cache_id" not in subjects:
         subjects["cache_id"] = [
-            fingerprint([namespace, str(r.subject_id), r.state]) for r in subjects.itertuples()
+            create_deterministic_sha256([namespace, str(r.subject_id), r.state]) for r in subjects.itertuples()
         ]
     if (
         taxonomy.subject_kind
@@ -325,7 +325,7 @@ def score_subjects(
             if pairs
             else {}
         )
-        question_hash = fingerprint(questions)
+        question_hash = create_deterministic_sha256(questions)
         for subject in subjects.to_dict("records"):
             row = rows.get(subject["cache_id"]) or {}
             error, values = None, {}
@@ -393,7 +393,7 @@ def score_subjects(
             "taxonomy_sha256": taxonomy.sha256,
             "question_variant": taxonomy.variant,
             "model": JEV_MODEL,
-            "question_sets": {g: fingerprint(q) for g, q in groups.items()},
+            "question_sets": {g: create_deterministic_sha256(q) for g, q in groups.items()},
             "n_nodes": len(taxonomy.nodes),
             "n_groups": len(groups),
             "n_subjects": len(subjects),
@@ -473,7 +473,7 @@ def select_matches(result: ScoringResult, taxonomy: Taxonomy, policy: MatchPolic
             taxonomy, max_tokens=result.lineage.get("max_question_tokens", 48_000)
         )
         questions_match = result.lineage.get("question_sets") == {
-            group: fingerprint(questions) for group, questions in groups.items()
+            group: create_deterministic_sha256(questions) for group, questions in groups.items()
         }
     if not questions_match:
         raise ValueError("Stored scores belong to different taxonomy questions; re-run scoring")

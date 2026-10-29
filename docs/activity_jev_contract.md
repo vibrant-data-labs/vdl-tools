@@ -17,13 +17,14 @@ core has no name-switching dispatcher. Climate Landscape loads only the selected
 taxonomy's workbook; shared-data may hold both, and a missing or invalid sibling
 workbook does not block the selected loader.
 
-`ExtractionResult.save/load` persists a checksummed extraction independently. A
-Climate Landscape run extracts once (or loads a saved extraction), maps each selected
-taxonomy in turn, writes that taxonomy's files as soon as it finishes, and records one
-`lineage.json` with the input, extraction and per-taxonomy identities. An error stops
+`ExtractionResult.save/load` persists an extraction independently as Parquet through
+`parquet_cache`, lineage in the footers. A Climate Landscape run extracts once (or loads a
+saved extraction), maps each selected taxonomy in turn, writes that taxonomy's files as
+soon as it finishes, and records the input, extraction and per-taxonomy identities in the
+mapped Parquet's lineage footer (`get_lineage`). An error stops
 the run and leaves what finished on disk; a later run can map the other taxonomy from
-the saved extraction. `assemble_mapping_runs` copies one taxonomy's export columns from
-each selected run onto a base frame by organization ID and can preserve approved legacy
+the saved extraction. `assemble_mapping_runs` reads each selected run's mapped Parquet and copies one
+taxonomy's export columns onto a base frame by organization ID and can preserve approved legacy
 columns for an unselected taxonomy. No assembly or mapping function promotes production
 outputs.
 

@@ -26,9 +26,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from pathlib import Path
 
-import pandas as pd
 from sqlalchemy import func, or_
 from sqlalchemy.exc import OperationalError
 
@@ -123,64 +121,14 @@ _QUERY_RETRIES = 4
 _QUERY_BACKOFF = 5  # seconds, multiplied by the attempt number
 
 
-# Pages recovered by a browser-rendering re-scrape (nature_tagging.deep_scrape), kept out of
-# the shared psql cache so a local recovery pass cannot leak into other projects' data. Each
-# overlay file is read once per process.
-_OVERLAY_CACHE: dict[Path, dict[str, list[dict]]] = {}
-
-
-def _load_overlay(path: Path | None) -> dict[str, list[dict]]:
-    """Return {site key: [page dicts]} from the recovery overlay, empty when there is none.
-
-    The overlay stores the website URL as scraped; keys are derived with the same
-    ``extract_website_name`` the psql cache lookup uses, so a recovered site matches the
-    organization it belongs to.
-    """
-    if path is None:
-        return {}
-    path = Path(path)
-    if path in _OVERLAY_CACHE:
-        return _OVERLAY_CACHE[path]
-    overlay: dict[str, list[dict]] = {}
-    _OVERLAY_CACHE[path] = overlay
-    if not path.exists():
-        return overlay
-    try:
-        frame = pd.read_parquet(path)
-    except Exception as exc:  # a malformed overlay must not break extraction
-        logger.warning("Could not read the deep-scrape overlay: %s", exc)
-        return overlay
-
-    frame = frame[frame["text"].notna()]
-    for url, group in frame.groupby("url"):
-        key = extract_website_name(str(url))
-        if not key:
-            continue
-        pages = [
-            {"source": str(url), "subpath": r.subpath, "text": r.text}
-            for r in group.itertuples()
-            if isinstance(r.text, str) and r.text.strip()
-        ]
-        if pages:
-            overlay.setdefault(key.lower(), []).extend(pages)
-    logger.info(
-        "Deep-scrape overlay: %s sites, %s pages",
-        len(overlay),
-        sum(len(v) for v in overlay.values()),
-    )
-    return overlay
-
-
 def load_site_texts(
     urls: list[str],
     session=None,
-    overlay_path: Path | None = None,
 ) -> dict[str, SiteText]:
     """Return ``{url: SiteText}`` for every URL, empty ``pages`` when uncached.
 
     Both cache tables are read in two bulk queries; per-page rows win, and
     the site-level ``combined_text`` fills in for sites that only have that.
-    Pages in the overlay at ``overlay_path`` (None for no overlay) are merged in.
     """
     from vdl_tools.shared_tools.database_cache.database_models import (
         WebPagesParsed,
@@ -270,11 +218,6 @@ def load_site_texts(
                 .all()
             )
 
-    # Pages recovered by deep_scrape, which renders a site in a browser to reach content the
-    # shared scraper could not find. Kept in a local file rather than the shared psql cache, so
-    # they are merged here rather than arriving through the queries above.
-    overlay = _load_overlay(overlay_path)
-
     # LIKE 'host%' over-matches (host.co matches host.com), so a row only
     # belongs to a variant on a delimiter boundary: the home key itself, or
     # '<host>/<subpath>'. ('_' is accepted too — the scraper joins nested path
@@ -336,22 +279,6 @@ def load_site_texts(
                     site.source_table = "web_pages_parsed"
                     break
 
-        # Merge any browser-recovered pages for this site, skipping ones whose text the cache
-        # already holds. The recovery pass runs where the cache is thin, so its pages are
-        # usually additional rather than duplicates, but a site can be re-scraped later.
-        recovered = None
-        for variant in _key_variants(key) if key else []:
-            recovered = overlay.get(variant)
-            if recovered:
-                break
-        if recovered:
-            have = {p["text"][:2000] for p in site.pages}
-            added = [p for p in recovered if p["text"][:2000] not in have]
-            if added:
-                site.pages = site.pages + added
-                site.source_table = (
-                    f"{site.source_table}+deep_scrape" if site.source_table else "deep_scrape"
-                )
         results[url] = site
 
     n_cached = sum(1 for s in results.values() if s.pages)

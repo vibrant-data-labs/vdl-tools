@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import dataclass
+from pathlib import Path
 
 import pandas as pd
 
-from ..fingerprints import fingerprint
+from ..parquet_cache import get_lineage, read_dataframes, write_dataframes
+from ..tools.unique_ids import create_deterministic_sha256
 from .extraction import OrgInput, build_inputs, render_profile, run_extraction_prompt
 from .general import GENERAL_EXTRACTION_PROMPT
 
@@ -27,54 +27,57 @@ def activity_state(row) -> str:
     return "\n".join(f"{label}: {str(row[field]).strip()}" for field, label in STATE_FIELDS.items())
 
 
+SNAPSHOT_TABLES = ("activity_extraction_orgs", "activity_extraction_activities")
+
+
 @dataclass
 class ExtractionResult:
+    """One extraction run: a row per organization, a row per activity, and the lineage.
+
+    Attributes
+    ----------
+    organizations : pandas.DataFrame
+        One row per input organization: ``uid``, ``Organization``, ``Website``,
+        ``extraction_run_id``, ``source_sha256``, ``text_source``, ``text_chars``,
+        ``Description``, ``summary``, ``coverage``, ``n_activities``,
+        ``extraction_status`` (``success``, ``empty``, ``missing_text`` or
+        ``request_failed``) and the prompt's organization-level fields.
+    activities : pandas.DataFrame
+        One row per extracted activity: ``activity_id``, ``uid``, ``Organization``,
+        ``activity_index``, ``extraction_run_id``, ``source_sha256``, every activity
+        schema field, ``state`` (the six fields Jev judges) and ``cache_id``.
+    lineage : dict
+        Run, prompt, schema and model identity plus ``status_counts``.
+    """
+
     organizations: pd.DataFrame
     activities: pd.DataFrame
     lineage: dict
 
     def save(self, directory):
-        """Persist an immutable extraction snapshot separately from taxonomy jobs."""
-        from pathlib import Path
+        """Write both tables as Parquet into ``directory`` with the lineage in their footers.
 
+        Raises
+        ------
+        FileExistsError
+            A snapshot is already there; snapshots are immutable.
+        """
         directory = Path(directory)
-        directory.mkdir(parents=True, exist_ok=True)
-        files = ("activity_extraction_orgs.parquet", "activity_extraction_activities.parquet")
-        marker = directory / "extraction_manifest.json"
-        if marker.exists() or any((directory / name).exists() for name in files):
+        if any((directory / f"{name}.parquet").exists() for name in SNAPSHOT_TABLES):
             raise FileExistsError(f"Extraction snapshot already exists: {directory}")
-        for frame, name in zip((self.organizations, self.activities), files, strict=True):
-            frame.to_parquet(directory / name, index=False)
-        marker.write_text(
-            json.dumps(
-                {
-                    "lineage": self.lineage,
-                    "files": {
-                        name: hashlib.sha256((directory / name).read_bytes()).hexdigest()
-                        for name in files
-                    },
-                },
-                indent=2,
-                default=str,
-            )
-            + "\n"
+        write_dataframes(
+            dict(zip(SNAPSHOT_TABLES, (self.organizations, self.activities), strict=True)),
+            directory,
+            lineage=self.lineage,
         )
 
     @classmethod
     def load(cls, directory):
-        """Load a completed snapshot without a model, website cache or taxonomy."""
-        from pathlib import Path
-
-        directory = Path(directory)
-        manifest = json.loads((directory / "extraction_manifest.json").read_text())
-        files = ("activity_extraction_orgs.parquet", "activity_extraction_activities.parquet")
-        for name in files:
-            if (
-                hashlib.sha256((directory / name).read_bytes()).hexdigest()
-                != manifest["files"][name]
-            ):
-                raise ValueError(f"Extraction snapshot checksum mismatch: {name}")
-        return cls(*(pd.read_parquet(directory / name) for name in files), manifest["lineage"])
+        """Read a snapshot written by ``save``; needs no model, website cache or taxonomy."""
+        tables = read_dataframes(directory, list(SNAPSHOT_TABLES))
+        lineage = get_lineage(Path(directory) / f"{SNAPSHOT_TABLES[0]}.parquet")
+        lineage.pop("table_name", None)
+        return cls(*(tables[name] for name in SNAPSHOT_TABLES), lineage)
 
 
 def extract_frame(
@@ -157,7 +160,7 @@ def extract_frame(
     org_rows, activity_rows = [], []
     for org in orgs:
         profile = profiles.get(org.uid)
-        source_hash = fingerprint(texts[org.uid]) if org.uid in texts else None
+        source_hash = create_deterministic_sha256(texts[org.uid]) if org.uid in texts else None
         status = "missing_text" if org.uid not in texts else "request_failed"
         record = {
             "uid": org.uid,
@@ -185,7 +188,7 @@ def extract_frame(
                 **{field: getattr(profile, field) for field in prompt.org_fields()},
             )
             for index, activity in enumerate(profile.activities, start=1):
-                identity = fingerprint([run_id, org.uid, index])
+                identity = create_deterministic_sha256([run_id, org.uid, index])
                 row = {
                     "activity_id": identity,
                     "uid": org.uid,
@@ -198,7 +201,7 @@ def extract_frame(
                 row["state"] = activity_state(row)
                 # Stable across run IDs, while text hashes in the shared cache prevent
                 # old answers being reused after source activities change or reorder.
-                row["cache_id"] = fingerprint([org.uid, row["state"]])
+                row["cache_id"] = create_deterministic_sha256([org.uid, row["state"]])
                 activity_rows.append(row)
         org_rows.append(record)
     org_columns = [
@@ -232,8 +235,8 @@ def extract_frame(
     lineage = {
         "extraction_run_id": run_id,
         "prompt_name": prompt.prompt_name,
-        "prompt_sha256": fingerprint(prompt.text),
-        "schema_sha256": fingerprint(prompt.response_model.model_json_schema()),
+        "prompt_sha256": create_deterministic_sha256(prompt.text),
+        "schema_sha256": create_deterministic_sha256(prompt.response_model.model_json_schema()),
         "model": prompt.model,
         "reasoning": prompt.reasoning,
         "source_policy": "cached_website_only",

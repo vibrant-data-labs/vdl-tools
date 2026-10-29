@@ -150,14 +150,16 @@ assert not any('activity_extraction' in key for key in sys.modules)
     assert completed.returncode == 0, completed.stderr
 
 
-def test_extraction_snapshot_round_trip_and_integrity(extraction, tmp_path):
+def test_extraction_snapshot_round_trips_through_parquet_cache(extraction, tmp_path):
     directory = tmp_path / "extraction"
     extraction.save(directory)
     loaded = type(extraction).load(directory)
     assert loaded.activities.activity_id.tolist() == extraction.activities.activity_id.tolist()
-    assert loaded.lineage == extraction.lineage
+    assert (
+        loaded.organizations.extraction_status.tolist()
+        == extraction.organizations.extraction_status.tolist()
+    )
+    assert {k: loaded.lineage[k] for k in extraction.lineage} == extraction.lineage
+    assert "created_at" in loaded.lineage  # written by parquet_cache into the footer
     with pytest.raises(FileExistsError):
         extraction.save(directory)
-    (directory / "activity_extraction_orgs.parquet").write_bytes(b"changed")
-    with pytest.raises(ValueError, match="checksum mismatch"):
-        type(extraction).load(directory)

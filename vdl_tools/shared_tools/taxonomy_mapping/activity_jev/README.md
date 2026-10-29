@@ -35,7 +35,8 @@ subject kind; supplying `kind` enables an explicit consistency check.
 ## Extraction and compatibility exports
 
 Extraction is an optional upstream step. `ExtractionResult.save(directory)` and
-`ExtractionResult.load(directory)` persist immutable, checksummed snapshots. For
+`ExtractionResult.load(directory)` persist a snapshot as Parquet through
+`parquet_cache`, with the extraction lineage in the file footers. For
 extracted activities, rename `activity_id` to `subject_id` before calling the core.
 Scores keep subject IDs; evidence remains in the supplied subject table.
 
