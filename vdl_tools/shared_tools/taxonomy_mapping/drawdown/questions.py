@@ -1,4 +1,4 @@
-"""Exact question templates ported from drawdown; see SOURCE_REVISIONS.md."""
+"""Exact Drawdown question templates ported from drawdown; see docs/activity_jev_contract.md."""
 
 NODE_QUESTION = (
     'Does this activity fall under the Drawdown {level} "{name}"{parent}? '

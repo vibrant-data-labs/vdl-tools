@@ -1,4 +1,4 @@
-"""Exact question templates ported from oneearth; see SOURCE_REVISIONS.md."""
+"""Exact One Earth question templates ported from oneearth; see docs/activity_jev_contract.md."""
 
 NODE_QUESTION = (
     "Does this organization's own work (its products, services, programs, or stated "

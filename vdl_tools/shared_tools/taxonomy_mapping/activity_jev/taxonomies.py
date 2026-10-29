@@ -1,9 +1,8 @@
-"""Taxonomy data and a parameterized workbook reader, independent of any taxonomy."""
+"""The ``Taxonomy`` structure and a parameterized workbook reader; no taxonomy is named here."""
 
-from dataclasses import dataclass
-from importlib import import_module
-from pathlib import Path
 import hashlib
+from dataclasses import dataclass
+from pathlib import Path
 
 import pandas as pd
 
@@ -12,6 +11,45 @@ from ...fingerprints import fingerprint
 
 @dataclass
 class Taxonomy:
+    """One taxonomy with its hierarchy, node definitions and built Jev questions.
+
+    Attributes
+    ----------
+    name : str
+        Short identifier, e.g. ``one_earth``; prefixes the exported status column.
+    columns : tuple[str, ...]
+        One path column per level, shallowest first, e.g.
+        ``("Pillar", "Sub-Pillar", "Solution")``. Depth is ``len(columns) - 1``.
+    levels : list[dict]
+        One spec per level in the shape ``attach_mapping_columns`` and
+        ``distribute_funding_from_matches`` expect: ``idx``, ``name``, ``key_col``,
+        ``output_col`` (equal to the path column), optional ``sheet``,
+        ``parent_filters``.
+    nodes : pandas.DataFrame
+        One row per node: ``node_id`` (hash of name and full ancestor path, so
+        same-named children do not collide), ``level`` (the path column name),
+        ``depth`` (0-based), ``name``, ``question`` (dict with ``type``,
+        ``instructions`` and optional ``criteria``), the path columns (None below the
+        node's depth) and any loader-supplied attributes.
+    sha256 : str
+        Hash of the source payload (the workbook bytes); part of every score's lineage.
+    path : str
+        Where the payload was read from.
+    variant : str
+        Question wording variant the ``question`` column was built with.
+    subject_kind : str, optional
+        What the questions address (``activity``, ``organization``). When set and the
+        subjects carry ``kind``, the two must agree.
+
+    Raises
+    ------
+    ValueError
+        Empty or duplicate path columns, missing node columns, blank or duplicate
+        node IDs, a depth outside the configured levels, a blank ancestor, a path
+        extending past its depth, duplicate or orphan paths, a node without an
+        explicit question, or level specs that do not line up with the path columns.
+    """
+
     name: str
     columns: tuple[str, ...]
     levels: list[dict]
@@ -67,10 +105,8 @@ class Taxonomy:
 
     @property
     def questions_sha256(self):
+        """Hash of every node's question, keyed by node ID; changes when wording changes."""
         return fingerprint({str(r.node_id): r.question for r in self.nodes.itertuples()})
-
-
-ActivityTaxonomy = Taxonomy  # Backward-compatible public name.
 
 
 def load_workbook(
@@ -85,7 +121,46 @@ def load_workbook(
     attributes=(),
     subject_kind=None,
 ):
-    """Read explicitly configured sheets; suppress excluded descendant paths."""
+    """Read one sheet per level from an Excel workbook and build a ``Taxonomy``.
+
+    Parameters
+    ----------
+    name : str
+        Taxonomy identifier stored on the result and mixed into every ``node_id``.
+    path : str or pathlib.Path
+        Workbook to read. An unresolved Git LFS pointer is rejected.
+    columns : sequence[str]
+        Path column per level, shallowest first. Sheet ``i`` must contain
+        ``columns[:i + 1]`` and ``Definition``; it may contain ``Exclude``.
+    sheets : sequence[str]
+        Sheet name per level, aligned with ``columns``.
+    question_builder : callable
+        ``question_builder(nodes, columns, variant) -> nodes`` adds the ``question``
+        column (a dict with ``type``, ``instructions`` and optional ``criteria``) to
+        the node frame described under ``Taxonomy.nodes``.
+    variant : str
+        Passed through to ``question_builder`` and recorded on the taxonomy.
+    level_names : sequence[str], optional
+        Display name per level for the ``levels`` specs; defaults to ``columns``.
+    attributes : sequence[str]
+        Extra sheet columns copied onto nodes where present (None elsewhere).
+    subject_kind : str, optional
+        Recorded on the taxonomy; see ``Taxonomy.subject_kind``.
+
+    Returns
+    -------
+    Taxonomy
+        A row with ``Exclude == 1`` and all of its descendants are omitted. Every
+        other row becomes a node whose ``node_id`` is the first 24 hex characters of
+        the fingerprint of ``[name, full path]``.
+
+    Raises
+    ------
+    ValueError
+        Mismatched ``columns`` / ``sheets`` / ``level_names`` lengths, a missing
+        required column, a blank path or definition, a duplicate or orphan path, a
+        workbook with no included nodes, or anything ``Taxonomy`` itself rejects.
+    """
     columns, sheets = tuple(columns), tuple(sheets)
     level_names = tuple(level_names or columns)
     if not columns or len(columns) != len(sheets) or len(level_names) != len(columns):
@@ -132,14 +207,14 @@ def load_workbook(
         raise ValueError("Taxonomy has no included nodes")
     nodes = question_builder(pd.DataFrame(rows), columns, variant)
     levels = [
-        dict(
-            idx=i,
-            name=level_names[i],
-            key_col=c,
-            output_col=c,
-            sheet=sheets[i],
-            parent_filters=list(columns[:i]),
-        )
+        {
+            "idx": i,
+            "name": level_names[i],
+            "key_col": c,
+            "output_col": c,
+            "sheet": sheets[i],
+            "parent_filters": list(columns[:i]),
+        }
         for i, c in enumerate(columns)
     ]
     return Taxonomy(
@@ -152,16 +227,3 @@ def load_workbook(
         variant,
         subject_kind,
     )
-
-
-def load_taxonomy(name, path, *, variant=None):
-    """Compatibility dispatcher importing only the selected built-in configuration.
-
-    New taxonomies pass a Taxonomy directly or use load_workbook with their builder.
-    This convenience function is not used by the generic scorer or selector.
-    """
-    if name not in ("one_earth", "drawdown"):
-        raise ValueError(
-            f"Unknown built-in taxonomy: {name}; supply a Taxonomy or use load_workbook"
-        )
-    return import_module(f"{__package__}.{name}").load_taxonomy(path, variant=variant)

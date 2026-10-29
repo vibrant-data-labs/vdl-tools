@@ -1,7 +1,15 @@
-"""JEV mapping of supplied subjects; no extraction, funding or tracker dependency."""
+"""Map supplied subjects to one taxonomy and, optionally, group the matches by entity.
+
+``map_subjects`` scores every subject against every node of one ``Taxonomy`` through
+the cached JEV gateway and selects matches with an explicit offline ``MatchPolicy``.
+``group_matches`` unions those subject-level matches to their entity (for example,
+activities to their organization) while keeping the supporting subjects. Nothing
+here extracts text, names a taxonomy, allocates funding or writes tracker columns;
+``exports`` and the per-taxonomy packages (``taxonomy_mapping.one_earth``,
+``taxonomy_mapping.drawdown``) do that.
+"""
 
 from dataclasses import asdict, dataclass
-from importlib import import_module
 
 import pandas as pd
 
@@ -10,6 +18,30 @@ from .engine import MatchPolicy, drop_implied, score_subjects, select_matches
 
 @dataclass
 class SubjectMappingResult:
+    """Everything ``map_subjects`` produces for one taxonomy.
+
+    Attributes
+    ----------
+    subject_paths : pandas.DataFrame
+        Selected matches, one row per (subject, node): ``subject_id``, ``node_id``,
+        the taxonomy path columns, ``depth``, ``prob``, ``tier``, ``match_origin``
+        (``own`` or ``descend``), ``ancestor_matches`` (list of dicts with
+        ``node_id``, ``level``, ``assignment``, ``prob``) and ``policy_sha256``.
+    scores : pandas.DataFrame
+        Every returned probability: ``subject_id``, ``node_id``, ``prob``,
+        ``request_group``, ``question_sha256``.
+    usage : pandas.DataFrame
+        One row per subject and request group: ``subject_id``, ``request_group``,
+        ``question_sha256``, ``n_questions``, ``model``, ``error`` (None on success),
+        ``input_tokens``, ``output_tokens``.
+    nodes : pandas.DataFrame
+        Copy of ``taxonomy.nodes`` the scores refer to.
+    lineage : dict
+        Scoring identity from ``score_subjects`` (taxonomy hash and path, question
+        hash, variant, model, request-group hashes, counts) plus ``policy``,
+        ``policy_sha256`` and ``max_mapping_level``.
+    """
+
     subject_paths: pd.DataFrame
     scores: pd.DataFrame
     usage: pd.DataFrame
@@ -18,7 +50,27 @@ class SubjectMappingResult:
 
 
 def map_subjects(subjects, taxonomy, *, policy: MatchPolicy, **scoring_options):
-    """Map supplied text against one taxonomy with an explicit offline policy."""
+    """Score supplied subjects against one taxonomy and select matches offline.
+
+    Parameters
+    ----------
+    subjects : pandas.DataFrame
+        One row per subject with ``subject_id`` (unique, non-null) and ``state``, the
+        text JEV judges. Optional ``cache_id`` overrides the derived cache key;
+        optional ``kind`` must equal ``taxonomy.subject_kind`` when both are set.
+    taxonomy : Taxonomy
+        The taxonomy whose built questions are asked of every subject.
+    policy : MatchPolicy
+        Thresholds and optional descent that turn probabilities into matches.
+    **scoring_options
+        Forwarded to ``engine.score_subjects``: ``request_runner``, ``session``,
+        ``max_workers``, ``read_from_cache``, ``write_to_cache``,
+        ``max_question_tokens`` and ``namespace``.
+
+    Returns
+    -------
+    SubjectMappingResult
+    """
     scored = score_subjects(subjects, taxonomy, **scoring_options)
     paths = select_matches(scored, taxonomy, policy)
     return SubjectMappingResult(
@@ -36,7 +88,35 @@ def map_subjects(subjects, taxonomy, *, policy: MatchPolicy, **scoring_options):
 
 
 def group_matches(matches, subjects, taxonomy, *, entity_col="entity_id"):
-    """Optional entity union retaining supporting subject records."""
+    """Union subject-level matches to their entity, keeping the supporting subjects.
+
+    Parameters
+    ----------
+    matches : pandas.DataFrame
+        ``subject_paths`` from ``map_subjects``.
+    subjects : pandas.DataFrame
+        The subjects that were mapped; needs ``subject_id`` and ``entity_col``. Every
+        other column is carried into ``subject_evidence``.
+    taxonomy : Taxonomy
+        Supplies the path columns to group on.
+    entity_col : str
+        Column linking a subject to its entity (default ``entity_id``).
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per (entity, path): ``entity_col``, the taxonomy path columns,
+        ``prob`` (max over supporting subjects), ``tier`` (best, i.e. lowest),
+        ``supporting_subject_ids`` and ``subject_evidence`` (one dict per supporting
+        subject with its ``subject_id`` and every subject column). A path implied by
+        a deeper selected path of the same entity is dropped.
+
+    Raises
+    ------
+    ValueError
+        Null or duplicate subject IDs, null entity links, or a match whose subject is
+        not in ``subjects``.
+    """
     if subjects.subject_id.isna().any() or subjects.subject_id.duplicated().any():
         raise ValueError("Subject IDs must be non-null and unique")
     if subjects[entity_col].isna().any():
@@ -75,41 +155,3 @@ def group_matches(matches, subjects, taxonomy, *, entity_col="entity_id"):
     return drop_implied(
         pd.DataFrame(records, columns=columns), taxonomy.columns, id_col=entity_col
     ).reset_index(drop=True)
-
-
-def rollup_paths(activity_paths, activities, taxonomy):
-    """Compatibility wrapper preserving the original activity-evidence export."""
-    from .activity_rollup import rollup_paths as rollup
-
-    return rollup(activity_paths, activities, taxonomy)
-
-
-def map_extraction(
-    organizations,
-    extraction,
-    taxonomy,
-    *,
-    policy=None,
-    id_col="id",
-    name_col="Organization",
-    **kwargs,
-):
-    """Legacy exporter; generic callers use map_subjects without extraction."""
-    if organizations[id_col].isna().any() or organizations[id_col].astype(str).duplicated().any():
-        raise ValueError("Organization IDs must be non-null and unique")
-    if set(organizations[id_col].astype(str)) != set(extraction.organizations.uid):
-        raise ValueError("Extraction and mapping organization cohorts differ")
-    if taxonomy.name not in ("one_earth", "drawdown"):
-        raise ValueError(
-            "map_extraction is a legacy exporter; use map_subjects for another taxonomy"
-        )
-    adapter = import_module(f"{__package__}.{taxonomy.name}")
-    mapped = map_subjects(
-        extraction.activities.rename(columns={"activity_id": "subject_id"}),
-        taxonomy,
-        policy=policy or adapter.default_policy(),
-        **kwargs,
-    )
-    return adapter.export_extraction(
-        organizations, extraction, taxonomy, mapped, id_col=id_col, name_col=name_col
-    )

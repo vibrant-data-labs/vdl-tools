@@ -6,7 +6,10 @@ import pytest
 from vdl_tools.shared_tools.activity_extraction.general import GeneralActivityProfile
 from vdl_tools.shared_tools.activity_extraction.pipeline import extract_frame
 from vdl_tools.shared_tools.activity_extraction.scraped_text import SiteText
-from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.taxonomies import load_taxonomy
+from vdl_tools.shared_tools.taxonomy_mapping import drawdown, one_earth
+from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.pipeline import map_subjects
+
+ADAPTERS = {"one_earth": one_earth, "drawdown": drawdown}
 
 
 @pytest.fixture(autouse=True)
@@ -132,7 +135,7 @@ def taxonomy(tmp_path):
                         )
                     rows.append(row)
                 pd.DataFrame(rows).to_excel(writer, sheet_name=sheet, index=False)
-        return load_taxonomy(name, path, variant="base")
+        return ADAPTERS[name].load_taxonomy(path, variant="base")
 
     return make
 
@@ -152,3 +155,15 @@ def fake_jev(probabilities=None):
         }
 
     return run
+
+
+def map_and_export(organizations, extraction, tax, **scoring_options):
+    """What a Climate Landscape job does: map the activities, then run the taxonomy's exporter."""
+    adapter = ADAPTERS[tax.name]
+    mapped = map_subjects(
+        extraction.activities.rename(columns={"activity_id": "subject_id"}),
+        tax,
+        policy=adapter.default_policy(),
+        **scoring_options,
+    )
+    return adapter.export_extraction(organizations, extraction, tax, mapped)

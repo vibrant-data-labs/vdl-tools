@@ -23,6 +23,8 @@ Main entry points
 -----------------
 ``extract_activities(orgs, prompt, ...)``
     Runs the extraction prompt over cached website text, one cached call per org.
+``run_extraction_prompt(given_ids_texts, prompt, ...)``
+    The cached model call itself, through the shared ``InstructorPRC`` cache.
 ``render_profile(profile, prompt)``
     Renders a profile as human-readable Description text.
 ``orgs_from_frame(df)``
@@ -39,7 +41,6 @@ import pandas as pd
 from pydantic import BaseModel
 
 from vdl_tools.shared_tools.activity_extraction.scraped_text import load_site_texts
-from vdl_tools.shared_tools.activity_extraction.structured_cache import run_structured
 from vdl_tools.shared_tools.tools.logger import logger
 
 # make_group_text budgets against the model's full context window and reserves
@@ -59,9 +60,9 @@ _PROFILE_SPECIAL = ("summary", "activities", "coverage")
 class ExtractionPrompt:
     """What to extract: instructions, response schema, cache identity, render labels.
 
-    ``prompt_name`` is part of the cache identity together with the prompt
-    text and a fingerprint of ``response_model``; change it when the prompt
-    changes meaning. ``org_labels`` maps org-level profile fields to the
+    ``prompt_name`` labels the cache prompt; the cache identity itself is the
+    prompt text plus ``response_model``'s JSON schema (see ``InstructorPRC``).
+    Change ``prompt_name`` when the prompt changes meaning. ``org_labels`` maps org-level profile fields to the
     labels used in the rendered Description; fields not listed are labelled
     from their names.
     """
@@ -221,6 +222,67 @@ def build_inputs(
     return given_ids_texts, meta
 
 
+def run_extraction_prompt(
+    given_ids_texts: list[tuple[str, str]],
+    prompt: ExtractionPrompt,
+    *,
+    max_workers: int = 16,
+    read_from_cache: bool = True,
+    write_to_cache: bool = True,
+    n_per_commit: int = 200,
+    session=None,
+) -> dict[str, BaseModel]:
+    """Run one extraction prompt over many inputs through the shared structured cache.
+
+    Parameters
+    ----------
+    given_ids_texts : list[tuple[str, str]]
+        (cache key, prompt input text) pairs from `build_inputs`.
+    prompt : ExtractionPrompt
+        Supplies the prompt text, cache prompt name, response schema, model and
+        reasoning effort.
+    max_workers : int
+        Parallel API calls.
+    read_from_cache, write_to_cache : bool
+        Cache behaviour, as for `InstructorPRC.bulk_get_cache_or_run`.
+    n_per_commit : int
+        Rows per database commit.
+    session : sqlalchemy.orm.Session, optional
+        Reuse an open session; otherwise one is opened for this call.
+
+    Returns
+    -------
+    dict[str, BaseModel]
+        cache key -> parsed ``prompt.response_model``. Inputs whose request failed
+        are absent; `extract_frame` records them as ``request_failed``.
+    """
+    from vdl_tools.shared_tools.database_cache.database_utils import get_session
+    from vdl_tools.shared_tools.openai.prompt_response_cache_instructor import InstructorPRC
+
+    if not given_ids_texts:
+        return {}
+    api_kwargs = {"reasoning": prompt.reasoning} if prompt.reasoning else {}
+    with get_session(session=session) as active:
+        cache = InstructorPRC(
+            session=active,
+            prompt_str=prompt.text,
+            prompt_name=prompt.prompt_name,
+            response_model=prompt.response_model,
+            model=prompt.model,
+            # Model identity is part of the key: a different model must never replay
+            # another model's cached answers as its own.
+            filter_by_model=True,
+        )
+        return cache.bulk_get_parsed(
+            given_ids_texts,
+            read_from_cache=read_from_cache,
+            write_to_cache=write_to_cache,
+            n_per_commit=n_per_commit,
+            max_workers=max_workers,
+            **api_kwargs,
+        )
+
+
 def extract_activities(
     orgs: list[OrgInput],
     prompt: ExtractionPrompt,
@@ -254,13 +316,9 @@ def extract_activities(
         len(given_ids_texts),
         prompt.model,
     )
-    profiles = run_structured(
+    profiles = run_extraction_prompt(
         given_ids_texts,
-        prompt_str=prompt.text,
-        prompt_name=prompt.prompt_name,
-        response_model=prompt.response_model,
-        model=prompt.model,
-        reasoning=prompt.reasoning,
+        prompt,
         max_workers=max_workers,
         read_from_cache=read_from_cache,
         write_to_cache=write_to_cache,

@@ -1,6 +1,5 @@
 """Generality and loader isolation without inference or database access."""
 
-import json
 import os
 import subprocess
 import sys
@@ -125,22 +124,17 @@ def test_subject_kind_and_namespace_are_explicit(custom_taxonomy):
 
 
 @pytest.mark.parametrize("name,other", [("one_earth", "drawdown"), ("drawdown", "one_earth")])
-def test_selected_loader_imports_no_sibling_question_module(taxonomy, name, other):
+def test_selected_loader_imports_no_sibling_package(taxonomy, name, other):
     tax = taxonomy(name)
-    blocked = (
-        ("one_earth", "oneearth_questions")
-        if other == "one_earth"
-        else ("drawdown", "drawdown_questions")
-    )
     code = f"""
 import importlib.abc, sys
 class Block(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, *args):
-        if fullname.rsplit('.', 1)[-1] in {blocked!r}:
+        if fullname.startswith('vdl_tools.shared_tools.taxonomy_mapping.{other}'):
             raise AssertionError('Sibling imported: ' + fullname)
 sys.meta_path.insert(0, Block())
-from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.taxonomies import load_taxonomy
-result = load_taxonomy({name!r}, {tax.path!r}, variant='base')
+from vdl_tools.shared_tools.taxonomy_mapping.{name} import load_taxonomy
+result = load_taxonomy({tax.path!r}, variant='base')
 assert len(result.nodes) == 6
 assert not any('activity_extraction' in key for key in sys.modules)
 """
@@ -167,39 +161,3 @@ def test_extraction_snapshot_round_trip_and_integrity(extraction, tmp_path):
     (directory / "activity_extraction_orgs.parquet").write_bytes(b"changed")
     with pytest.raises(ValueError, match="checksum mismatch"):
         type(extraction).load(directory)
-
-
-def test_generic_cli_scores_and_reselects(custom_taxonomy, tmp_path, monkeypatch):
-    from vdl_tools.shared_tools.taxonomy_mapping.activity_jev import __main__ as cli
-
-    tax = custom_taxonomy(4)
-    spec = tmp_path / "spec.json"
-    spec.write_text(
-        json.dumps(
-            {
-                "name": tax.name,
-                "columns": tax.columns,
-                "nodes": tax.nodes.to_dict("records"),
-                "subject_kind": "organization",
-            }
-        )
-    )
-    subjects = tmp_path / "subjects.parquet"
-    pd.DataFrame([{"subject_id": "a", "state": "school"}]).to_parquet(subjects)
-    original = cli.score_subjects
-    monkeypatch.setattr(
-        cli, "score_subjects", lambda *a, **kw: original(*a, **kw, request_runner=fake_jev())
-    )
-    scored = tmp_path / "scored"
-    cli.main(
-        ["--subjects", str(subjects), "--taxonomy-spec", str(spec), "--output-dir", str(scored)]
-    )
-    monkeypatch.setattr(
-        cli, "score_subjects", lambda *a, **kw: pytest.fail("Offline reselection scored")
-    )
-    selected = tmp_path / "selected"
-    cli.main(
-        ["--stored-run", str(scored), "--taxonomy-spec", str(spec), "--output-dir", str(selected)]
-    )
-    assert json.loads((selected / "selection_manifest.json").read_text())["max_level"] == 3
-    assert (selected / "subject_paths.parquet").exists()

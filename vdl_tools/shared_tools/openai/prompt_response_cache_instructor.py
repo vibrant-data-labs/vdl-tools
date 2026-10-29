@@ -13,11 +13,13 @@ docstring Notes for model-specific parameters (e.g. reasoning for gpt-5).
 
 import logging
 
-from vdl_tools.shared_tools.database_cache.database_models.prompt import Prompt, PromptResponse
-from vdl_tools.shared_tools.openai.prompt_response_cache_sql import PromptResponseCacheSQL, DEFAULT_MODEL
-from vdl_tools.shared_tools.openai.openai_constants import MODEL_DATA
-from vdl_tools.shared_tools.tools.logger import logger
+from vdl_tools.shared_tools.database_cache.database_models.prompt import Prompt
 from vdl_tools.shared_tools.openai.openai_api_utils import get_completion
+from vdl_tools.shared_tools.openai.prompt_response_cache_sql import (
+    DEFAULT_MODEL,
+    PromptResponseCacheSQL,
+)
+from vdl_tools.shared_tools.tools.logger import logger
 
 logger.setLevel(logging.DEBUG)
 logging.getLogger("openai").setLevel(logging.DEBUG)
@@ -124,6 +126,59 @@ class InstructorPRC(PromptResponseCacheSQL):
         """
         return Prompt.create_text_id(cls.build_prompt_str(prompt_str, response_model))
 
+    def bulk_get_parsed(
+        self,
+        given_ids_texts,
+        read_from_cache=True,
+        write_to_cache=True,
+        n_per_commit=200,
+        max_workers=20,
+        max_errors=1,
+        **kwargs,
+    ):
+        """Bulk run, then validate every returned ``response_text`` into ``response_model``.
+
+        Parameters
+        ----------
+        given_ids_texts : list[tuple[str, str]]
+            (given_id, text) pairs, as for `bulk_get_cache_or_run`.
+        read_from_cache, write_to_cache : bool
+            Forwarded to `bulk_get_cache_or_run`.
+        n_per_commit, max_workers, max_errors : int
+            Forwarded to `bulk_get_cache_or_run`.
+        **kwargs
+            Passed to the OpenAI Responses API (e.g. ``reasoning``). Do not pass
+            ``text_format``; this cache supplies it from ``response_model``.
+
+        Returns
+        -------
+        dict[str, response_model]
+            given_id -> parsed model instance. Inputs whose request failed are
+            absent, exactly as in `bulk_get_cache_or_run`; the caller accounts
+            for them.
+
+        Raises
+        ------
+        pydantic.ValidationError
+            A returned ``response_text`` does not validate against
+            ``response_model``. The schema is part of this cache's prompt
+            identity, so that is a corrupt row rather than a schema change, and
+            it is never dropped silently.
+        """
+        rows = self.bulk_get_cache_or_run(
+            given_ids_texts,
+            read_from_cache=read_from_cache,
+            write_to_cache=write_to_cache,
+            n_per_commit=n_per_commit,
+            max_workers=max_workers,
+            max_errors=max_errors,
+            **kwargs,
+        ) or {}
+        return {
+            given_id: self.response_model.model_validate_json(row["response_text"])
+            for given_id, row in rows.items()
+        }
+
     def get_completion(
         self,
         prompt_str,
@@ -165,8 +220,9 @@ class InstructorPRC(PromptResponseCacheSQL):
 
 
 if __name__ == "__main__":
-    from vdl_tools.shared_tools.database_cache.database_utils import get_session
     from pydantic import BaseModel
+
+    from vdl_tools.shared_tools.database_cache.database_utils import get_session
     class Response(BaseModel):
         capital: str
 

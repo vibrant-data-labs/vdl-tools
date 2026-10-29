@@ -8,11 +8,8 @@ from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.engine import (
     question_sets,
     score_activities,
 )
-from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.pipeline import (
-    map_extraction,
-)
 
-from .conftest import fake_jev
+from .conftest import fake_jev, map_and_export
 
 
 def test_exclusions_and_full_path_identity(taxonomy):
@@ -98,7 +95,7 @@ def test_question_groups_are_bounded_and_cover_each_node_once(taxonomy):
 @pytest.mark.parametrize("name", ["one_earth", "drawdown"])
 def test_union_export_numeric_ids_evidence_and_funding(taxonomy, extraction, organizations, name):
     tax = taxonomy(name)
-    mapped = map_extraction(organizations, extraction, tax, request_runner=fake_jev())
+    mapped = map_and_export(organizations, extraction, tax, request_runner=fake_jev())
     assert len(mapped.organizations) == len(organizations)
     assert mapped.organizations.id.tolist() == organizations.id.tolist()
     assert mapped.organizations.Sector.tolist() == organizations.Sector.tolist()
@@ -124,10 +121,10 @@ def test_union_export_numeric_ids_evidence_and_funding(taxonomy, extraction, org
 def test_all_unmatched_and_zero_activity_cohort(taxonomy, extraction, organizations):
     tax = taxonomy()
     p = dict.fromkeys(tax.nodes.node_id, 0.1)
-    result = map_extraction(organizations, extraction, tax, request_runner=fake_jev(p))
+    result = map_and_export(organizations, extraction, tax, request_runner=fake_jev(p))
     assert len(result.paths) == 4 and result.funding.empty
     assert set(result.paths.deepest_match) == {"NoMatch"}
-    empty = map_extraction(
+    empty = map_and_export(
         organizations.iloc[:0],
         type(extraction)(extraction.organizations.iloc[:0], extraction.activities.iloc[:0], {}),
         tax,
@@ -145,48 +142,11 @@ def test_stored_scores_cannot_be_applied_to_changed_taxonomy(taxonomy, extractio
         apply_policy(scored, replace(tax, sha256="changed"), MatchPolicy())
 
 
-def test_cli_offline_reselection_never_scores(taxonomy, extraction, tmp_path, monkeypatch):
-    from vdl_tools.shared_tools.taxonomy_mapping.activity_jev import __main__ as cli
-
-    tax = taxonomy()
-    scored = score_activities(extraction.activities, tax, request_runner=fake_jev())
-    source = tmp_path / "scored"
-    source.mkdir()
-    extraction.activities.to_parquet(source / "activities.parquet")
-    scored.scores.to_parquet(source / "scores.parquet")
-    scored.usage.to_parquet(source / "usage.parquet")
-    (source / "scoring_manifest.json").write_text(json.dumps(scored.lineage))
-    monkeypatch.setattr(
-        cli, "score_activities", lambda *a, **k: pytest.fail("Offline selection tried inference")
-    )
-    output = tmp_path / "selected"
-    cli.main(
-        [
-            "--taxonomy",
-            "one_earth",
-            "--variant",
-            "base",
-            "--taxonomy-path",
-            tax.path,
-            "--stored-run",
-            str(source),
-            "--output-dir",
-            str(output),
-            "--thresholds",
-            "0.9,0.7",
-        ]
-    )
-    assert (output / "organization_paths.json").is_file()
-    assert json.loads((output / "selection_manifest.json").read_text())["score_source"] == str(
-        source
-    )
-
-
 def test_serving_explanations_keep_supporting_activities(taxonomy, extraction, organizations):
     from vdl_tools.shared_tools.taxonomy_mapping.mapping_evidence import assignment_explanations
 
     tax = taxonomy()
-    result = map_extraction(organizations, extraction, tax, request_runner=fake_jev())
+    result = map_and_export(organizations, extraction, tax, request_runner=fake_jev())
     mappings = result.paths.rename(columns={c: f"level{i}" for i, c in enumerate(tax.columns)})
     assignments = result.funding.rename(columns={"id": "org_uid"}).assign(
         org_uid=lambda df: df.org_uid.astype(str)

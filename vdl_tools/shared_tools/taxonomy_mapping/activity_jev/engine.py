@@ -1,4 +1,9 @@
-"""Cached scoring and offline selection, generalized from both Jev prototypes."""
+"""Score subjects against taxonomy nodes through the cached Jev gateway; select matches offline.
+
+Scoring (``score_subjects``) is the only step that talks to the gateway, through the
+existing SQL prompt cache. Selection (``select_matches``) is deterministic and needs
+no credentials, so thresholds can be changed and re-applied to saved scores.
+"""
 
 from __future__ import annotations
 
@@ -17,6 +22,20 @@ JEV_MODEL = "typesafe-ai/jev"
 
 @dataclass(frozen=True)
 class MatchPolicy:
+    """How probabilities become matches; deterministic and versioned by ``sha256``.
+
+    Attributes
+    ----------
+    thresholds : tuple[float, ...]
+        Strictly descending tiers. A subject is matched to every node at or above
+        ``thresholds[0]``; only a subject with no such node falls through to
+        ``thresholds[1]``, and so on. Default ``(0.7, 0.5)``.
+    descend : float, optional
+        When set, a child of a matched node is also matched if its own probability is
+        at least this value, recursively down the hierarchy (``match_origin ==
+        "descend"``). None disables descent.
+    """
+
     thresholds: tuple[float, ...] = (0.7, 0.5)
     descend: float | None = None
 
@@ -34,11 +53,30 @@ class MatchPolicy:
 
     @property
     def sha256(self):
+        """Fingerprint of the policy fields; recorded on every selected path."""
         return fingerprint(asdict(self))
 
 
 @dataclass
 class ScoringResult:
+    """Raw Jev output for one taxonomy, before any policy is applied.
+
+    Attributes
+    ----------
+    scores : pandas.DataFrame
+        One row per successful (subject, node): ``subject_id``, ``node_id``, ``prob``
+        (float in [0, 1]), ``request_group``, ``question_sha256``.
+    usage : pandas.DataFrame
+        One row per subject and request group: ``subject_id``, ``request_group``,
+        ``question_sha256``, ``n_questions``, ``model``, ``error`` (None on success,
+        otherwise why the group has no scores), ``input_tokens``, ``output_tokens``.
+    lineage : dict
+        ``taxonomy``, ``questions_sha256``, ``max_question_tokens``, ``subject_kind``,
+        ``taxonomy_path``, ``taxonomy_sha256``, ``question_variant``, ``model``,
+        ``question_sets`` (group -> question hash), ``n_nodes``, ``n_groups``,
+        ``n_subjects``, ``n_failed_requests``.
+    """
+
     scores: pd.DataFrame
     usage: pd.DataFrame
     lineage: dict
@@ -60,11 +98,28 @@ def _noul_values(raw, questions):
 
 
 def question_sets(taxonomy: Taxonomy, *, max_tokens: int = 48_000) -> dict[str, dict]:
-    """Deterministic bounded requests, unlike source Drawdown's fixed sector groups.
+    """Pack the taxonomy's questions into deterministic request groups under a token budget.
 
-    cl100k estimates reserve at least 16k of the gateway's 64k context for state,
-    request framing, and tokenizer differences. Reject an individually oversized
-    question; never truncate taxonomy definitions to make a request fit.
+    Parameters
+    ----------
+    taxonomy : Taxonomy
+        Its ``nodes`` are taken in order; each contributes ``node_id -> question``.
+    max_tokens : int
+        cl100k estimate allowed per group, at most 48 000. That reserves at least
+        16k of the gateway's 64k context for subject state, request framing and
+        tokenizer differences.
+
+    Returns
+    -------
+    dict[str, dict]
+        ``{"g000": {node_id: question, ...}, "g001": ...}``. Every node appears in
+        exactly one group; groups are filled in node order and never split a node.
+
+    Raises
+    ------
+    ValueError
+        A budget outside 1..48000, or a single question that alone exceeds it.
+        Definitions are never truncated to make a request fit.
     """
     if max_tokens <= 0 or max_tokens > 48_000:
         raise ValueError("Question token budget must be in 1..48000")
@@ -100,7 +155,35 @@ def sql_request(
     write_to_cache=True,
     session=None,
 ):
-    """Use the existing SQL Jev adapter; importing offline tools needs no credentials."""
+    """Send one question group for many subjects through the cached SQL Jev adapter.
+
+    This is the default ``request_runner`` of ``score_subjects``; tests inject a fake
+    with the same signature. Imports are local so offline selection needs no
+    database configuration.
+
+    Parameters
+    ----------
+    questions : dict[str, dict]
+        One request group from ``question_sets``: ``node_id -> question``.
+    ids_texts : list[tuple[str, str]]
+        ``(cache_id, state)`` pairs; ``cache_id`` keys the cache row.
+    prompt_name : str
+        Human-readable cache prompt name (taxonomy, subject kind, variant, group).
+    max_workers : int
+        Parallel gateway calls.
+    read_from_cache, write_to_cache : bool
+        Cache behaviour, as for ``bulk_get_cache_or_run``.
+    session : sqlalchemy.orm.Session, optional
+        Reuse an open session; otherwise one is opened for the call.
+
+    Returns
+    -------
+    dict[str, dict]
+        ``cache_id -> row`` with ``response_text`` (JSON ``{node_id: {"noul": p}}``)
+        and ``response_full``. Requests that failed after bounded retries are absent.
+        A cached row whose answers are incomplete or invalid is re-requested once
+        without reading the cache, so malformed rows written by older callers heal.
+    """
     from ...database_cache.database_utils import get_session
     from ...openai.prompt_response_cache_jev import JevPromptResponseCacheSQL
 
@@ -158,11 +241,45 @@ def score_subjects(
     max_question_tokens=48_000,
     namespace="",
 ) -> ScoringResult:
-    """Keep every probability and one status per subject/request, including failures.
+    """Ask every node's question of every subject and keep every probability.
 
-    Cache IDs derive from caller namespace, subject ID and supplied state.
-    A missing/invalid question makes its entire request incomplete. Selection later
-    refuses a subject with any incomplete group, preventing biased partial matches.
+    Parameters
+    ----------
+    subjects : pandas.DataFrame
+        One row per subject with ``subject_id`` (unique, non-null) and ``state`` (the
+        text Jev judges, at most 8 000 cl100k tokens). Optional ``cache_id`` replaces
+        the derived key ``fingerprint([namespace, subject_id, state])``; optional
+        ``kind`` must equal ``taxonomy.subject_kind`` when both are set.
+    taxonomy : Taxonomy
+        Supplies the questions and the identity recorded in ``lineage``.
+    request_runner : callable, optional
+        ``runner(questions, ids_texts, *, prompt_name, max_workers, read_from_cache,
+        write_to_cache, session) -> {cache_id: row}``; defaults to ``sql_request``.
+    session : sqlalchemy.orm.Session, optional
+        Passed to the runner.
+    max_workers : int
+        Passed to the runner.
+    read_from_cache, write_to_cache : bool
+        Passed to the runner.
+    max_question_tokens : int
+        Budget per request group; see ``question_sets``.
+    namespace : str
+        Caller namespace mixed into derived cache IDs so two projects never share a
+        subject's cached answers by accident.
+
+    Returns
+    -------
+    ScoringResult
+        A request group whose answers are missing, incomplete or invalid yields no
+        scores for that subject and a non-null ``error`` in ``usage``; selection later
+        refuses such a subject rather than matching on partial evidence.
+
+    Raises
+    ------
+    ValueError
+        Missing columns, null or duplicate subject IDs, a ``kind`` that contradicts
+        the taxonomy, an empty or oversized ``state``, or one ``cache_id`` used for
+        two different states.
     """
     subjects = subjects.copy()
     required = {"subject_id", "state"}
@@ -290,18 +407,59 @@ def _path(row, columns):
 
 
 def drop_implied(paths, columns, *, id_col="subject_id"):
-    """The source Drawdown prefix rule, preserving full parent identity."""
+    """Drop rows whose path is a strict prefix of another selected path for the same ID.
+
+    Parameters
+    ----------
+    paths : pandas.DataFrame
+        Rows with ``id_col`` and the taxonomy path columns.
+    columns : sequence[str]
+        The taxonomy path columns, shallowest first.
+    id_col : str
+        Column identifying the subject or entity the paths belong to.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A copy without the implied ancestors; the deeper rows carry them.
+    """
     keys = [(row[id_col], _path(row, columns)) for row in paths.to_dict("records")]
     implied = {(uid, key[:depth]) for uid, key in keys for depth in range(1, len(key))}
     return paths.loc[[key not in implied for key in keys]].copy()
 
 
 def select_matches(result: ScoringResult, taxonomy: Taxonomy, policy: MatchPolicy) -> pd.DataFrame:
-    """Two-tier own-node selection and optional source Drawdown descendant recovery.
+    """Turn saved probabilities into matched paths with an explicit policy; no API calls.
 
-    Never issues API calls. Scores of every node are required for a subject before
-    applying fallback thresholds. Ancestors of accepted nodes are implied, regardless
-    of the ancestors' own scores, as in both source prototypes.
+    Parameters
+    ----------
+    result : ScoringResult
+        Scores and usage for the subjects. Must have been produced for ``taxonomy``
+        (same payload hash, variant and question hash) and the same subject kind.
+    taxonomy : Taxonomy
+        Supplies node paths and the hierarchy used for descent and implication.
+    policy : MatchPolicy
+        Tier thresholds and optional descent.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per selected (subject, node): ``subject_id``, ``node_id``, the path
+        columns, ``depth``, ``prob``, ``tier`` (1-based tier index; descent rows use
+        ``len(thresholds) + 1``), ``match_origin`` (``own`` or ``descend``),
+        ``ancestor_matches`` (one dict per level of the path with ``node_id``,
+        ``level``, ``assignment`` of ``own`` / ``descend`` / ``implied`` and
+        ``prob``) and ``policy_sha256``. Ancestors of a selected node are implied
+        regardless of their own probabilities; a path implied by a deeper selected
+        path is not repeated as its own row.
+
+    Raises
+    ------
+    ValueError
+        Scores from a different taxonomy, variant, question set or subject kind;
+        a subject with scores for only some nodes; a probability outside [0, 1]; or
+        duplicate (subject, node) scores. Subjects with a failed request group are
+        skipped, not partially matched.
     """
     if (
         result.lineage.get("taxonomy_sha256") != taxonomy.sha256
@@ -389,7 +547,21 @@ def select_matches(result: ScoringResult, taxonomy: Taxonomy, policy: MatchPolic
 
 
 def score_activities(activities, taxonomy, **kwargs):
-    """Compatibility wrapper for stored activity tables."""
+    """``score_subjects`` for a frame keyed by ``activity_id`` instead of ``subject_id``.
+
+    Parameters
+    ----------
+    activities : pandas.DataFrame
+        ``ExtractionResult.activities`` or any frame with ``activity_id`` and ``state``.
+    taxonomy : Taxonomy
+    **kwargs
+        Forwarded to ``score_subjects``.
+
+    Returns
+    -------
+    ScoringResult
+        ``scores`` and ``usage`` carry ``activity_id`` rather than ``subject_id``.
+    """
     scored = score_subjects(
         activities.rename(columns={"activity_id": "subject_id"}), taxonomy, **kwargs
     )
@@ -401,7 +573,20 @@ def score_activities(activities, taxonomy, **kwargs):
 
 
 def apply_policy(result, taxonomy, policy):
-    """Compatibility wrapper returning activity IDs."""
+    """``select_matches`` for a ``score_activities`` result; returns ``activity_id`` rows.
+
+    Parameters
+    ----------
+    result : ScoringResult
+        From ``score_activities``.
+    taxonomy : Taxonomy
+    policy : MatchPolicy
+
+    Returns
+    -------
+    pandas.DataFrame
+        As ``select_matches``, with ``subject_id`` renamed to ``activity_id``.
+    """
     scored = ScoringResult(
         result.scores.rename(columns={"activity_id": "subject_id"}),
         result.usage.rename(columns={"activity_id": "subject_id"}),

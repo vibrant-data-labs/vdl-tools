@@ -11,9 +11,9 @@ columns and funding are separate optional operations. `Taxonomy` and the paramet
 has no fixed Solution ceiling. One- and four-level Education fixtures demonstrate
 direct organization input without core changes.
 
-`one_earth.load_taxonomy` and `drawdown.load_taxonomy` load only their own definitions
-and question modules. The old `load_taxonomy(name, path)` API is a lazy compatibility
-dispatcher. Climate Landscape validates the selected job's workbook and pin entry
+`taxonomy_mapping.one_earth.load_taxonomy` and `taxonomy_mapping.drawdown.load_taxonomy`
+are separate packages that load only their own definitions and question wording; the
+core has no name-switching dispatcher. Climate Landscape validates the selected job's workbook and pin entry
 inside that job, with no combined eager taxonomy preflight. Shared-data may hold both
 inputs; a missing or invalid sibling input does not block the selected loader.
 
@@ -50,7 +50,7 @@ The One Earth filename is still May 14 in the newest source revision. Its conten
 
 * One unique, non-null organization ID, name, and Website column per organization. Caller column names are configurable; IDs are normalized internally and restored at export.
 * Read the existing SQL website cache, or accept caller-provided `SiteText` pages. No new scrape, 990 content, archived descriptions, or implicit repo-local overlay is used by `extract_frame`.
-* Keep the general source prompt and schema. Production extraction uses `gpt-5.4-mini`, medium reasoning, through the existing structured SQL cache, including its schema fingerprint and model isolation.
+* Keep the general source prompt and schema. Production extraction uses `gpt-5.4-mini`, medium reasoning, through the shared `InstructorPRC` cache, which puts the response schema in the prompt identity and keys rows by model (`filter_by_model=True`). A cached row that no longer validates raises rather than being dropped.
 * Keep all extracted activities, including minor, one-off and past activities. Importance is metadata and never an assignment or funding weight.
 * Return one profile/status record for every input organization: `success`, `empty`, `missing_text`, or `request_failed`. A failed or unparsable model response never silently removes its organization.
 
@@ -60,7 +60,7 @@ Activity IDs are SHA-256 over `[extraction_run_id, org_uid, activity_index]`; th
 
 ## Scores and policies
 
-`Taxonomy` (`ActivityTaxonomy` is a compatibility alias) holds configured path columns, level specs, exact node questions, payload hash, path, variant and optional subject kind. Nodes use hashes of taxonomy name plus full ancestor path, preventing same-name children from colliding. The two first-adopter loaders select three levels through Solution.
+`Taxonomy` holds configured path columns, level specs, exact node questions, payload hash, path, variant and optional subject kind. Nodes use hashes of taxonomy name plus full ancestor path, preventing same-name children from colliding. The two first-adopter loaders select three levels through Solution.
 
 `ScoringResult` holds every successful `(subject_id, node_id, probability)` plus one usage/status record per subject/request group. Activity compatibility APIs retain `activity_id`. Generic cache IDs include caller namespace, subject identity and supplied state; existing activity cache IDs remain usable. Each group records the question hash and returned model. Successful raw gateway responses remain in the existing SQL cache. Jev's gateway alias is not a version pin; retain observed response metadata when judging reproducibility.
 
@@ -74,7 +74,7 @@ The initial, versioned development policy follows the inspected activity prototy
 * One Earth: no third tier or descent by default.
 * Drawdown: recursively admit children at 0.6 under matched parents, through Solution only.
 
-These are first-adopter implementation baselines, not validated production thresholds or universal defaults. `select_matches` and the compatibility `apply_policy` make no requests and reject different payloads, variants or questions. The shared CLI accepts generic supplied subjects and a taxonomy JSON specification as well as the built-in activity loaders; it can reselect a stored scoring run without SQL or API access.
+These are first-adopter implementation baselines, not validated production thresholds or universal defaults. `select_matches` and the compatibility `apply_policy` make no requests and reject different payloads, variants or questions. Selection is a library call (`select_matches` / `apply_policy`) that needs neither SQL nor gateway access; there is no CLI.
 
 ## Rollup and consumer outputs
 

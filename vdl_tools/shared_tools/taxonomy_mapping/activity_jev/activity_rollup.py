@@ -1,16 +1,56 @@
-"""Activity evidence compatibility; optional for generic subject mapping."""
+"""Union activity-level matches to their organization, keeping per-activity evidence.
+
+This is the activity-specific counterpart of ``pipeline.group_matches``: it knows the
+columns ``extract_frame`` puts on an activity and emits the evidence records the
+legacy exporters and serving explanations consume.
+"""
 
 import pandas as pd
+
 from .engine import drop_implied
 from .taxonomies import Taxonomy
 
 
 def rollup_paths(activity_paths, activities, taxonomy: Taxonomy):
-    """All activities contribute equally to membership; importance is metadata only.
+    """Union every matched activity path to its organization.
 
-    Keep the prototype's max probability, best tier, and activity support count,
-    adding actual activity IDs and verbatim evidence for serving explanations.
-    No confidence score or activity count affects the funding split.
+    All activities count equally toward membership; ``prominence`` (core / secondary /
+    minor) is carried as metadata only. No probability or activity count influences
+    the funding split performed later by the exporter.
+
+    Parameters
+    ----------
+    activity_paths : pandas.DataFrame
+        ``engine.apply_policy`` output (or ``select_matches`` output with
+        ``subject_id`` renamed to ``activity_id``): one row per (activity, matched
+        node) with ``activity_id``, ``node_id``, the taxonomy path columns (for
+        example ``Pillar``, ``Sub-Pillar``, ``Solution``), ``depth``, ``prob``,
+        ``tier``, ``match_origin`` and ``ancestor_matches``.
+    activities : pandas.DataFrame
+        ``ExtractionResult.activities`` from ``extract_frame``: one row per extracted
+        activity with ``activity_id``, ``uid`` (organization), ``activity``,
+        ``evidence``, ``prominence``, ``recurrence``, ``state``, ``cache_id``,
+        ``source_sha256`` and ``extraction_run_id``.
+    taxonomy : Taxonomy
+        Supplies the path columns to group on.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per (``uid``, path): ``uid``, the taxonomy path columns, ``prob``
+        (max over supporting activities), ``tier`` (best, i.e. lowest),
+        ``n_activities``, ``supporting_activity_ids`` (sorted), ``activity_evidence``
+        (one dict per supporting activity: ``activity_id``, ``activity``,
+        ``evidence``, ``source_sha256``, ``extraction_run_id``, ``prominence``,
+        ``recurrence``, ``prob``, ``match_origin``, ``ancestor_matches``),
+        ``evidence`` (the distinct evidence quotes joined by newlines) and
+        ``reason``. A path implied by a deeper selected path of the same
+        organization is dropped.
+
+    Raises
+    ------
+    ValueError
+        A matched activity has no organization in ``activities``.
     """
     columns = [
         "uid",

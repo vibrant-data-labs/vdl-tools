@@ -1,13 +1,46 @@
-"""Optional legacy activity exports; generic inference does not import this module."""
+"""Tracker-shaped export of activity matches: legacy mapping columns, statuses, funding.
+
+Generic inference never imports this module. The per-taxonomy packages call
+``export_extraction`` with their own column names, path formatting and funding depth.
+"""
 
 from dataclasses import dataclass
+
 import pandas as pd
 
-from .pipeline import rollup_paths
+from .activity_rollup import rollup_paths
 
 
 @dataclass
 class MappingResult:
+    """Consumer-facing output of ``export_extraction`` for one taxonomy.
+
+    Attributes
+    ----------
+    organizations : pandas.DataFrame
+        The caller's frame plus the legacy mapping columns (``level{i}_<name>``,
+        ``all_level{i}_<name>``, ``<name>``, ``cat_level_<name>``) and
+        ``<taxonomy>_mapping_status``.
+    paths : pandas.DataFrame
+        One row per (organization, path) from ``rollup_paths`` plus one no-match row
+        per unmatched organization, with the caller's ID and name columns,
+        ``deepest_match``, ``taxonomy_sha256``, ``policy_sha256`` and
+        ``mapping_status`` (``matched``, ``unmatched``, ``partial_failure``,
+        ``scoring_failed``, or the extraction status when extraction did not succeed).
+    activity_paths : pandas.DataFrame
+        The per-activity matches (``select_matches`` output with ``activity_id``).
+    scores, usage : pandas.DataFrame
+        Raw probabilities and request statuses with ``activity_id``.
+    funding : pandas.DataFrame
+        ``distribute_funding_from_matches`` output, or empty when no funding depth
+        was requested.
+    nodes : pandas.DataFrame
+        Copy of the taxonomy nodes.
+    lineage : dict
+        Mapping lineage plus ``export_columns``, ``max_funding_level``,
+        ``n_activities``, ``max_mapping_level``, ``rollup`` and ``status_counts``.
+    """
+
     organizations: pd.DataFrame
     paths: pd.DataFrame
     activity_paths: pd.DataFrame
@@ -31,7 +64,39 @@ def export_extraction(
     pad_to_n_levels=None,
     max_funding_level=None,
 ):
-    """Attach caller-selected columns and optionally allocate funding."""
+    """Roll activity matches up to organizations and attach tracker-shaped columns.
+
+    Parameters
+    ----------
+    organizations : pandas.DataFrame
+        One row per organization; ``id_col`` unique and non-null. Returned with
+        columns added, never with rows removed.
+    extraction : ExtractionResult
+        The extraction whose ``activities`` were mapped. ``extraction.organizations``
+        must cover exactly ``organizations[id_col]``; its ``extraction_status`` feeds
+        the mapping status of organizations without matches.
+    taxonomy : Taxonomy
+        The taxonomy the activities were scored against.
+    mapped : SubjectMappingResult
+        ``map_subjects`` output for ``extraction.activities`` (``activity_id`` renamed
+        to ``subject_id``).
+    id_col, name_col : str
+        Organization ID and display-name columns in ``organizations``.
+    mapping_name : str
+        Suffix of the legacy mapping columns, e.g. ``one_earth_category``.
+    path_formatter : callable, optional
+        ``path_formatter(paths) -> paths`` applied before statuses are attached, for
+        taxonomy-specific display conventions.
+    pad_to_n_levels : int, optional
+        Emit mapping columns for this many levels even if the taxonomy is shallower
+        (legacy consumers expect four).
+    max_funding_level : int, optional
+        Deepest level funding is allocated to; None skips allocation.
+
+    Returns
+    -------
+    MappingResult
+    """
     if organizations[id_col].isna().any() or organizations[id_col].astype(str).duplicated().any():
         raise ValueError("Organization IDs must be non-null and unique")
     if set(organizations[id_col].astype(str)) != set(extraction.organizations.uid):

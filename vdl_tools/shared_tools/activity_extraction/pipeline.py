@@ -8,10 +8,9 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from .extraction import OrgInput, build_inputs, render_profile
-from .general import GENERAL_EXTRACTION_PROMPT
-from .structured_cache import run_structured
 from ..fingerprints import fingerprint
+from .extraction import OrgInput, build_inputs, render_profile, run_extraction_prompt
+from .general import GENERAL_EXTRACTION_PROMPT
 
 STATE_FIELDS = {
     "activity": "Activity",
@@ -93,10 +92,39 @@ def extract_frame(
 ) -> ExtractionResult:
     """Extract once per org, preserving all orgs and recording every missing result.
 
-    ``site_texts`` accepts the same SiteText objects as the cached website loader,
-    so an enrichment caller can provide its already-loaded pages. No descriptions,
-    Form 990 programs, or repo-local overlays are used as a fallback.
-    ``runner`` is injectable for offline fixtures; production uses the SQL cache.
+    Parameters
+    ----------
+    organizations : pandas.DataFrame
+        One row per organization with ``id_col`` (unique and non-null after string
+        normalization), ``name_col`` and ``url_col``.
+    run_id : str
+        Label of this extraction run; mixed into every ``activity_id``.
+    id_col, name_col, url_col : str
+        Column names in ``organizations``.
+    site_texts : dict, optional
+        ``url -> SiteText`` already-loaded pages, as the cached website loader
+        returns; when None the SQL website cache is read. No descriptions, Form 990
+        programs or repo-local overlays are ever used as a fallback.
+    prompt : ExtractionPrompt
+        What to extract; defaults to the general prompt.
+    runner : callable, optional
+        ``runner(given_ids_texts, prompt, max_workers=..., session=...) ->
+        {cache key: profile}`` replaces `run_extraction_prompt` for offline fixtures.
+        A profile may be a ``prompt.response_model`` instance or a dict; both are
+        validated against the schema.
+    session : sqlalchemy.orm.Session, optional
+        Passed to the website loader and the runner.
+    max_workers : int
+        Passed to the runner.
+
+    Returns
+    -------
+    ExtractionResult
+        ``organizations`` has one row per input with ``extraction_status`` of
+        ``success``, ``empty``, ``missing_text`` or ``request_failed``; ``activities``
+        has one row per extracted activity (``activity_id``, ``uid``, the schema
+        fields, ``state``, ``cache_id``, ``source_sha256``, ``extraction_run_id``);
+        ``lineage`` records prompt, schema and model identity and status counts.
     """
     if not isinstance(run_id, str) or not run_id.strip():
         raise ValueError("run_id must be a nonempty string")
@@ -122,16 +150,7 @@ def extract_frame(
         inputs, meta = [], {}
     texts = dict(inputs)
     profiles = (
-        (runner or run_structured)(
-            inputs,
-            prompt_str=prompt.text,
-            prompt_name=prompt.prompt_name,
-            response_model=prompt.response_model,
-            model=prompt.model,
-            reasoning=prompt.reasoning,
-            max_workers=max_workers,
-            session=session,
-        )
+        (runner or run_extraction_prompt)(inputs, prompt, max_workers=max_workers, session=session)
         if inputs
         else {}
     )
