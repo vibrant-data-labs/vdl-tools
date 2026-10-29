@@ -1,6 +1,7 @@
 from vdl_tools.scrape_enrich.website_junk_rules import is_junk_summary
 from vdl_tools.scrape_enrich.website_quality import (
     _save_cache,
+    final_domain,
     load_domain_cache,
     load_website_decisions,
 )
@@ -52,8 +53,6 @@ def test_domain_cache_round_trips_and_keeps_another_runs_newer_checks(tmp_path):
 
 
 def test_final_domain_follows_the_cache_and_falls_back_to_the_domain():
-    from vdl_tools.scrape_enrich.website_quality import final_domain
-
     cache = {"old.org": {"final_domain": "new.org"}}
     assert final_domain("https://www.old.org/about", cache) == "new.org"
     assert final_domain("other.org", cache) == "other.org"
