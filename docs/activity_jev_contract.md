@@ -1,6 +1,6 @@
 # Activity extraction and Jev mapping · D1 / VIB-78
 
-Implementation contract, updated 2026-10-29. Canonical project spec: [Linear](https://linear.app/vibrant-data-labs/document/spec-general-jev-taxonomy-mapping-d415afa01680).
+Implementation contract, updated 2026-10-30. Canonical project spec: [Linear](https://linear.app/vibrant-data-labs/document/spec-general-jev-taxonomy-mapping-d415afa01680).
 
 ## General mapping boundary and independent loading
 
@@ -39,7 +39,7 @@ outputs.
 | One Earth questions | Same revision, `jev/jev_mapping.py` | Activity wording and `cc_routing`; independent node probabilities; ancestor implication |
 | Drawdown questions and rules | drawdown `dfc03de9cd7b3fd4331631ab6153647db7b386ce`, `jev/jev_drawdown.py` | `stewardship_yes`; 0.7/0.5 tiers; 0.6 descent; full-path prefix deduplication |
 
-Fresh remote references were inspected on 2026-10-28. The original main checkouts and their unrelated edits were left intact. The generic code does not import either source repo or set their config paths. Templates retain the source wording; package imports and request grouping are adapted.
+Fresh remote references were inspected on 2026-10-28. The original main checkouts and their unrelated edits were left intact. The generic code does not import either source repo or set their config paths. Templates retain the source wording with the prototype's activity substitutions pre-applied; package imports and request grouping are adapted.
 
 ## Pinned taxonomy inputs
 
@@ -55,7 +55,7 @@ The One Earth filename is still May 14 in the newest source revision. Its conten
 ## Input and extraction
 
 * One unique, non-null `id`, `Organization` and `Website` per organization. IDs are strings in every output.
-* Read the existing SQL website cache, or accept caller-provided `SiteText` pages. No new scrape, 990 content, archived descriptions, or implicit repo-local overlay is used by `extract_frame`.
+* Read the existing SQL website cache, or accept caller-provided `SiteText` pages. No new scrape, 990 content or archived descriptions are used by `extract_frame`.
 * Keep the general source prompt and schema. Production extraction uses `gpt-5.4-mini`, medium reasoning, through the shared `InstructorPRC` cache, which puts the response schema in the prompt identity and keys rows by model (`filter_by_model=True`). A cached row that no longer validates raises rather than being dropped.
 * Keep all extracted activities, including minor, one-off and past activities. Importance is metadata and never an assignment or funding weight.
 * Return one profile/status record for every input organization: `success`, `empty`, `missing_text`, or `request_failed`. A failed or unparsable model response never silently removes its organization.
@@ -70,7 +70,7 @@ Activity IDs are SHA-256 over `[extraction_run_id, org_uid, activity_index]`; th
 
 `ScoringResult` holds every successful `(subject_id, node_id, probability)` plus one usage/status record per subject/request group. Cache IDs hash subject identity and supplied state; extraction supplies `cache_id` from organization and activity state so an unchanged activity reuses its cached answers across runs. Each group records the question hash and returned model. Successful raw gateway responses remain in the existing SQL cache. Jev's gateway alias is not a version pin; retain observed response metadata when judging reproducibility.
 
-Questions are packed deterministically under a 48k cl100k token estimate, with activity state limited to 8k. This leaves context headroom under the gateway's nominal 64k limit; tokenizer estimates are not a contractual guarantee. Oversized individual questions fail instead of truncating definitions. This replaces Drawdown's October-specific fixed sector groups with reusable bounded groups.
+Questions are packed deterministically under a 48k cl100k token estimate. This leaves context headroom under the gateway's nominal 64k limit; tokenizer estimates are not a contractual guarantee. Oversized individual questions fail instead of truncating definitions. This replaces Drawdown's October-specific fixed sector groups with reusable bounded groups.
 
 Missing, extra, nonnumeric, nonfinite, or out-of-range answers fail the request and are cached as errors, so a later run retries them. If any request group fails, that activity contributes no matches. Other activities still run; the failed group's successful peers and raw scores remain reviewable.
 
