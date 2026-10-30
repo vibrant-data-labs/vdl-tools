@@ -39,8 +39,13 @@ def clean_scraped_text(
 
 
 def clean_non_ascii_text(text: str) -> str:
-    """Removes non-ascii characters from text and replaces them with standard space.
-    Then replaces 3 or more consecutive white spaces with a single space.
+    r"""Replaces every whitespace character except a newline with a standard space,
+    then removes the remaining non-ascii characters.
+    Then replaces 3 or more consecutive spaces with a single space.
+
+    The spaces are replaced before the ascii encode so that non-breaking and other
+    Unicode spaces keep the words on either side apart ("2017\xa0focused" becomes
+    "2017 focused", not "2017focused").
 
     Parameters
     ----------
@@ -52,9 +57,9 @@ def clean_non_ascii_text(text: str) -> str:
     str
         clean text
     """
-    non_ascii_text = text.encode("ascii", "ignore").decode()
-    cleaned_text = re.sub(r"[\xa0]", " ", non_ascii_text)
-    return re.sub(r"([ ]{3,})", " ", cleaned_text)
+    spaced_text = re.sub(r"[^\S\n]", " ", text)
+    ascii_text = spaced_text.encode("ascii", "ignore").decode()
+    return re.sub(r"([ ]{3,})", " ", ascii_text)
 
 
 def replace_repetitive_text(text: str) -> str:
