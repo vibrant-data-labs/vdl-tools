@@ -61,7 +61,16 @@ Out of scope, each with its own PR or issue so this one stays reviewable:
   in this plan is the backstop, not the fix.
 - The in-house-first hybrid. Both reviews reject it: it splits one org's pages across two
   extractors (1,268 orgs in-house, 452 Firecrawl, 280 mixed in the phase 2 replay) to save
-  roughly $80 to $230 per refresh, and it needs the code Phase 7 deletes.
+  roughly $80 to $230 per refresh, and it needs the code Phase 7 deletes. If it is ever
+  revisited, it has a precondition: the in-house path must first store the URL each page
+  resolved to after redirects, build subpage links from it, and pause a host that answers
+  429. Today it discards `response.url` (the TODO in `async_scraper.py`) and joins links
+  onto the stored home URL, so an `http://www.` site costs four requests per page: http to
+  https, www to the bare domain, then the trailing slash. WordPress.com's edge rate limiter
+  answers that burst with 429s for several minutes, and the retry gives up after three
+  seconds; on lagunacanyon.org on 2026-10-30, 13 of 16 subpages failed this way. In a
+  hybrid each of those self-inflicted failures becomes a paid Firecrawl call. Firecrawl
+  alone does not need the fix, since it follows redirects itself and reports `metadata.url`.
 - Embedding-based page selection to replace the English `PATHS_TO_KEEP` allow-list.
 - Coresignal Multi-source fields for dedupe and dead-site fallback.
 
