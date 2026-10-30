@@ -576,18 +576,29 @@ def measures(orgs, stores) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _compare(df: pd.DataFrame, name: str, vendor: str, noise: str, higher_is_closer: bool) -> dict | None:
+def _compare(df: pd.DataFrame, name: str, vendor: str, noise: str, kind: str) -> dict | None:
+    """Vendor shift against the noise floor for one measure.
+
+    ``kind`` is ``similarity`` (cosine: also the share of orgs whose vendor
+    value is below the noise floor's 5th percentile), ``set`` (Jaccard: also
+    the share of orgs whose node set changed at all, since most values are
+    exactly 1 or 0 and a percentile says nothing) or ``flip`` (a rate).
+    """
     d = df[[vendor, noise]].dropna().astype(float)
     if d.empty:
         return None
     diff = (d[vendor] - d[noise]).to_numpy()
     lo, hi = _boot_ci(diff)
-    if higher_is_closer:   # similarity: share of orgs below the noise floor's 5th percentile
-        beyond = float((d[vendor] < d[noise].quantile(0.05)).mean())
-    else:                  # flip rate: no per-org threshold
-        beyond = float("nan")
-    return {"measure": name, "n": len(d), "vendor": d[vendor].mean(), "noise": d[noise].mean(),
-            "diff": diff.mean(), "ci_low": lo, "ci_high": hi, "beyond_noise_p05": beyond}
+    nan = float("nan")
+    row = {"measure": name, "n": len(d), "vendor": d[vendor].mean(), "noise": d[noise].mean(),
+           "diff": diff.mean(), "ci_low": lo, "ci_high": hi,
+           "below_noise_p05": nan, "changed_vendor": nan, "changed_noise": nan}
+    if kind == "similarity":
+        row["below_noise_p05"] = float((d[vendor] < d[noise].quantile(0.05)).mean())
+    elif kind == "set":
+        row["changed_vendor"] = float((d[vendor] < 1).mean())
+        row["changed_noise"] = float((d[noise] < 1).mean())
+    return row
 
 
 def report(orgs, stores, out: Path, rescore_lineage: dict) -> str:
@@ -597,13 +608,13 @@ def report(orgs, stores, out: Path, rescore_lineage: dict) -> str:
     for group in ("paired", "firecrawl_only"):
         g = m[m["group"] == group]
         rows = [
-            _compare(g, "website summary cosine", "ws_cos_vendor", "ws_cos_noise", True),
-            _compare(g, "summary of summaries cosine", "sos_cos_vendor", "sos_cos_noise", True),
+            _compare(g, "website summary cosine", "ws_cos_vendor", "ws_cos_noise", "similarity"),
+            _compare(g, "summary of summaries cosine", "sos_cos_vendor", "sos_cos_noise", "similarity"),
             *[_compare(g, f"One Earth level {lv} Jaccard", f"oe_l{lv}_jaccard_vendor",
-                       f"oe_l{lv}_jaccard_noise", True) for lv in OE_LEVELS],
-            _compare(g, "relevance flip (short descriptions)", "rel_flip_vendor", "rel_flip_noise", False),
-            _compare(g, "adaptation filter flip", "adapt_flip_vendor", "adapt_flip_noise", False),
-            _compare(g, "tracker membership flip", "member_flip_vendor", "member_flip_noise", False),
+                       f"oe_l{lv}_jaccard_noise", "set") for lv in OE_LEVELS],
+            _compare(g, "relevance flip (short descriptions)", "rel_flip_vendor", "rel_flip_noise", "flip"),
+            _compare(g, "adaptation filter flip", "adapt_flip_vendor", "adapt_flip_noise", "flip"),
+            _compare(g, "tracker membership flip", "member_flip_vendor", "member_flip_noise", "flip"),
         ]
         t = pd.DataFrame([r for r in rows if r])
         if not t.empty:
@@ -622,8 +633,9 @@ def report(orgs, stores, out: Path, rescore_lineage: dict) -> str:
              + ", ".join(f"{k} {v}" for k, v in orgs["group"].value_counts().items()) + ".", "",
              "`vendor` compares the Firecrawl chain with the in-house chain; `noise` compares the in-house "
              "chain with a fresh rerun of it. `diff` is vendor minus noise with a 95% bootstrap interval. "
-             "For similarities, `beyond_noise_p05` is the share of orgs whose vendor similarity is below "
-             "the 5th percentile of the noise floor.", ""]
+             "For similarities, `below_noise_p05` is the share of orgs whose vendor similarity is below "
+             "the 5th percentile of the noise floor (5% by chance). For One Earth, `changed_vendor` and "
+             "`changed_noise` are the shares of orgs whose node set at that level changed at all.", ""]
     for group, t in tables:
         lines += [f"### {group}", "", t.to_markdown(index=False, floatfmt=".3f"), ""]
     if not pair.empty:

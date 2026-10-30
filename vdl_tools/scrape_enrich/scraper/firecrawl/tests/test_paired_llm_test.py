@@ -31,14 +31,17 @@ def test_compare_reports_the_paired_difference_and_noise_tail():
     noise = rng.uniform(0.95, 1.0, 400)
     vendor = noise - 0.05
     df = pd.DataFrame({"v": vendor, "n": noise})
-    out = d3._compare(df, "cos", "v", "n", higher_is_closer=True)
+    out = d3._compare(df, "cos", "v", "n", "similarity")
     assert out["n"] == 400
     assert abs(out["diff"] + 0.05) < 1e-9
     assert out["ci_low"] <= out["diff"] <= out["ci_high"]
-    assert out["beyond_noise_p05"] > 0.5      # most vendor values sit below the noise floor's 5th percentile
+    assert out["below_noise_p05"] > 0.5      # most vendor values sit below the noise floor's 5th percentile
     flips = pd.DataFrame({"v": [True, False, False, False], "n": [False, False, False, False]})
-    out = d3._compare(flips, "flip", "v", "n", higher_is_closer=False)
-    assert out["vendor"] == 0.25 and out["noise"] == 0.0 and np.isnan(out["beyond_noise_p05"])
+    out = d3._compare(flips, "flip", "v", "n", "flip")
+    assert out["vendor"] == 0.25 and out["noise"] == 0.0 and np.isnan(out["below_noise_p05"])
+    sets = pd.DataFrame({"v": [1.0, 0.5, 1.0, 0.0], "n": [1.0, 1.0, 1.0, 0.5]})
+    out = d3._compare(sets, "jaccard", "v", "n", "set")
+    assert out["changed_vendor"] == 0.5 and out["changed_noise"] == 0.25
 
 
 def test_order_key_is_stable():
