@@ -103,6 +103,10 @@ EMBED_MODEL = "text-embedding-3-large"
 JUDGE_MODEL = "gpt-4.1"
 JUDGE_SAMPLE = 300          # paired orgs judged; plus every Firecrawl-only org
 JUDGE_SOURCE_TOKENS = 6000  # each scrape shown to the judge is cut to this
+# The shared OpenAI client keeps the library's 600 s timeout with 4 retries, so
+# a connection that goes silent can hold a worker for up to 50 minutes; the
+# first full run stalled 37 minutes on one chunk that way.
+REQUEST_TIMEOUT = 90
 SPOT_CHECKS = {"firecrawl_only": 20, "largest_length_ratio": 20, "random_paired": 10}
 SEED = 7118
 
@@ -713,6 +717,7 @@ def main(argv=None):
     orgs = load_orgs(args.out_dir, args.limit)
     logger.info("D3 over %s orgs: %s", len(orgs), orgs["group"].value_counts().to_dict())
     stores = {k: Store(out / f"{k}.jsonl") for k in ("ws", "sos", "rel", "adapt", "oe", "emb", "judge")}
+    oau.CLIENT = oau.CLIENT._client.with_options(timeout=REQUEST_TIMEOUT)  # same retries, short timeout
     _install_usage_hook(USAGE)
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
 
