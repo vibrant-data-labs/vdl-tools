@@ -15,14 +15,14 @@ from vdl_tools.shared_tools.tools.text_cleaning import (
 
 UNICODE_SPACES = [
     "\xa0",  # no-break space
-    " ",  # ogham space mark
-    " ",  # en space
-    " ",  # thin space
-    " ",  # hair space
-    " ",  # narrow no-break space
-    " ",  # medium mathematical space
-    "　",  # ideographic space
-    " ",  # line separator
+    "\u1680",  # ogham space mark
+    "\u2002",  # en space
+    "\u2009",  # thin space
+    "\u200a",  # hair space
+    "\u202f",  # narrow no-break space
+    "\u205f",  # medium mathematical space
+    "\u3000",  # ideographic space
+    "\u2028",  # line separator
     "\x85",  # next line
 ]
 
@@ -49,7 +49,7 @@ def test_newlines_are_kept():
 
 def test_other_non_ascii_characters_are_still_removed():
     # Zero-width space is a format character, not whitespace, so it is removed.
-    assert clean_non_ascii_text("café — net​zero 🌍") == "caf  netzero "
+    assert clean_non_ascii_text("caf\xe9 \u2014 net\u200bzero \U0001f30d") == "caf  netzero "
 
 
 def test_three_or_more_spaces_collapse_to_one():

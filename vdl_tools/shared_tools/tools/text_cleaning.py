@@ -16,8 +16,10 @@ def clean_scraped_text(
     replace_repetitive: bool = True,
     replace_whitespace: bool = True,
 ) -> str:
-    """Removes non-ascii characters from text and replaces them with standard space.
-    Then replaces 3 or more consecutive white spaces with a single space.
+    """Turns whitespace other than newlines into standard spaces and deletes the
+    remaining non-ascii characters (`clean_non_ascii_text`), collapses immediately
+    repeated words (`replace_repetitive_text`), then collapses runs of the same
+    whitespace character (`replace_repetitive_whitespace`).
 
     Parameters
     ----------
@@ -57,7 +59,7 @@ def clean_non_ascii_text(text: str) -> str:
     str
         clean text
     """
-    spaced_text = re.sub(r"[^\S\n]", " ", text)
+    spaced_text = re.sub(r"[^\S\n ]", " ", text)
     ascii_text = spaced_text.encode("ascii", "ignore").decode()
     return re.sub(r"([ ]{3,})", " ", ascii_text)
 
