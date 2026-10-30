@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import perf_counter
 
 import pandas as pd
 
 from ..parquet_cache import get_lineage, read_dataframes, write_dataframes
+from ..tools.logger import logger
 from ..tools.unique_ids import create_deterministic_sha256
 from .extraction import OrgInput, build_inputs, render_profile, run_extraction_prompt
 from .general import GENERAL_EXTRACTION_PROMPT
@@ -104,6 +106,8 @@ def extract_frame(
     -------
     ExtractionResult
     """
+    started = perf_counter()
+    logger.info("Extracting activities for %d organizations (run=%s, workers=%d)", len(organizations), run_id, max_workers)
     if missing := {ID_COL, NAME_COL, URL_COL} - set(organizations):
         raise ValueError(f"Missing organization columns: {sorted(missing)}")
     ids = organizations[ID_COL].astype(str)
@@ -119,6 +123,7 @@ def extract_frame(
     ]
     inputs, meta = build_inputs(orgs, prompt, website_texts=website_texts)
     texts = dict(inputs)
+    logger.info("Extracting %d usable organization profiles through %s", len(inputs), "the shared prompt cache" if runner is None else "the supplied runner")
     profiles = (runner or run_extraction_prompt)(inputs, prompt, max_workers=max_workers)
     org_rows, activity_rows = [], []
     for org in orgs:
@@ -200,4 +205,5 @@ def extract_frame(
         "n_activities": len(activities),
         "status_counts": org_frame.extraction_status.value_counts().to_dict(),
     }
+    logger.info("Activity extraction complete in %.1fs: %d activities; statuses=%s", perf_counter() - started, len(activities), lineage["status_counts"])
     return ExtractionResult(org_frame, activities, lineage)

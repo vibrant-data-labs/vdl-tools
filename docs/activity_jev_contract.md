@@ -19,18 +19,17 @@ conventions live in Climate Landscape. Climate Landscape loads only the selected
 taxonomy's workbook; shared-data may hold both, and a missing or invalid sibling
 workbook does not block the selected loader.
 
-`ExtractionResult.save/load` persists an extraction independently as Parquet through
-`parquet_cache`, lineage in the footers, with local directories or S3 prefixes. A Climate
-Landscape run calls the extraction prompt cache, maps each selected taxonomy in turn, writes that taxonomy's files as
-soon as it finishes, and records the input, extraction and per-taxonomy identities in the
-mapped Parquet's lineage footer (`get_lineage`). An error stops
-the run and leaves completed files under its labelled S3 prefix; a later run can map
-the other taxonomy with a new label. Unchanged extraction inputs reuse `InstructorPRC`
-responses, so the runner has no saved-extraction loading option. Snapshots remain for
-inspection. `assemble_mapping_runs` reads each selected run's mapped Parquet and copies one
-taxonomy's export columns onto a base frame by organization ID and can preserve approved legacy
-columns for an unselected taxonomy. No assembly or mapping function promotes production
-outputs.
+Climate Landscape obtains activities through the `InstructorPRC` prompt cache on
+all runs; it writes no separate extraction snapshot and requires no extraction-run
+path. The output prefix is derived from the existing S3 `results_path` and run label.
+It maps selected taxonomies in turn, writes each taxonomy's files as it finishes, and
+records the input, extraction and per-taxonomy identities in the mapped Parquet's
+lineage footer (`get_lineage`). Errors leave completed mapping files in place, and
+reruns reuse unchanged cached responses. Progress logs cover website-cache reads,
+extraction, JEV request groups, every ten completed model calls, and output writes.
+`assemble_mapping_runs` reads each selected run's mapped Parquet and joins its export
+columns by organization ID, preserving an unselected taxonomy's approved legacy
+columns. No assembly or mapping function promotes production outputs.
 
 ## Source revisions
 

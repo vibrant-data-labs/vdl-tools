@@ -32,6 +32,7 @@ Entry points
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from time import perf_counter
 
 from pydantic import BaseModel
 
@@ -140,6 +141,8 @@ def load_website_texts(urls: list[str]) -> dict[str, str]:
     dict[str, str]
         ``url -> combined text`` for every URL with usable text.
     """
+    started = perf_counter()
+    logger.info("Loading website text for %d URLs through the scrape cache; missing sites may be scraped", len(urls))
     from vdl_tools.scrape_enrich.scraper.scrape_websites import scrape_websites_psql
     from vdl_tools.scrape_enrich.url_keys import extract_website_name
     from vdl_tools.shared_tools.web_summarization.website_summarization_psql import (
@@ -150,12 +153,14 @@ def load_website_texts(urls: list[str]) -> dict[str, str]:
     if not urls:
         return {}
     combined = scrape_websites_psql(urls)
+    logger.info("Website scrape/cache read returned %d sites in %.1fs; filtering unusable text", len(combined), perf_counter() - started)
     rows = {row["cleaned_home_key"]: row for row in combined.to_dict("records")} if len(combined) else {}
     texts = {}
     for url in urls:
         row = rows.get(extract_website_name(url))
         if row and is_summarizable(row["combined_text"], row.get("num_errors") or 0):
             texts[url] = row["combined_text"]
+    logger.info("Website text ready: %d/%d URLs usable in %.1fs", len(texts), len(urls), perf_counter() - started)
     return texts
 
 
@@ -199,6 +204,7 @@ def build_inputs(
             "Website": org.url,
             "text_chars": len(text),
         }
+    logger.info("Extraction inputs ready: %d/%d organizations have website text", len(given_ids_texts), len(orgs))
     return given_ids_texts, meta
 
 
@@ -233,6 +239,8 @@ def run_extraction_prompt(
         cache key -> parsed ``prompt.response_model``. Inputs whose request failed are
         absent; `extract_frame` records them as ``request_failed``.
     """
+    started = perf_counter()
+    logger.info("Opening extraction prompt cache for %d organizations (model=%s, workers=%d, read_cache=%s)", len(given_ids_texts), prompt.model, max_workers, read_from_cache)
     from vdl_tools.shared_tools.database_cache.database_utils import get_session
     from vdl_tools.shared_tools.openai.prompt_response_cache_instructor import InstructorPRC
 
@@ -250,7 +258,8 @@ def run_extraction_prompt(
             # another model's cached answers as its own.
             filter_by_model=True,
         )
-        return cache.bulk_get_parsed(
+        logger.info("Reading cached extraction responses and requesting misses")
+        profiles = cache.bulk_get_parsed(
             given_ids_texts,
             read_from_cache=read_from_cache,
             write_to_cache=write_to_cache,
@@ -258,3 +267,5 @@ def run_extraction_prompt(
             max_workers=max_workers,
             **api_kwargs,
         )
+        logger.info("Extraction prompt cache/model calls complete: %d/%d profiles in %.1fs", len(profiles), len(given_ids_texts), perf_counter() - started)
+        return profiles

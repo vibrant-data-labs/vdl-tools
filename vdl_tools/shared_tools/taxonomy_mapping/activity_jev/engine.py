@@ -10,10 +10,12 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import asdict, dataclass
+from time import perf_counter
 
 import pandas as pd
 
 from ...openai.openai_api_utils import get_num_tokens
+from ...tools.logger import logger
 from ...tools.unique_ids import create_deterministic_sha256
 from .taxonomies import Taxonomy
 
@@ -256,13 +258,16 @@ def score_subjects(
         subjects["cache_id"] = [
             create_deterministic_sha256([str(r.subject_id), r.state]) for r in subjects.itertuples()
         ]
+    logger.info("JEV %s: packing %d node questions for %d subjects", taxonomy.name, len(taxonomy.nodes), len(subjects))
     groups = question_sets(taxonomy)
     pairs = list(
         subjects[["cache_id", "state"]].drop_duplicates().itertuples(index=False, name=None)
     )
     runner = request_runner or jev_gateway_request
     scores, usage = [], []
-    for group, questions in groups.items():
+    for group_index, (group, questions) in enumerate(groups.items(), start=1):
+        started = perf_counter()
+        logger.info("JEV %s: group %d/%d (%s), %d questions for %d unique inputs; reading cache and requesting misses", taxonomy.name, group_index, len(groups), group, len(questions), len(pairs))
         rows = (
             runner(
                 questions,
@@ -275,6 +280,7 @@ def score_subjects(
             if pairs
             else {}
         )
+        logger.info("JEV %s: group %s returned %d/%d responses in %.1fs", taxonomy.name, group, len(rows), len(pairs), perf_counter() - started)
         question_hash = create_deterministic_sha256(questions)
         for subject in subjects.to_dict("records"):
             row = rows.get(subject["cache_id"]) or {}
