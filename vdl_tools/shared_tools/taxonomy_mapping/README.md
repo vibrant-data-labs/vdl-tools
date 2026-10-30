@@ -26,8 +26,15 @@ vdl_tools/shared_tools/taxonomy_mapping/
 ├── analyze_judge_results.py             # judge-results analyzer (Tier 1)
 ├── analyze_taxonomy_overlap.py          # term overlap / nesting analyzer
 ├── oe_hierarchical_taxonomy_mapping.py  # OE-specific classifier wiring
+├── activity_jev/                        # JEV engine over extracted activities (see its README)
+├── one_earth/, drawdown/                # JEV loaders, question wording, default policies
 └── …                                    # other domain-agnostic helpers
 ```
+
+The `activity_jev/` package is the activity-based JEV mapper that is replacing the
+LLM walk for Climate Landscape once its quality gates are agreed; it is documented in
+[`activity_jev/README.md`](activity_jev/README.md) and `docs/activity_jev_contract.md`.
+The rest of this README covers the hierarchical LLM-walk classifier below.
 
 **`hierarchical_taxonomy_mapping.py`** — domain-agnostic classifier
 engine. Walks any N-level taxonomy top-down per entity, prompting an

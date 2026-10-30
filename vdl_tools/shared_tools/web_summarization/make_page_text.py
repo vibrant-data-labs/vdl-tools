@@ -14,6 +14,9 @@ MIN_SUMMARY_LENGTH = 100
 MAX_SUMMARY_LENGTH = 500
 MODEL = "gpt-4.1-mini"
 MIN_TEXT_LENGTH = 50
+# Separates the ``URL: ... TEXT: ...`` blocks of one site's pages in the combined
+# text; text_quality splits on it to judge the first page on its own.
+JOIN_CHARS = "\n----\n"
 
 
 def _make_full_url(record: ScrapedPageRecord):
@@ -62,8 +65,6 @@ def make_group_text(
     # The number of tokens available for the prompt
     num_tokens_available = MODEL_DATA[model]["max_context_window"] - \
         current_message_tokens - MIN_SUMMARY_LENGTH
-
-    JOIN_CHARS = "\n----\n"
 
     url_texts = []
     num_tokens_used = 0
@@ -114,4 +115,4 @@ def make_group_text(
             logger.warning("No text for record url %s", record_group[0]['source'])
             return None
 
-    return "\n----\n".join(url_texts)
+    return JOIN_CHARS.join(url_texts)
