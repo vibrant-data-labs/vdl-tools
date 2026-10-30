@@ -67,6 +67,7 @@ def test_jev_wire_format_and_single_cache_write(cache, gateway):
         "headers": {"Authorization": "Bearer test-key"},
         "json": {
             "model": "typesafe-ai/jev",
+            "model_provider": "typesafe-ai",
             "state": "Company operates a bank.",
             "questions": QUESTIONS,
         },

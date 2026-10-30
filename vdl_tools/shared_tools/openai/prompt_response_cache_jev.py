@@ -125,7 +125,12 @@ class JevPromptResponseCacheSQL(PromptResponseCacheSQL):
                 response = requests.post(
                     JEV_GATEWAY_URL,
                     headers=headers,
-                    json={"model": self.model, "state": text, "questions": self.questions},
+                    json={
+                        "model": self.model,
+                        "model_provider": "typesafe-ai",
+                        "state": text,
+                        "questions": self.questions,
+                    },
                     timeout=self.timeout,
                 )
             except (requests.ConnectionError, requests.Timeout):
