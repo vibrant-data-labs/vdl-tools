@@ -2,7 +2,6 @@ import pandas as pd
 import pytest
 
 from vdl_tools.shared_tools.activity_extraction.pipeline import extract_frame
-from vdl_tools.shared_tools.activity_extraction.scraped_text import SiteText
 
 from .conftest import profile
 
@@ -29,24 +28,12 @@ def test_all_orgs_accounted_and_minor_activity_kept(extraction):
 
 def test_run_identity_changes_but_request_cache_identity_does_not(organizations):
     url = organizations.Website.iloc[0]
-    sites = {
-        url: SiteText(
-            url,
-            [
-                {
-                    "source": url,
-                    "subpath": "/",
-                    "text": "We install rooftop solar panels with our own trained crews across the state.",
-                }
-            ],
-            "fixture",
-        )
-    }
+    texts = {url: "URL: " + url + "/\nTEXT: We install rooftop solar panels with our own trained crews."}
     first = extract_frame(
-        organizations.iloc[:1], run_id="first", site_texts=sites, runner=lambda *a, **k: {"1": profile()}
+        organizations.iloc[:1], run_id="first", website_texts=texts, runner=lambda *a, **k: {"1": profile()}
     )
     second = extract_frame(
-        organizations.iloc[:1], run_id="second", site_texts=sites, runner=lambda *a, **k: {"1": profile()}
+        organizations.iloc[:1], run_id="second", website_texts=texts, runner=lambda *a, **k: {"1": profile()}
     )
     assert set(first.activities.activity_id).isdisjoint(second.activities.activity_id)
     assert first.activities.cache_id.tolist() == second.activities.cache_id.tolist()
@@ -59,7 +46,7 @@ def test_missing_text_never_falls_back_to_descriptions(organizations):
     )
     sent = []
     result = extract_frame(
-        source, run_id="missing", site_texts={}, runner=lambda inputs, *a, **kw: sent.append(inputs) or {}
+        source, run_id="missing", website_texts={}, runner=lambda inputs, *a, **kw: sent.append(inputs) or {}
     )
     assert sent == [[]]
     assert set(result.organizations.extraction_status) == {"missing_text"}
@@ -69,7 +56,7 @@ def test_missing_text_never_falls_back_to_descriptions(organizations):
 def test_duplicate_normalized_ids_rejected(organizations):
     source = pd.concat([organizations.iloc[:1], organizations.iloc[:1].assign(id=1)])
     with pytest.raises(ValueError, match="unique"):
-        extract_frame(source, run_id="duplicate", site_texts={})
+        extract_frame(source, run_id="duplicate", website_texts={})
 
 
 def test_run_extraction_prompt_uses_shared_instructor_cache(monkeypatch):
@@ -103,3 +90,29 @@ def test_run_extraction_prompt_uses_shared_instructor_cache(monkeypatch):
     assert captured["bulk"]["max_workers"] == 3
     assert "text_format" not in captured["bulk"]
     assert run_extraction_prompt([], prompt) == {}
+
+
+def test_load_website_texts_uses_shared_scraper_and_junk_verdicts(monkeypatch):
+    import pandas as pd
+
+    from vdl_tools.scrape_enrich.scraper import scrape_websites
+    from vdl_tools.shared_tools.activity_extraction.extraction import load_website_texts
+
+    calls = []
+
+    def fake_scrape(urls, **kwargs):
+        calls.append(list(urls))
+        return pd.DataFrame(
+            [
+                {"cleaned_home_key": "solar.example", "home_url": "https://solar.example", "combined_text": "URL: https://solar.example/\nTEXT: We install rooftop solar panels for homes and train installers.", "num_errors": 0},
+                {"cleaned_home_key": "parked.example", "home_url": "https://parked.example", "combined_text": "This domain is for sale. Buy this domain today.", "num_errors": 0},
+                {"cleaned_home_key": "dead.example", "home_url": "https://dead.example", "combined_text": None, "num_errors": 2},
+            ]
+        )
+
+    monkeypatch.setattr(scrape_websites, "scrape_websites_psql", fake_scrape)
+    texts = load_website_texts(["https://solar.example", "https://parked.example", "https://dead.example", "", "https://solar.example"])
+    assert calls == [["https://solar.example", "https://parked.example", "https://dead.example"]]
+    assert list(texts) == ["https://solar.example"]
+    assert texts["https://solar.example"].startswith("URL: https://solar.example/")
+    assert load_website_texts([]) == {}

@@ -31,7 +31,7 @@ builder. A third taxonomy needs its own package and no core edits.
 ## Extraction and export
 
 `activity_extraction.pipeline.extract_frame` extracts website activities once per
-organization; `ExtractionResult.save/load` persist the snapshot as Parquet through
+organization from the text the shared scraper holds for its website; `ExtractionResult.save/load` persist the snapshot as Parquet through
 `parquet_cache` with the lineage in the footers. Rename `activity_id` to `subject_id`
 before calling the engine.
 

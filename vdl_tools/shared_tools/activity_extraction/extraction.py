@@ -19,8 +19,10 @@ exported in the order the model declares it.
 
 Entry points
 ------------
-``build_inputs(orgs, prompt, site_texts)``
-    Assembles the (cache key, prompt text) pairs from cached website text.
+``load_website_texts(urls)``
+    Website text per URL through the shared scraper, junk sites excluded.
+``build_inputs(orgs, prompt, website_texts)``
+    Assembles the (cache key, prompt text) pairs.
 ``run_extraction_prompt(given_ids_texts, prompt, ...)``
     The cached model call, through the shared ``InstructorPRC`` cache.
 ``render_profile(profile, prompt)``
@@ -29,20 +31,15 @@ Entry points
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel
 
-from vdl_tools.shared_tools.activity_extraction.scraped_text import load_site_texts
 from vdl_tools.shared_tools.tools.logger import logger
-from vdl_tools.shared_tools.web_summarization.make_page_text import make_group_text
 
-# make_group_text budgets against the model's full context window and reserves
-# only 100 tokens for the answer, which overflows on a site like nature.org
-# (39 pages, 9.5M chars). Cap the input well below the window instead: a
-# summary needs breadth across pages, not the whole of any one of them.
-MAX_PAGE_CHARS = 40_000
+# The scraper combines a site's pages up to the summarization model's context window,
+# which on a site like nature.org (39 pages, 9.5M chars) is far more than extraction
+# needs: a profile needs breadth across pages, not the whole of any one of them.
 MAX_PROMPT_CHARS = 300_000
 
 # Activity fields rendered specially rather than as "Label: value" lines
@@ -93,27 +90,6 @@ def _label(field_name: str) -> str:
     return text[:1].upper() + text[1:]
 
 
-def cap_pages(pages: list[dict]) -> list[dict]:
-    """Trim pages so a huge site can't overflow the model's context window.
-
-    Each page is truncated first, so one enormous page cannot crowd out the rest; the
-    page list is then cut at the total budget. Pages are ordered by subpath length,
-    with the home page and short structural paths first, so what survives is the
-    descriptive material rather than story archives.
-    """
-    capped, total = [], 0
-    pages = sorted(
-        pages, key=lambda p: (len(p["subpath"]), hashlib.md5(p["subpath"].encode()).hexdigest())
-    )
-    for page in pages:
-        text = page["text"][:MAX_PAGE_CHARS]
-        if total + len(text) > MAX_PROMPT_CHARS:
-            break
-        capped.append({**page, "text": text})
-        total += len(text)
-    return capped
-
-
 def clean_evidence(text: str) -> str:
     """Strip quote characters the model wrapped around the evidence phrase."""
     return str(text).strip().strip("“”‘’\"'").strip()
@@ -145,50 +121,83 @@ def render_profile(profile: BaseModel, prompt: ExtractionPrompt) -> str:
     return "\n".join(parts)
 
 
+def load_website_texts(urls: list[str]) -> dict[str, str]:
+    """Website text per URL through the shared scraper, junk sites excluded.
+
+    ``scrape_websites_psql`` serves the pages already in the SQL scrape cache and
+    scrapes only what is missing, and returns each site's pages combined into one
+    prompt-ready text (``URL:`` / ``TEXT:`` blocks separated by ``----``). Sites whose
+    text is parked, blocked, garbled, dead or empty are left out, using the same
+    verdicts the website summarizer applies.
+
+    Parameters
+    ----------
+    urls : list[str]
+        Organization website URLs; blanks and duplicates are ignored.
+
+    Returns
+    -------
+    dict[str, str]
+        ``url -> combined text`` for every URL with usable text.
+    """
+    from vdl_tools.scrape_enrich.scraper.scrape_websites import scrape_websites_psql
+    from vdl_tools.scrape_enrich.url_keys import extract_website_name
+    from vdl_tools.shared_tools.web_summarization.website_summarization_psql import (
+        is_summarizable,
+    )
+
+    urls = [u for u in dict.fromkeys(urls) if u and str(u).strip()]
+    if not urls:
+        return {}
+    combined = scrape_websites_psql(urls)
+    rows = {row["cleaned_home_key"]: row for row in combined.to_dict("records")} if len(combined) else {}
+    texts = {}
+    for url in urls:
+        row = rows.get(extract_website_name(url))
+        if row and is_summarizable(row["combined_text"], row.get("num_errors") or 0):
+            texts[url] = row["combined_text"]
+    return texts
+
+
 def build_inputs(
     orgs: list[OrgInput],
     prompt: ExtractionPrompt,
-    site_texts: dict | None = None,
+    website_texts: dict[str, str] | None = None,
 ) -> tuple[list[tuple[str, str]], dict[str, dict]]:
     """Assemble the (cache key, prompt text) pairs and per-org provenance.
 
-    Only current cached website text is used. An organization with none is skipped and
-    reported; it is never back-filled from a description or other stale text.
+    An organization without usable website text is skipped and reported; it is never
+    back-filled from a description or other stale text.
 
     Parameters
     ----------
     orgs : list[OrgInput]
     prompt : ExtractionPrompt
-        Supplies the instructions and model that ``make_group_text`` budgets against.
-    site_texts : dict, optional
-        ``url -> SiteText``; None reads the SQL website cache.
+    website_texts : dict, optional
+        ``url -> text`` as `load_website_texts` returns; None calls it.
 
     Returns
     -------
     tuple[list[tuple[str, str]], dict[str, dict]]
         ``given_ids_texts`` as ``(uid, text)`` pairs, and ``meta[uid]`` with ``uid``,
-        ``Organization``, ``Website``, ``text_source`` and ``text_chars``.
+        ``Organization``, ``Website`` and ``text_chars``.
     """
-    if site_texts is None:
-        site_texts = load_site_texts([o.url for o in orgs if o.url])
+    if website_texts is None:
+        website_texts = load_website_texts([o.url for o in orgs if o.url])
     given_ids_texts: list[tuple[str, str]] = []
     meta: dict[str, dict] = {}
     for org in orgs:
-        site = site_texts.get(org.url) if org.url else None
-        if not (site and site.pages):
-            logger.warning("No cached website text for %s (%s); skipped", org.name, org.uid)
+        text = website_texts.get(org.url) if org.url else None
+        if not text:
+            logger.warning("No usable website text for %s (%s); skipped", org.name, org.uid)
             continue
-        page_text = make_group_text(prompt.text, cap_pages(site.pages), model=prompt.model)
-        if not page_text:
-            logger.warning("Empty prompt text for %s (%s)", org.name, org.uid)
-            continue
-        given_ids_texts.append((org.uid, f"ORGANIZATION: {org.name}\n\n{page_text}"))
+        text = text[:MAX_PROMPT_CHARS]
+        given_ids_texts.append((org.uid, f"ORGANIZATION: {org.name}\n\n{text}"))
         meta[org.uid] = {
             "uid": org.uid,
             "Organization": org.name,
             "Website": org.url,
-            "text_source": site.source_table,
-            "text_chars": site.n_chars,
+            "text_chars": len(text),
         }
     return given_ids_texts, meta
 

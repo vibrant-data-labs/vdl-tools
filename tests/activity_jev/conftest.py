@@ -5,7 +5,6 @@ import pytest
 
 from vdl_tools.shared_tools.activity_extraction.general import GeneralActivityProfile
 from vdl_tools.shared_tools.activity_extraction.pipeline import extract_frame
-from vdl_tools.shared_tools.activity_extraction.scraped_text import SiteText
 from vdl_tools.shared_tools.taxonomy_mapping import drawdown, one_earth
 from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.engine import map_subjects, score_subjects
 from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.exports import export_extraction
@@ -65,24 +64,14 @@ def organizations():
 
 @pytest.fixture
 def extraction(organizations):
-    sites = {
-        url: SiteText(
-            url,
-            [
-                {
-                    "source": url,
-                    "subpath": "/",
-                    "text": "Our own crews install rooftop solar panels on homes. We also train solar installers.",
-                }
-            ],
-            "web_pages_scraped",
-        )
+    texts = {
+        url: "URL: " + url + "/\nTEXT: Our own crews install rooftop solar panels on homes. We also train solar installers."
         for url in organizations.Website.dropna()
     }
     return extract_frame(
         organizations,
         run_id="fixture",
-        site_texts=sites,
+        website_texts=texts,
         runner=lambda *a, **kw: {"1": profile(), "4": profile(0)},
     )
 

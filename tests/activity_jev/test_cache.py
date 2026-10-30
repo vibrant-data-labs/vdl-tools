@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.engine import sql_request
+from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.engine import jev_gateway_request
 
 
 def test_incomplete_gateway_answers_are_not_cache_successes(offline_config, monkeypatch):
@@ -33,7 +33,7 @@ def test_incomplete_gateway_answers_are_not_cache_successes(offline_config, monk
 
     monkeypatch.setattr(JevPromptResponseCacheSQL, "bulk_get_cache_or_run", bulk)
     assert (
-        sql_request(
+        jev_gateway_request(
             {"n": {"type": "noul", "instructions": "Solar?"}},
             [("a", "solar")],
             prompt_name="fixture",

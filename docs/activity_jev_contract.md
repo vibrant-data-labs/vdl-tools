@@ -35,7 +35,7 @@ outputs.
 | Component | Source and revision | Reused behavior |
 | -- | -- | -- |
 | Shared infrastructure | vdl-tools `40a33ad45936ff53fadaa6ee310bb97c8a33bd93` | SQL Jev adapter; structured response cache; mapping columns; funding allocation |
-| Extraction | oneearth `d6811ca9286b846cd2093e1b5327a8346393143a`, `activity_extraction/` | General prompt and schema, text assembly/caps, cached website reader, rendering |
+| Extraction | oneearth `d6811ca9286b846cd2093e1b5327a8346393143a`, `activity_extraction/` | General prompt and schema, rendering |
 | One Earth questions | Same revision, `jev/jev_mapping.py` | Activity wording and `cc_routing`; independent node probabilities; ancestor implication |
 | Drawdown questions and rules | drawdown `dfc03de9cd7b3fd4331631ab6153647db7b386ce`, `jev/jev_drawdown.py` | `stewardship_yes`; 0.7/0.5 tiers; 0.6 descent; full-path prefix deduplication |
 
@@ -55,12 +55,12 @@ The One Earth filename is still May 14 in the newest source revision. Its conten
 ## Input and extraction
 
 * One unique, non-null `id`, `Organization` and `Website` per organization. IDs are strings in every output.
-* Read the existing SQL website cache, or accept caller-provided `SiteText` pages. No new scrape, 990 content or archived descriptions are used by `extract_frame`.
+* Website text comes from the shared scraper (`scrape_websites_psql`: pages already in the SQL scrape cache are served, missing sites are scraped once) with the website summarizer's junk verdicts applied (parked, blocked, garbled, dead and empty sites are skipped); callers may supply `website_texts` directly. No 990 content or archived descriptions are used by `extract_frame`.
 * Keep the general source prompt and schema. Production extraction uses `gpt-5.4-mini`, medium reasoning, through the shared `InstructorPRC` cache, which puts the response schema in the prompt identity and keys rows by model (`filter_by_model=True`). A cached row that no longer validates raises rather than being dropped.
 * Keep all extracted activities, including minor, one-off and past activities. Importance is metadata and never an assignment or funding weight.
 * Return one profile/status record for every input organization: `success`, `empty`, `missing_text`, or `request_failed`. A failed or unparsable model response never silently removes its organization.
 
-`ExtractionResult.organizations` records the rendered profile, source hash, source cache table, coverage, activity count, extraction run, and status. `activities` records every schema field, evidence, organization identity and run-qualified activity identity.
+`ExtractionResult.organizations` records the rendered profile, source hash, text length, coverage, activity count, extraction run, and status. `activities` records every schema field, evidence, organization identity and run-qualified activity identity.
 
 Activity IDs are SHA-256 over `[extraction_run_id, org_uid, activity_index]`; they are only stable within a fixed extraction run. Jev cache IDs hash `[org_uid, six-field activity state]`, so a new run ID does not invalidate unchanged activity requests. No durable identity is inferred across changed activities.
 

@@ -39,8 +39,7 @@ class ExtractionResult:
     ----------
     organizations : pandas.DataFrame
         One row per input organization: ``uid``, ``Organization``, ``Website``,
-        ``extraction_run_id``, ``source_sha256``, ``text_source``, ``text_chars``,
-        ``Description``, ``summary``, ``coverage``, ``n_activities``,
+        ``extraction_run_id``, ``source_sha256``, ``text_chars``, ``Description``, ``summary``, ``coverage``, ``n_activities``,
         ``extraction_status`` (``success``, ``empty``, ``missing_text`` or
         ``request_failed``) and the prompt's organization-level fields.
     activities : pandas.DataFrame
@@ -76,7 +75,7 @@ def extract_frame(
     organizations: pd.DataFrame,
     *,
     run_id: str,
-    site_texts: dict | None = None,
+    website_texts: dict[str, str] | None = None,
     prompt=GENERAL_EXTRACTION_PROMPT,
     runner=None,
     max_workers: int = 16,
@@ -90,9 +89,10 @@ def extract_frame(
         and ``Website``.
     run_id : str
         Label of this extraction run; mixed into every ``activity_id``.
-    site_texts : dict, optional
-        ``url -> SiteText`` already-loaded pages; None reads the SQL website cache. No
-        descriptions or Form 990 programs are ever used as a fallback.
+    website_texts : dict, optional
+        ``url -> text`` already loaded; None calls `load_website_texts`, which serves
+        the SQL scrape cache through the shared scraper. No descriptions or Form 990
+        programs are ever used as a fallback.
     prompt : ExtractionPrompt
         What to extract; defaults to the general prompt.
     runner : callable, optional
@@ -118,7 +118,7 @@ def extract_frame(
         )
         for row in organizations.to_dict("records")
     ]
-    inputs, meta = build_inputs(orgs, prompt, site_texts=site_texts)
+    inputs, meta = build_inputs(orgs, prompt, website_texts=website_texts)
     texts = dict(inputs)
     profiles = (runner or run_extraction_prompt)(inputs, prompt, max_workers=max_workers)
     org_rows, activity_rows = [], []
@@ -131,7 +131,6 @@ def extract_frame(
             "Website": org.url,
             "extraction_run_id": run_id,
             "source_sha256": source_hash,
-            "text_source": meta.get(org.uid, {}).get("text_source"),
             "text_chars": meta.get(org.uid, {}).get("text_chars", 0),
             "Description": None,
             "summary": None,
@@ -170,7 +169,6 @@ def extract_frame(
         "Website",
         "extraction_run_id",
         "source_sha256",
-        "text_source",
         "text_chars",
         "Description",
         "summary",

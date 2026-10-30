@@ -148,7 +148,7 @@ def question_sets(taxonomy: Taxonomy, *, max_tokens: int = MAX_QUESTION_TOKENS) 
     return groups
 
 
-def sql_request(
+def jev_gateway_request(
     questions,
     ids_texts,
     *,
@@ -157,7 +157,7 @@ def sql_request(
     read_from_cache=True,
     write_to_cache=True,
 ):
-    """Send one question group for many subjects through the cached SQL Jev adapter.
+    """Send one question group for many subjects to the Jev gateway, through the prompt cache.
 
     This is the default ``request_runner`` of ``score_subjects``; tests inject a fake
     with the same signature. Imports are local so offline selection needs no database
@@ -225,7 +225,7 @@ def score_subjects(
         Supplies the questions and the identity recorded in ``lineage``.
     request_runner : callable, optional
         ``runner(questions, ids_texts, *, prompt_name, max_workers, read_from_cache,
-        write_to_cache) -> {cache_id: row}``; defaults to ``sql_request``.
+        write_to_cache) -> {cache_id: row}``; defaults to ``jev_gateway_request``.
     max_workers : int
         Passed to the runner.
     read_from_cache, write_to_cache : bool
@@ -258,7 +258,7 @@ def score_subjects(
     pairs = list(
         subjects[["cache_id", "state"]].drop_duplicates().itertuples(index=False, name=None)
     )
-    runner = request_runner or sql_request
+    runner = request_runner or jev_gateway_request
     scores, usage = [], []
     for group, questions in groups.items():
         rows = (
