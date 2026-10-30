@@ -100,7 +100,16 @@ def test_a_leftover_that_is_the_cut_off_start_of_a_funder_on_the_same_org_is_dro
     df = frame()
     df.loc[2, "Donors"] = ["Community Foundation"]
     out = columns(df, min_occurrences=1)
-    assert out.loc[2, "Funders"] == ["COMMUNITY FOUNDATION OF MIDDLESEX COUNTY INC"]
+    assert out.loc[2, "Funders"] == ["COMMUNITY FOUNDATION OF MIDDLESEX COUNTY"]
+
+
+def test_a_legal_suffix_is_dropped_so_funders_that_differ_only_by_it_get_their_state():
+    barr_inc, barr = granter("111111111", "Barr Foundation Inc"), granter("222222222", "Barr Foundation")
+    df = pd.DataFrame({"uid": ["a", "b"], "granters": [[barr_inc, barr], [barr_inc, barr]]})
+    states = {"ein:111111111": "MA", "ein:222222222": "OH"}
+    names = funder_names(df, attributes_of=lambda ids: attributes(ids, state=states))
+    assert names.loc["ein:111111111"].to_dict() == {"display_name": "Barr Foundation", "label": "Barr Foundation (MA)"}
+    assert names.loc["ein:222222222", "label"] == "Barr Foundation (OH)"
 
 
 def test_funders_that_share_a_name_get_their_state_added():

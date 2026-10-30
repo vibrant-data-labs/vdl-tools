@@ -9,13 +9,12 @@ A funder in both sources has one id of each; they are not merged.
 """
 import json
 import logging
-import re
 
 import numpy as np
 import pandas as pd
 
 from vdl_tools.scrape_enrich.url_keys import website_domain
-from vdl_tools.scrape_enrich.display_name import pick_names
+from vdl_tools.scrape_enrich.display_name import drop_legal_suffix, name_words, pick_names
 from vdl_tools.shared_tools.funders.ids import normalize_ein, slugify
 from vdl_tools.shared_tools.funders.names import (
     clean_funder_text,
@@ -99,13 +98,6 @@ def funder_display_names(long, picks=None):
     return names
 
 
-GENERIC_WORDS = frozenset({"the", "of", "and", "for", "a", "inc", "corp", "foundation", "fund", "trust", "charitable"})
-
-
-def _words(name):
-    return set(re.findall(r"[a-z0-9]+", str(name).lower())) - GENERIC_WORDS
-
-
 def _unsupported_dba(answers, rows):
     """True for a DBA chosen for a funder with no website and no word in common with its filed name.
 
@@ -116,7 +108,7 @@ def _unsupported_dba(answers, rows):
     return pd.Series(
         [
             source == "dba" and not isinstance(inputs.at[f, "website"], str)
-            and not _words(inputs.at[f, "name"]) & _words(answer)
+            and not name_words(inputs.at[f, "name"]) & name_words(answer)
             for f, source, answer in zip(answers["funder_id"], answers["source"], answers["display_name"])
         ],
         index=answers.index,
@@ -185,8 +177,9 @@ def funder_names(df, min_occurrences=2, session=None, attributes_of=None, domain
     """The names of the funders linked to at least ``min_occurrences`` orgs, indexed by ``funder_id``.
 
     ``display_name`` is chosen once for every place that shows the funder (the player, the dashboard):
-    the best spelling among its names, else the model's choice. ``label`` is what the player shows: the
-    display name with the state added where several funders share it ("Smith Family Foundation (NC)").
+    the best spelling among its names, else the model's choice, without a legal suffix. ``label`` is what
+    the player shows: the display name with the state added where several funders share it
+    ("Smith Family Foundation (NC)").
 
     ``attributes_of`` maps a list of funder ids to a frame indexed by id with the columns ``state`` and
     ``website``, and optionally ``text`` (the start of the website's scraped text). With it, funders that
@@ -204,7 +197,7 @@ def funder_names(df, min_occurrences=2, session=None, attributes_of=None, domain
         websites = attributes["website"] if attributes is not None else pd.Series(dtype=object)
         texts = attributes["text"] if attributes is not None and "text" in attributes else None
         names = funder_display_names(long, pick_funder_names(names[keep], dbas, websites, session, texts, domain_cache))
-    names = names[keep]
+    names = names[keep].map(drop_legal_suffix)
     labels = add_state_to_shared_names(names, attributes["state"]) if attributes is not None else names
     logger.info(
         "Funders: %d ids, %d linked to >= %d orgs; %d labels are shared by more than one id",

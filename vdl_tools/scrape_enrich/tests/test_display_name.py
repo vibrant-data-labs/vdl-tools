@@ -9,6 +9,7 @@ from vdl_tools.scrape_enrich.display_name import (
     NameChoice,
     build_input_text,
     drop_legal_suffix,
+    name_words,
     normalize_name,
     pick_display_names,
     restore_apostrophes,
@@ -125,6 +126,11 @@ def test_apostrophes_dropped_from_the_website_come_back(name, filed, expected):
 )
 def test_legal_suffixes_at_the_end_are_dropped(name, expected):
     assert drop_legal_suffix(name) == expected
+
+
+def test_name_words_leave_out_the_words_that_say_what_kind_of_organization_it_is():
+    assert name_words("The Harlow Charitable Trust, Inc.") == {"harlow"}
+    assert name_words("Northfield School of Music") == {"northfield", "music"}
 
 
 def test_apostrophe_can_come_from_the_dba():

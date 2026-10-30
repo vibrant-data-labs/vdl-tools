@@ -300,6 +300,11 @@ NAME_KEY_DROP_RE = re.compile(r"\b(inc|incorporated|llc|ltd|nfp|corp|the)\b")
 # A suffix filed without its space ("COLUMBUSINC").
 GLUED_SUFFIX_RE = re.compile(r"(?<=[a-z0-9]{3})(inc|llc)$")
 TRAILING_PARENS_RE = re.compile(r"\s*\([^)]*\)\s*$")
+# Words that say what kind of organization it is, not which one.
+GENERIC_WORDS = frozenset({
+    "the", "of", "and", "for", "a", "in", "inc", "llc", "ltd", "corp", "incorporated",
+    "foundation", "association", "center", "school", "schools", "fund", "trust", "charitable",
+})  # fmt: skip
 
 
 def name_key(name):
@@ -312,6 +317,11 @@ def name_key(name):
 def keeps_every_word(filed, answer):
     """True when ``answer`` keeps every word of ``filed``; it may add words or drop a trailing "(EDC)"."""
     return name_key(TRAILING_PARENS_RE.sub("", str(filed))) in name_key(TRAILING_PARENS_RE.sub("", str(answer)))
+
+
+def name_words(name):
+    """The lowercase words of ``name`` that say which organization it is (without ``GENERIC_WORDS``)."""
+    return set(re.findall(r"[a-z0-9]+", str(name).lower())) - GENERIC_WORDS
 
 
 def site_texts(websites, session):
