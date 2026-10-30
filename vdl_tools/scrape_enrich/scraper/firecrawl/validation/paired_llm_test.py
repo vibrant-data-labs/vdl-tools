@@ -144,7 +144,10 @@ class Usage:
                         "cached_input_tokens": cached, "output_tokens": outp,
                         # cached input billed at full price: an upper bound
                         "cost_usd": inp * price_in + outp * price_out})
-        return pd.DataFrame(out)
+        # Named columns even when empty: a stage with no API calls (the Baseten
+        # one) must still be filterable by stage.
+        return pd.DataFrame(out, columns=["stage", "model", "calls", "input_tokens", "cached_input_tokens",
+                                          "output_tokens", "cost_usd"])
 
 
 def _prices(model: str) -> tuple[float, float]:
