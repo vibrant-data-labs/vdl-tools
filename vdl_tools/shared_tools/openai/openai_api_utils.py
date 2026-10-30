@@ -93,8 +93,8 @@ def is_reasoning_model(model):
 _ENCODING_WARNED: set[str] = set()
 
 
-def get_num_tokens(text, model_name):
-    """Return the number of tokens used by a text."""
+def get_num_tokens(text, model_name, *, disallowed_special="all"):
+    """Return the token count; pass ``disallowed_special=()`` to count literal special-token text."""
     try:
         encoding = tiktoken.encoding_for_model(model_name)
     except KeyError:
@@ -116,7 +116,7 @@ def get_num_tokens(text, model_name):
     elif not isinstance(text, str):
         text = str(text)
 
-    return len(encoding.encode(text))
+    return len(encoding.encode(text, disallowed_special=disallowed_special))
 
 
 def truncate_text(text, model_name, max_tokens):

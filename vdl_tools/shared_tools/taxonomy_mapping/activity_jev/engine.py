@@ -12,8 +12,8 @@ import math
 from dataclasses import asdict, dataclass
 
 import pandas as pd
-import tiktoken
 
+from ...openai.openai_api_utils import get_num_tokens
 from ...tools.unique_ids import create_deterministic_sha256
 from .taxonomies import Taxonomy
 
@@ -129,10 +129,10 @@ def question_sets(taxonomy: Taxonomy, *, max_tokens: int = MAX_QUESTION_TOKENS) 
         A single question that alone exceeds the budget. Definitions are never
         truncated to make a request fit.
     """
-    encoding = tiktoken.get_encoding("cl100k_base")
-
     def size(questions):
-        return len(encoding.encode(json.dumps(questions, sort_keys=True), disallowed_special=()))
+        return get_num_tokens(
+            json.dumps(questions, sort_keys=True), "gpt-4", disallowed_special=()
+        )
 
     groups, current = {}, {}
     for row in taxonomy.nodes.to_dict("records"):
@@ -219,7 +219,9 @@ def score_subjects(
     ----------
     subjects : pandas.DataFrame
         One row per subject with ``subject_id`` (unique, non-null) and ``state`` (the
-        non-empty text Jev judges). Optional ``cache_id`` keys the cache row; when
+        non-empty text Jev judges), for example an extracted activity such as
+        installing rooftop solar, or an organization's supplied description.
+        Optional ``cache_id`` keys the cache row; when
         absent it is the SHA-256 of ``[subject_id, state]``.
     taxonomy : Taxonomy
         Supplies the questions and the identity recorded in ``lineage``.

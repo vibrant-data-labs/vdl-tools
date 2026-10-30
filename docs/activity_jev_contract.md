@@ -20,12 +20,14 @@ taxonomy's workbook; shared-data may hold both, and a missing or invalid sibling
 workbook does not block the selected loader.
 
 `ExtractionResult.save/load` persists an extraction independently as Parquet through
-`parquet_cache`, lineage in the footers. A Climate Landscape run extracts once (or loads a
-saved extraction), maps each selected taxonomy in turn, writes that taxonomy's files as
+`parquet_cache`, lineage in the footers, with local directories or S3 prefixes. A Climate
+Landscape run calls the extraction prompt cache, maps each selected taxonomy in turn, writes that taxonomy's files as
 soon as it finishes, and records the input, extraction and per-taxonomy identities in the
 mapped Parquet's lineage footer (`get_lineage`). An error stops
-the run and leaves what finished on disk; a later run can map the other taxonomy from
-the saved extraction. `assemble_mapping_runs` reads each selected run's mapped Parquet and copies one
+the run and leaves completed files under its labelled S3 prefix; a later run can map
+the other taxonomy with a new label. Unchanged extraction inputs reuse `InstructorPRC`
+responses, so the runner has no saved-extraction loading option. Snapshots remain for
+inspection. `assemble_mapping_runs` reads each selected run's mapped Parquet and copies one
 taxonomy's export columns onto a base frame by organization ID and can preserve approved legacy
 columns for an unselected taxonomy. No assembly or mapping function promotes production
 outputs.
@@ -94,4 +96,4 @@ These are first-adopter implementation baselines (`DEFAULT_POLICY` in each packa
 
 Offline fixtures cover source accounting, full-path identity, exclusion, thresholds and descent, request completeness, cache identity, union evidence, allocation, and end-to-end candidate exports. They prove implementation behavior, not classification quality.
 
-Q5/VIB-76 still defines judges, human reference labels, minimum sample sizes, and release targets. D2/VIB-79 cannot freeze the real evaluation cohorts until that decision. Q6/VIB-77 still controls production budget, backfill scope and release authority. Candidate runs use immutable labelled directories; neither the shared library nor the new integration promotes production results.
+Q5/VIB-76 still defines judges, human reference labels, minimum sample sizes, and release targets. D2/VIB-79 cannot freeze the real evaluation cohorts until that decision. Q6/VIB-77 still controls production budget, backfill scope and release authority. Candidate runs use separate labelled S3 prefixes; neither the shared library nor the new integration promotes production results.

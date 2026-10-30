@@ -92,10 +92,19 @@ def test_invalid_probabilities_are_failed_requests(taxonomy, extraction, bad):
 
 
 def test_question_groups_are_bounded_and_cover_each_node_once(taxonomy):
+    import tiktoken
+
     tax = taxonomy()
+    # Taxonomy wording may contain a tokenizer's special-token spelling as plain text.
+    tax.nodes.at[0, "question"] = {"type": "noul", "instructions": "Does <|endoftext|> apply?"}
     groups = question_sets(tax, max_tokens=90)
     assert len(groups) > 1
     assert [node for g in groups.values() for node in g] == tax.nodes.node_id.tolist()
+    encoding = tiktoken.get_encoding("cl100k_base")
+    assert all(
+        len(encoding.encode(json.dumps(group, sort_keys=True), disallowed_special=())) <= 90
+        for group in groups.values()
+    )
     with pytest.raises(ValueError, match="exceeds request budget"):
         question_sets(tax, max_tokens=1)
 

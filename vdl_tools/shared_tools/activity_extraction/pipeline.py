@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 import pandas as pd
 
@@ -66,7 +65,7 @@ class ExtractionResult:
     def load(cls, directory):
         """Read a snapshot written by ``save``; needs no model, website cache or taxonomy."""
         tables = read_dataframes(directory, list(SNAPSHOT_TABLES))
-        lineage = get_lineage(Path(directory) / f"{SNAPSHOT_TABLES[0]}.parquet")
+        lineage = get_lineage(f"{str(directory).rstrip('/')}/{SNAPSHOT_TABLES[0]}.parquet")
         lineage.pop("table_name", None)
         return cls(*(tables[name] for name in SNAPSHOT_TABLES), lineage)
 
