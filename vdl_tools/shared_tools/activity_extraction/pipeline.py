@@ -1,4 +1,4 @@
-"""Accounted, website-only extraction for callers outside the One Earth project."""
+"""Accounted, website-only activity extraction over an organization frame."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ from ..tools.unique_ids import create_deterministic_sha256
 from .extraction import OrgInput, build_inputs, render_profile, run_extraction_prompt
 from .general import GENERAL_EXTRACTION_PROMPT
 
+ID_COL, NAME_COL, URL_COL = "id", "Organization", "Website"
+
 STATE_FIELDS = {
     "activity": "Activity",
     "what_happens": "What happens",
@@ -21,13 +23,12 @@ STATE_FIELDS = {
     "methods": "Methods",
 }
 
+SNAPSHOT_TABLES = ("activity_extraction_orgs", "activity_extraction_activities")
+
 
 def activity_state(row) -> str:
-    """The six activity fields used in both source repos; no summary or importance."""
+    """The six activity fields Jev judges; no summary or importance."""
     return "\n".join(f"{label}: {str(row[field]).strip()}" for field, label in STATE_FIELDS.items())
-
-
-SNAPSHOT_TABLES = ("activity_extraction_orgs", "activity_extraction_activities")
 
 
 @dataclass
@@ -55,16 +56,7 @@ class ExtractionResult:
     lineage: dict
 
     def save(self, directory):
-        """Write both tables as Parquet into ``directory`` with the lineage in their footers.
-
-        Raises
-        ------
-        FileExistsError
-            A snapshot is already there; snapshots are immutable.
-        """
-        directory = Path(directory)
-        if any((directory / f"{name}.parquet").exists() for name in SNAPSHOT_TABLES):
-            raise FileExistsError(f"Extraction snapshot already exists: {directory}")
+        """Write both tables as Parquet into ``directory`` with the lineage in their footers."""
         write_dataframes(
             dict(zip(SNAPSHOT_TABLES, (self.organizations, self.activities), strict=True)),
             directory,
@@ -84,84 +76,55 @@ def extract_frame(
     organizations: pd.DataFrame,
     *,
     run_id: str,
-    id_col: str = "id",
-    name_col: str = "Organization",
-    url_col: str = "Website",
     site_texts: dict | None = None,
     prompt=GENERAL_EXTRACTION_PROMPT,
     runner=None,
-    session=None,
     max_workers: int = 16,
 ) -> ExtractionResult:
-    """Extract once per org, preserving all orgs and recording every missing result.
+    """Extract once per organization, keeping every organization and recording every outcome.
 
     Parameters
     ----------
     organizations : pandas.DataFrame
-        One row per organization with ``id_col`` (unique and non-null after string
-        normalization), ``name_col`` and ``url_col``.
+        One row per organization with ``id`` (unique and non-null), ``Organization``
+        and ``Website``.
     run_id : str
         Label of this extraction run; mixed into every ``activity_id``.
-    id_col, name_col, url_col : str
-        Column names in ``organizations``.
     site_texts : dict, optional
-        ``url -> SiteText`` already-loaded pages, as the cached website loader
-        returns; when None the SQL website cache is read. No descriptions, Form 990
-        programs or repo-local overlays are ever used as a fallback.
+        ``url -> SiteText`` already-loaded pages; None reads the SQL website cache. No
+        descriptions or Form 990 programs are ever used as a fallback.
     prompt : ExtractionPrompt
         What to extract; defaults to the general prompt.
     runner : callable, optional
-        ``runner(given_ids_texts, prompt, max_workers=..., session=...) ->
-        {cache key: profile}`` replaces `run_extraction_prompt` for offline fixtures.
-        A profile may be a ``prompt.response_model`` instance or a dict; both are
-        validated against the schema.
-    session : sqlalchemy.orm.Session, optional
-        Passed to the website loader and the runner.
+        ``runner(given_ids_texts, prompt, max_workers=...) -> {cache key: profile}``
+        replaces `run_extraction_prompt` for offline fixtures.
     max_workers : int
         Passed to the runner.
 
     Returns
     -------
     ExtractionResult
-        ``organizations`` has one row per input with ``extraction_status`` of
-        ``success``, ``empty``, ``missing_text`` or ``request_failed``; ``activities``
-        has one row per extracted activity (``activity_id``, ``uid``, the schema
-        fields, ``state``, ``cache_id``, ``source_sha256``, ``extraction_run_id``);
-        ``lineage`` records prompt, schema and model identity and status counts.
     """
-    if not isinstance(run_id, str) or not run_id.strip():
-        raise ValueError("run_id must be a nonempty string")
-    required = {id_col, name_col, url_col}
-    if missing := required - set(organizations):
+    if missing := {ID_COL, NAME_COL, URL_COL} - set(organizations):
         raise ValueError(f"Missing organization columns: {sorted(missing)}")
-    if organizations[id_col].isna().any():
-        raise ValueError("Organization IDs cannot be null")
-    ids = organizations[id_col].astype(str)
-    if ids.duplicated().any():
-        raise ValueError("Organization IDs must be unique after string normalization")
+    ids = organizations[ID_COL].astype(str)
+    if organizations[ID_COL].isna().any() or ids.duplicated().any():
+        raise ValueError("Organization IDs must be non-null and unique")
     orgs = [
         OrgInput(
-            uid=str(row[id_col]),
-            name=str(row[name_col]),
-            url=str(row[url_col]).strip() if pd.notna(row[url_col]) and row[url_col] else None,
+            uid=str(row[ID_COL]),
+            name=str(row[NAME_COL]),
+            url=str(row[URL_COL]).strip() if pd.notna(row[URL_COL]) and row[URL_COL] else None,
         )
         for row in organizations.to_dict("records")
     ]
-    if orgs:
-        inputs, meta = build_inputs(orgs, prompt, session=session, site_texts=site_texts)
-    else:
-        inputs, meta = [], {}
+    inputs, meta = build_inputs(orgs, prompt, site_texts=site_texts)
     texts = dict(inputs)
-    profiles = (
-        (runner or run_extraction_prompt)(inputs, prompt, max_workers=max_workers, session=session)
-        if inputs
-        else {}
-    )
+    profiles = (runner or run_extraction_prompt)(inputs, prompt, max_workers=max_workers)
     org_rows, activity_rows = [], []
     for org in orgs:
         profile = profiles.get(org.uid)
         source_hash = create_deterministic_sha256(texts[org.uid]) if org.uid in texts else None
-        status = "missing_text" if org.uid not in texts else "request_failed"
         record = {
             "uid": org.uid,
             "Organization": org.name,
@@ -174,11 +137,9 @@ def extract_frame(
             "summary": None,
             "coverage": None,
             "n_activities": 0,
-            "extraction_status": status,
+            "extraction_status": "missing_text" if org.uid not in texts else "request_failed",
         }
         if profile is not None:
-            # Validate injected/cached output against the same pinned response schema.
-            profile = prompt.response_model.model_validate(profile)
             record.update(
                 Description=render_profile(profile, prompt),
                 summary=profile.summary,
@@ -188,9 +149,8 @@ def extract_frame(
                 **{field: getattr(profile, field) for field in prompt.org_fields()},
             )
             for index, activity in enumerate(profile.activities, start=1):
-                identity = create_deterministic_sha256([run_id, org.uid, index])
                 row = {
-                    "activity_id": identity,
+                    "activity_id": create_deterministic_sha256([run_id, org.uid, index]),
                     "uid": org.uid,
                     "Organization": org.name,
                     "activity_index": index,
@@ -239,7 +199,6 @@ def extract_frame(
         "schema_sha256": create_deterministic_sha256(prompt.response_model.model_json_schema()),
         "model": prompt.model,
         "reasoning": prompt.reasoning,
-        "source_policy": "cached_website_only",
         "n_input_orgs": len(orgs),
         "n_activities": len(activities),
         "status_counts": org_frame.extraction_status.value_counts().to_dict(),

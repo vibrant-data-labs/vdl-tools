@@ -6,8 +6,7 @@ Works for nonprofits, companies, funders, agencies, and research groups alike.
 Each activity carries domain-neutral evidence: who carries out the work, what it is
 aimed at, which sector it sits in, which methods, where it happens, how central it
 is, and whether it is continuing. A downstream tagger for any taxonomy can read these
-records. The Nature tagging pipeline uses ``nature.py`` instead, because its four
-dimensions need ecosystem and land-authority evidence this one does not ask for.
+records.
 
 The prompt contains no taxonomy codes or category names, so the records stay a
 faithful account of the source and can be re-tagged as taxonomies change.
@@ -15,7 +14,7 @@ faithful account of the source and can be re-tagged as taxonomies change.
 Granularity leans toward merging: a line of work is defined by its kind of work, who
 carries it out, and what it aims at, and named programs sharing all three are one
 activity. On 153 seed-42 organizations, two runs of this prompt found the same work
-for 0.949 of activities (LLM alignment, ``align_runs``).
+for 0.949 of activities (LLM alignment judge).
 
 The one worked granularity example (a watershed group) is from nature work. Replacing it
 with an example of the same structure from workforce training made no measurable
@@ -25,8 +24,7 @@ cut the same way 0.780-0.804) fell within the range of two runs of either prompt
 0.761-0.799), and the precision judge accepted 96-99% of activities under both. The
 example stays.
 
-``GENERAL_EXTRACTION_PROMPT`` is the entry point; pass it to
-``activity_extraction.extraction.extract_activities``.
+``GENERAL_EXTRACTION_PROMPT`` is the entry point; ``pipeline.extract_frame`` uses it by default.
 """
 
 from __future__ import annotations
@@ -36,13 +34,6 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from vdl_tools.shared_tools.activity_extraction.extraction import ExtractionPrompt
-
-MODEL = "gpt-5.4-mini"
-PROMPT_NAME = "activity_extraction_general"
-# Same model and effort as the Nature summary, which was measured; this prompt has
-# not been evaluated separately for model or effort.
-REASONING = {"effort": "medium"}
-
 
 GENERAL_PROMPT_TEXT = """\
 You are an analyst building a structured record of what an organization actually \
@@ -231,12 +222,13 @@ class GeneralActivityProfile(BaseModel):
 
 
 GENERAL_EXTRACTION_PROMPT = ExtractionPrompt(
-    name="general",
     text=GENERAL_PROMPT_TEXT,
-    prompt_name=PROMPT_NAME,
+    prompt_name="activity_extraction_general",
     response_model=GeneralActivityProfile,
-    model=MODEL,
-    reasoning=REASONING,
+    # Same model and effort as the oneearth Nature summary, which was measured; this
+    # prompt has not been evaluated separately for model or effort.
+    model="gpt-5.4-mini",
+    reasoning={"effort": "medium"},
     org_labels={
         "geographic_orientation_evidence": "Geographic orientation",
         "site_matches_organization": "Site matches organization",

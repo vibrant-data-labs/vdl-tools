@@ -2,11 +2,9 @@
 Read cached website text out of the psql scrape cache.
 ======================================================
 
-The tagging pipeline never scrapes. It reads whatever
-``vdl_tools.scrape_enrich.scraper.scrape_websites`` already stored, so a
-summarization run costs one LLM call per organization and nothing else.
-Importing the scraper itself pulls in playwright, which this pipeline does
-not need, so the two cache tables are queried directly:
+Extraction never scrapes. It reads whatever
+``vdl_tools.scrape_enrich.scraper.scrape_websites`` already stored, so a run costs one
+LLM call per organization and nothing else. The two cache tables are queried directly:
 
 ``web_pages_scraped``
     One row per page (``cleaned_key``, ``subpath``, ``parsed_html``). Preferred,
@@ -16,10 +14,10 @@ not need, so the two cache tables are queried directly:
     One row per site (``cleaned_home_key``, ``combined_text``). Fallback when
     no per-page rows exist.
 
-Keys follow the scraper's own ``extract_website_name``: the home key is the
-host, and a subpage key is ``<host>/<underscore-joined subpath>``. www is not
-stripped, and a site's pages can be split across the ``www.`` and bare-host
-spellings, so both are read and merged.
+Keys are the scraper's own ``extract_website_name`` (``scrape_enrich.url_keys``): the
+home key is the host, and a subpage key is ``<host>/<underscore-joined subpath>``. www is
+not stripped, and a site's pages can be split across the ``www.`` and bare-host spellings,
+so both are read and merged.
 """
 
 from __future__ import annotations
@@ -30,6 +28,7 @@ from dataclasses import dataclass
 from sqlalchemy import func, or_
 from sqlalchemy.exc import OperationalError
 
+from vdl_tools.scrape_enrich.url_keys import extract_website_name
 from vdl_tools.shared_tools.tools.logger import logger
 from vdl_tools.shared_tools.tools.text_cleaning import clean_scraped_text
 
@@ -68,22 +67,6 @@ def looks_like_error_page(text: str) -> bool:
     return any(marker in lowered for marker in ERROR_PAGE_MARKERS)
 
 
-def extract_website_name(value: str) -> str | None:
-    """Mirror of the scraper's key function, without the playwright import.
-
-    ``https://example.org/a/b`` -> ``example.org_a_b``. Note it deliberately
-    does NOT strip ``www.`` — the cache is keyed on whichever spelling the
-    site was scraped under.
-    """
-    if not value:
-        return None
-    text = str(value).strip()
-    website = text.split("//")[1].strip() if "//" in text else text
-    website = website.split("?")[0].strip()
-    website = website[:-1] if website.endswith("/") else website
-    return website.replace("/", "_").replace(":", "_")
-
-
 def _key_variants(key: str) -> list[str]:
     """Both www and bare-host spellings of a cache key."""
     key = key.lower()
@@ -105,7 +88,6 @@ class SiteText:
     """The cached text for one organization's website."""
 
     url: str
-    key: str
     pages: list[dict]  # {'source', 'subpath', 'text'} records
     source_table: str  # 'web_pages_scraped' | 'web_pages_parsed' | ''
 
@@ -121,10 +103,7 @@ _QUERY_RETRIES = 4
 _QUERY_BACKOFF = 5  # seconds, multiplied by the attempt number
 
 
-def load_site_texts(
-    urls: list[str],
-    session=None,
-) -> dict[str, SiteText]:
+def load_site_texts(urls: list[str]) -> dict[str, SiteText]:
     """Return ``{url: SiteText}`` for every URL, empty ``pages`` when uncached.
 
     Both cache tables are read in two bulk queries; per-page rows win, and
@@ -144,8 +123,8 @@ def load_site_texts(
 
     # One statement per batch rather than one for the whole list: at pool scale the filter
     # becomes thousands of OR'd LIKE clauses in a single query. Batching keeps each statement a
-    # normal size, and each batch retries on its own connection, because the connection to RDS
-    # drops intermittently on a lookup this long — a single drop would otherwise lose a
+    # normal size, and each batch retries on a fresh connection, because the connection to RDS
+    # drops intermittently on a lookup this long; a single drop would otherwise lose a
     # twenty-minute pass over the whole pool.
     page_rows: list[tuple] = []
     site_rows: list[tuple] = []
@@ -153,7 +132,7 @@ def load_site_texts(
         batch = variants[start : start + _QUERY_BATCH]
         for attempt in range(_QUERY_RETRIES):
             try:
-                with get_session(session=session) as active:
+                with get_session() as active:
                     # Match the stored column directly rather than lower(column): wrapping it in
                     # a function makes the btree index on cleaned_key unusable, turning each
                     # batch into a full scan. Measured at 34s per batch with lower() against
@@ -180,8 +159,6 @@ def load_site_texts(
                     )
                 break
             except OperationalError:
-                # A caller-supplied session is now poisoned; drop to a fresh one.
-                session = None
                 if attempt == _QUERY_RETRIES - 1:
                     raise
                 logger.warning(
@@ -197,7 +174,7 @@ def load_site_texts(
     # match our lowercase variants. There are few of them, so pull just their keys, work out
     # which belong to a site we want, and fetch only those rows.
     wanted = set(variants)
-    with get_session(session=session) as active:
+    with get_session() as active:
         mixed_case = [
             k
             for (k,) in active.query(WebPagesScraped.cleaned_key)
@@ -235,7 +212,7 @@ def load_site_texts(
 
     results: dict[str, SiteText] = {}
     for url, key in url_to_key.items():
-        site = SiteText(url=url, key=key or "", pages=[], source_table="")
+        site = SiteText(url=url, pages=[], source_table="")
         if not key:
             results[url] = site
             continue

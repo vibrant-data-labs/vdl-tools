@@ -7,9 +7,13 @@ from vdl_tools.shared_tools.activity_extraction.general import GeneralActivityPr
 from vdl_tools.shared_tools.activity_extraction.pipeline import extract_frame
 from vdl_tools.shared_tools.activity_extraction.scraped_text import SiteText
 from vdl_tools.shared_tools.taxonomy_mapping import drawdown, one_earth
-from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.pipeline import map_subjects
+from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.engine import map_subjects, score_subjects
+from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.exports import export_extraction
 
-ADAPTERS = {"one_earth": one_earth, "drawdown": drawdown}
+PACKAGES = {"one_earth": one_earth, "drawdown": drawdown}
+# The Drawdown wording names these two nodes; a fixture workbook must contain them.
+STEWARDSHIP_SECTOR = "Nature-Based Carbon Removal"
+STEWARDSHIP_CLUSTER = "Protect, Manage, & Restore Ecosystems"
 
 
 @pytest.fixture(autouse=True)
@@ -51,25 +55,10 @@ def profile(activities=2):
 def organizations():
     return pd.DataFrame(
         [
-            {
-                "id": 1,
-                "Organization": "Solar",
-                "Website": "https://solar.example",
-                "Sector": "CB sector",
-            },
-            {"id": 2, "Organization": "Missing", "Website": None, "Sector": "CB sector"},
-            {
-                "id": 3,
-                "Organization": "Failed",
-                "Website": "https://failed.example",
-                "Sector": "CB sector",
-            },
-            {
-                "id": 4,
-                "Organization": "Empty",
-                "Website": "https://empty.example",
-                "Sector": "CB sector",
-            },
+            {"id": "1", "Organization": "Solar", "Website": "https://solar.example", "Sector": "CB"},
+            {"id": "2", "Organization": "Missing", "Website": None, "Sector": "CB"},
+            {"id": "3", "Organization": "Failed", "Website": "https://failed.example", "Sector": "CB"},
+            {"id": "4", "Organization": "Empty", "Website": "https://empty.example", "Sector": "CB"},
         ]
     )
 
@@ -78,7 +67,6 @@ def organizations():
 def extraction(organizations):
     sites = {
         url: SiteText(
-            url,
             url,
             [
                 {
@@ -102,40 +90,34 @@ def extraction(organizations):
 @pytest.fixture
 def taxonomy(tmp_path):
     def make(name="one_earth", duplicate_names=False, excluded=False):
-        columns = (
-            ("Pillar", "Sub-Pillar", "Solution")
-            if name == "one_earth"
-            else ("Sector", "Cluster", "Solution")
-        )
-        sheets = (
-            ("Pillars", "SubPillars", "Solutions")
-            if name == "one_earth"
-            else ("Sectors", "SectorClusters", "Solutions")
-        )
+        package = PACKAGES[name]
+        parents = ("Energy", "Nature" if name == "one_earth" else STEWARDSHIP_SECTOR)
+
+        def cluster(parent):
+            if duplicate_names:
+                return "Repeated"
+            return STEWARDSHIP_CLUSTER if parent == STEWARDSHIP_SECTOR else f"{parent} cluster"
+
         path = tmp_path / f"{name}.xlsx"
         with pd.ExcelWriter(path) as writer:
-            for depth, sheet in enumerate(sheets):
+            for depth, sheet in enumerate(package.SHEETS):
                 rows = []
-                for parent in ("Energy", "Nature"):
+                for parent in parents:
                     row = {
-                        columns[0]: parent,
+                        package.COLUMNS[0]: parent,
                         "Definition": parent + " work.",
-                        "Exclude": int(excluded and parent == "Nature"),
+                        "Exclude": int(excluded and parent == parents[1]),
                     }
                     if depth >= 1:
-                        row[columns[1]] = "Repeated" if duplicate_names else parent + " cluster"
+                        row[package.COLUMNS[1]] = cluster(parent)
                     if depth >= 2:
-                        row[columns[2]] = parent + " solution"
+                        row[package.COLUMNS[2]] = parent + " solution"
                         row.update(
-                            {
-                                "CATEGORY": "Avoid",
-                                "CLIMATE POLLUTANTS": "CO2",
-                                "SPEED OF ACTION": "Fast",
-                            }
+                            {"CATEGORY": "Avoid", "CLIMATE POLLUTANTS": "CO2", "SPEED OF ACTION": "Fast"}
                         )
                     rows.append(row)
                 pd.DataFrame(rows).to_excel(writer, sheet_name=sheet, index=False)
-        return ADAPTERS[name].load_taxonomy(path, variant="base")
+        return package.load_taxonomy(path)
 
     return make
 
@@ -157,13 +139,18 @@ def fake_jev(probabilities=None):
     return run
 
 
-def map_and_export(organizations, extraction, tax, **scoring_options):
-    """What a Climate Landscape job does: map the activities, then run the taxonomy's exporter."""
-    adapter = ADAPTERS[tax.name]
+def subjects_of(extraction):
+    """An extraction's activities as the subject frame the engine takes."""
+    return extraction.activities.rename(columns={"activity_id": "subject_id"})
+
+
+def score_activities(extraction, tax, **options):
+    return score_subjects(subjects_of(extraction), tax, **options)
+
+
+def map_and_export(organizations, extraction, tax, **options):
+    """What a Climate Landscape job does: map the activities, then run the tracker export."""
     mapped = map_subjects(
-        extraction.activities.rename(columns={"activity_id": "subject_id"}),
-        tax,
-        policy=adapter.default_policy(),
-        **scoring_options,
+        subjects_of(extraction), tax, policy=PACKAGES[tax.name].DEFAULT_POLICY, **options
     )
-    return adapter.export_extraction(organizations, extraction, tax, mapped)
+    return export_extraction(organizations, extraction, tax, mapped, mapping_name=f"{tax.name}_category")

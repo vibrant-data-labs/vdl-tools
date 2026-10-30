@@ -2,46 +2,41 @@
 Activity extraction engine: cached website text -> structured activity profile.
 ===============================================================================
 
-One cached LLM call per organization turns the scraped pages for its website
-into a profile: a prose summary plus a list of the organization's distinct
-activities, each carrying plain-language evidence fields.
+One cached LLM call per organization turns the scraped pages for its website into a
+profile: a prose summary plus a list of the organization's distinct activities, each
+carrying plain-language evidence fields.
 
-What the profile asks for is set by an ``ExtractionPrompt``: the instructions,
-the Pydantic response schema, and the labels used to render it. The prompts live
-in ``activity_extraction.prompts``: ``general`` works for any organization, and
-``nature`` carries the evidence the Nature taxonomy's four dimensions need. The
-engine is the same for both.
+What the profile asks for is set by an ``ExtractionPrompt``: the instructions, the
+Pydantic response schema, and the labels used to render it. ``general.py`` holds the
+one prompt in use; the engine does not depend on it.
 
 Schema contract
 ---------------
 An extraction prompt's ``response_model`` must have ``summary: str``, ``coverage: str`` and
 ``activities: list[<model>]``, where each activity model has ``activity: str``,
-``evidence: str`` and ``certainty: str``. Every other field is free, and is
-rendered and exported in the order the model declares it.
+``evidence: str`` and ``certainty: str``. Every other field is free, and is rendered and
+exported in the order the model declares it.
 
-Main entry points
------------------
-``extract_activities(orgs, prompt, ...)``
-    Runs the extraction prompt over cached website text, one cached call per org.
+Entry points
+------------
+``build_inputs(orgs, prompt, site_texts)``
+    Assembles the (cache key, prompt text) pairs from cached website text.
 ``run_extraction_prompt(given_ids_texts, prompt, ...)``
-    The cached model call itself, through the shared ``InstructorPRC`` cache.
+    The cached model call, through the shared ``InstructorPRC`` cache.
 ``render_profile(profile, prompt)``
     Renders a profile as human-readable Description text.
-``orgs_from_frame(df)``
-    Builds ``OrgInput`` rows from a frame with uid / Organization / Website.
-``activity_frame(profiles)`` / ``profile_frame(profiles, prompt)``
-    One row per activity / one row per organization.
 """
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 
-import pandas as pd
 from pydantic import BaseModel
 
 from vdl_tools.shared_tools.activity_extraction.scraped_text import load_site_texts
 from vdl_tools.shared_tools.tools.logger import logger
+from vdl_tools.shared_tools.web_summarization.make_page_text import make_group_text
 
 # make_group_text budgets against the model's full context window and reserves
 # only 100 tokens for the answer, which overflows on a site like nature.org
@@ -60,18 +55,16 @@ _PROFILE_SPECIAL = ("summary", "activities", "coverage")
 class ExtractionPrompt:
     """What to extract: instructions, response schema, cache identity, render labels.
 
-    ``prompt_name`` labels the cache prompt; the cache identity itself is the
-    prompt text plus ``response_model``'s JSON schema (see ``InstructorPRC``).
-    Change ``prompt_name`` when the prompt changes meaning. ``org_labels`` maps org-level profile fields to the
-    labels used in the rendered Description; fields not listed are labelled
-    from their names.
+    ``prompt_name`` labels the cache prompt; the cache identity itself is the prompt
+    text plus ``response_model``'s JSON schema (see ``InstructorPRC``). ``org_labels``
+    maps org-level profile fields to the labels used in the rendered Description;
+    fields not listed are labelled from their names.
     """
 
-    name: str
     text: str
     prompt_name: str
     response_model: type[BaseModel]
-    model: str = "gpt-5.4-mini"
+    model: str
     reasoning: dict | None = None
     org_labels: dict[str, str] = field(default_factory=dict)
 
@@ -92,8 +85,6 @@ class OrgInput:
     uid: str
     name: str
     url: str | None = None
-    fallback_text: str | None = None  # used when no website text is cached
-    liveness_action: str = ""  # from a liveness pass, carried to output
 
 
 def _label(field_name: str) -> str:
@@ -105,13 +96,11 @@ def _label(field_name: str) -> str:
 def cap_pages(pages: list[dict]) -> list[dict]:
     """Trim pages so a huge site can't overflow the model's context window.
 
-    Each page is truncated first, so one enormous page cannot crowd out the
-    rest; the page list is then cut at the total budget. Pages arrive in the
-    scraper's order, with the home page and short structural paths first, so
-    what survives is the descriptive material rather than story archives.
+    Each page is truncated first, so one enormous page cannot crowd out the rest; the
+    page list is then cut at the total budget. Pages are ordered by subpath length,
+    with the home page and short structural paths first, so what survives is the
+    descriptive material rather than story archives.
     """
-    import hashlib
-
     capped, total = [], 0
     pages = sorted(
         pages, key=lambda p: (len(p["subpath"]), hashlib.md5(p["subpath"].encode()).hexdigest())
@@ -159,65 +148,47 @@ def render_profile(profile: BaseModel, prompt: ExtractionPrompt) -> str:
 def build_inputs(
     orgs: list[OrgInput],
     prompt: ExtractionPrompt,
-    session=None,
-    allow_archived_fallback: bool = False,
     site_texts: dict | None = None,
 ) -> tuple[list[tuple[str, str]], dict[str, dict]]:
     """Assemble the (cache key, prompt text) pairs and per-org provenance.
 
-    Returns ``(given_ids_texts, meta)`` where ``meta[cache_key]`` records the
-    uid, org name, text source, and character count behind that call.
+    Only current cached website text is used. An organization with none is skipped and
+    reported; it is never back-filled from a description or other stale text.
 
-    ``allow_archived_fallback`` is off by default and should stay off unless
-    someone has decided, per organization, that stale text is acceptable. A
-    prior description is typically a year-old summary of a summary: activity
-    records built from it read exactly like records built from a live site,
-    and describe in the present tense work that may have ended. An
-    organization with no current text is skipped and reported, not quietly
-    back-filled.
+    Parameters
+    ----------
+    orgs : list[OrgInput]
+    prompt : ExtractionPrompt
+        Supplies the instructions and model that ``make_group_text`` budgets against.
+    site_texts : dict, optional
+        ``url -> SiteText``; None reads the SQL website cache.
+
+    Returns
+    -------
+    tuple[list[tuple[str, str]], dict[str, dict]]
+        ``given_ids_texts`` as ``(uid, text)`` pairs, and ``meta[uid]`` with ``uid``,
+        ``Organization``, ``Website``, ``text_source`` and ``text_chars``.
     """
     if site_texts is None:
-        site_texts = load_site_texts([o.url for o in orgs if o.url], session=session)
-
+        site_texts = load_site_texts([o.url for o in orgs if o.url])
     given_ids_texts: list[tuple[str, str]] = []
     meta: dict[str, dict] = {}
     for org in orgs:
         site = site_texts.get(org.url) if org.url else None
-        if site and site.pages:
-            # Current website text: the normal path
-            from vdl_tools.shared_tools.web_summarization.make_page_text import make_group_text
-
-            page_text = make_group_text(prompt.text, cap_pages(site.pages), model=prompt.model)
-            text = f"ORGANIZATION: {org.name}\n\n{page_text}" if page_text else None
-            source = site.source_table
-            n_chars = site.n_chars
-        elif org.fallback_text and allow_archived_fallback:
-            # No cached page text: summarize the description already on file so
-            # the org still gets an activity record set, flagged as such.
-            text = (
-                f"ORGANIZATION: {org.name}\n\n"
-                f"URL: {org.url or 'unknown'}\nTEXT: {org.fallback_text}"
-            )
-            source = "existing_description"
-            n_chars = len(org.fallback_text)
-        else:
-            logger.warning(
-                "No current website text for %s (%s)%s",
-                org.name,
-                org.uid,
-                "" if allow_archived_fallback else " — skipped (archived fallback is off)",
-            )
+        if not (site and site.pages):
+            logger.warning("No cached website text for %s (%s); skipped", org.name, org.uid)
             continue
-        if not text:
+        page_text = make_group_text(prompt.text, cap_pages(site.pages), model=prompt.model)
+        if not page_text:
             logger.warning("Empty prompt text for %s (%s)", org.name, org.uid)
             continue
-        given_ids_texts.append((org.uid, text))
+        given_ids_texts.append((org.uid, f"ORGANIZATION: {org.name}\n\n{page_text}"))
         meta[org.uid] = {
             "uid": org.uid,
             "Organization": org.name,
             "Website": org.url,
-            "text_source": source,
-            "text_chars": n_chars,
+            "text_source": site.source_table,
+            "text_chars": site.n_chars,
         }
     return given_ids_texts, meta
 
@@ -230,7 +201,6 @@ def run_extraction_prompt(
     read_from_cache: bool = True,
     write_to_cache: bool = True,
     n_per_commit: int = 200,
-    session=None,
 ) -> dict[str, BaseModel]:
     """Run one extraction prompt over many inputs through the shared structured cache.
 
@@ -247,14 +217,12 @@ def run_extraction_prompt(
         Cache behaviour, as for `InstructorPRC.bulk_get_cache_or_run`.
     n_per_commit : int
         Rows per database commit.
-    session : sqlalchemy.orm.Session, optional
-        Reuse an open session; otherwise one is opened for this call.
 
     Returns
     -------
     dict[str, BaseModel]
-        cache key -> parsed ``prompt.response_model``. Inputs whose request failed
-        are absent; `extract_frame` records them as ``request_failed``.
+        cache key -> parsed ``prompt.response_model``. Inputs whose request failed are
+        absent; `extract_frame` records them as ``request_failed``.
     """
     from vdl_tools.shared_tools.database_cache.database_utils import get_session
     from vdl_tools.shared_tools.openai.prompt_response_cache_instructor import InstructorPRC
@@ -262,9 +230,9 @@ def run_extraction_prompt(
     if not given_ids_texts:
         return {}
     api_kwargs = {"reasoning": prompt.reasoning} if prompt.reasoning else {}
-    with get_session(session=session) as active:
+    with get_session() as session:
         cache = InstructorPRC(
-            session=active,
+            session=session,
             prompt_str=prompt.text,
             prompt_name=prompt.prompt_name,
             response_model=prompt.response_model,
@@ -281,111 +249,3 @@ def run_extraction_prompt(
             max_workers=max_workers,
             **api_kwargs,
         )
-
-
-def extract_activities(
-    orgs: list[OrgInput],
-    prompt: ExtractionPrompt,
-    max_workers: int = 16,
-    read_from_cache: bool = True,
-    write_to_cache: bool = True,
-    allow_archived_fallback: bool = False,
-    # The cache runs one chunk at a time and blocks until every call in it
-    # returns, so a chunk costs its slowest call and the pool idles meanwhile.
-    # A big site can hold up nineteen others at the shared default of 20.
-    # Summary responses are ~3KB (p95 6KB), so a 200-row commit is well under a
-    # megabyte — the small default exists for judge responses, which are far
-    # larger, and does not need to apply here.
-    n_per_commit: int = 200,
-    session=None,
-) -> dict[str, tuple[BaseModel, dict]]:
-    """Extract an activity profile for each organization with cached website text.
-
-    Model and reasoning effort come from ``prompt``; use ``dataclasses.replace``
-    to override them. Returns ``{uid: (profile, meta)}``.
-    """
-    given_ids_texts, meta = build_inputs(
-        orgs,
-        prompt,
-        session=session,
-        allow_archived_fallback=allow_archived_fallback,
-    )
-    logger.info(
-        "Extracting activities (%s prompt) for %s organizations with %s",
-        prompt.name,
-        len(given_ids_texts),
-        prompt.model,
-    )
-    profiles = run_extraction_prompt(
-        given_ids_texts,
-        prompt,
-        max_workers=max_workers,
-        read_from_cache=read_from_cache,
-        write_to_cache=write_to_cache,
-        n_per_commit=n_per_commit,
-        session=session,
-    )
-    return {meta[k]["uid"]: (p, meta[k]) for k, p in profiles.items() if k in meta}
-
-
-def orgs_from_frame(df: pd.DataFrame) -> list[OrgInput]:
-    """``OrgInput`` rows from a frame with ``uid``, ``Organization``, ``Website``.
-
-    ``Description`` (the archived-fallback text) and ``liveness_action`` are
-    read when present.
-    """
-
-    def _opt(row, col: str) -> str | None:
-        value = row.get(col)
-        return str(value) if value is not None and pd.notna(value) else None
-
-    return [
-        OrgInput(
-            uid=str(row["uid"]),
-            name=str(row["Organization"]),
-            url=_opt(row, "Website"),
-            fallback_text=_opt(row, "Description"),
-            liveness_action=_opt(row, "liveness_action") or "",
-        )
-        for _, row in df.iterrows()
-    ]
-
-
-def activity_frame(profiles: dict[str, tuple[BaseModel, dict]]) -> pd.DataFrame:
-    """One row per activity: uid, Organization, activity_index, then the activity fields."""
-    return pd.DataFrame(
-        [
-            {
-                "uid": uid,
-                "Organization": meta["Organization"],
-                "activity_index": i,
-                **activity.model_dump(),
-            }
-            for uid, (profile, meta) in profiles.items()
-            for i, activity in enumerate(profile.activities, start=1)
-        ]
-    )
-
-
-def profile_frame(
-    profiles: dict[str, tuple[BaseModel, dict]],
-    prompt: ExtractionPrompt,
-) -> pd.DataFrame:
-    """One row per organization: rendered Description, summary, org-level fields, provenance."""
-    return pd.DataFrame(
-        [
-            {
-                "uid": uid,
-                "Organization": meta["Organization"],
-                "Website": meta.get("Website"),
-                "Description": render_profile(profile, prompt),
-                "summary": profile.summary,
-                "n_activities": len(profile.activities),
-                "coverage": profile.coverage,
-                **{f: getattr(profile, f) for f in prompt.org_fields()},
-                "text_source": meta.get("text_source", ""),
-                "text_chars": meta.get("text_chars", 0),
-            }
-            for uid, (profile, meta) in profiles.items()
-        ]
-    )

@@ -1,4 +1,7 @@
-"""Exact Drawdown question templates ported from drawdown; see docs/activity_jev_contract.md."""
+"""Drawdown question wording, ported from the drawdown prototype's ``stewardship_yes`` variant.
+
+See docs/activity_jev_contract.md for the source revision.
+"""
 
 NODE_QUESTION = (
     'Does this activity fall under the Drawdown {level} "{name}"{parent}? '
@@ -12,50 +15,19 @@ _STEWARDSHIP_TRUE = (
     "climate is not mentioned."
 )
 
-_STEWARDSHIP_FALSE = (
-    " Conservation work does not qualify when the activity only educates, holds events, "
-    "publishes, raises or grants money, or advocates, without itself protecting, "
-    "managing, stewarding, or restoring land, habitat, or ecosystems."
-)
-
-QUESTION_VARIANTS: dict[str, dict[tuple[str, str], dict]] = {
-    "base": {},
-    "stewardship": {
-        ("Sector", "Nature-Based Carbon Removal"): {
-            "criteria": {
-                "true": 'The activity fits the definition of "Nature-Based Carbon Removal".'
-                + _STEWARDSHIP_TRUE,
-                "false": 'The activity fits none of the definition of "Nature-Based Carbon '
-                'Removal".' + _STEWARDSHIP_FALSE,
-            }
-        },
-        ("Cluster", "Protect, Manage, & Restore Ecosystems"): {
-            "criteria": {
-                "true": 'The activity fits the definition of "Protect, Manage, & Restore '
-                'Ecosystems".' + _STEWARDSHIP_TRUE,
-                "false": 'The activity fits none of the definition of "Protect, Manage, & '
-                'Restore Ecosystems".' + _STEWARDSHIP_FALSE,
-            }
-        },
+# Two nature nodes get explicit criteria so land and habitat stewardship counts as
+# qualifying work. The "no" side only restates the definition, so enabling work (policy,
+# financing, education) stays governed by the definitions, which include it.
+STEWARDSHIP_CRITERIA = {
+    ("Sector", "Nature-Based Carbon Removal"): {
+        "true": 'The activity fits the definition of "Nature-Based Carbon Removal".'
+        + _STEWARDSHIP_TRUE,
+        "false": 'The activity fits none of the definition of "Nature-Based Carbon Removal".',
     },
-    # Same "yes" sentence; the "no" side only restates the definition, so enabling work
-    # (policy, financing, education) stays governed by the definitions, which include it.
-    "stewardship_yes": {
-        ("Sector", "Nature-Based Carbon Removal"): {
-            "criteria": {
-                "true": 'The activity fits the definition of "Nature-Based Carbon Removal".'
-                + _STEWARDSHIP_TRUE,
-                "false": 'The activity fits none of the definition of "Nature-Based Carbon '
-                'Removal".',
-            }
-        },
-        ("Cluster", "Protect, Manage, & Restore Ecosystems"): {
-            "criteria": {
-                "true": 'The activity fits the definition of "Protect, Manage, & Restore '
-                'Ecosystems".' + _STEWARDSHIP_TRUE,
-                "false": 'The activity fits none of the definition of "Protect, Manage, & '
-                'Restore Ecosystems".',
-            }
-        },
+    ("Cluster", "Protect, Manage, & Restore Ecosystems"): {
+        "true": 'The activity fits the definition of "Protect, Manage, & Restore Ecosystems".'
+        + _STEWARDSHIP_TRUE,
+        "false": 'The activity fits none of the definition of "Protect, Manage, & Restore '
+        'Ecosystems".',
     },
 }

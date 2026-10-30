@@ -173,7 +173,7 @@ class InstructorPRC(PromptResponseCacheSQL):
             max_workers=max_workers,
             max_errors=max_errors,
             **kwargs,
-        ) or {}
+        )
         return {
             given_id: self.response_model.model_validate_json(row["response_text"])
             for given_id, row in rows.items()

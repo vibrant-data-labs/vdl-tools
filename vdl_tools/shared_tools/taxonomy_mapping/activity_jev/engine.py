@@ -1,8 +1,8 @@
 """Score subjects against taxonomy nodes through the cached Jev gateway; select matches offline.
 
-Scoring (``score_subjects``) is the only step that talks to the gateway, through the
-existing SQL prompt cache. Selection (``select_matches``) is deterministic and needs
-no credentials, so thresholds can be changed and re-applied to saved scores.
+``score_subjects`` is the only step that talks to the gateway, through the existing SQL
+prompt cache. ``select_matches`` is deterministic and needs no credentials, so a policy can
+be changed and re-applied to the same scores. ``map_subjects`` runs both.
 """
 
 from __future__ import annotations
@@ -18,6 +18,9 @@ from ...tools.unique_ids import create_deterministic_sha256
 from .taxonomies import Taxonomy
 
 JEV_MODEL = "typesafe-ai/jev"
+# cl100k estimate per request; leaves at least 16k of the gateway's 64k context for the
+# subject state, request framing and tokenizer differences.
+MAX_QUESTION_TOKENS = 48_000
 
 
 @dataclass(frozen=True)
@@ -27,7 +30,7 @@ class MatchPolicy:
     Attributes
     ----------
     thresholds : tuple[float, ...]
-        Strictly descending tiers. A subject is matched to every node at or above
+        Descending tiers. A subject is matched to every node at or above
         ``thresholds[0]``; only a subject with no such node falls through to
         ``thresholds[1]``, and so on. Default ``(0.7, 0.5)``.
     descend : float, optional
@@ -38,18 +41,6 @@ class MatchPolicy:
 
     thresholds: tuple[float, ...] = (0.7, 0.5)
     descend: float | None = None
-
-    def __post_init__(self):
-        if not self.thresholds or any(
-            not math.isfinite(t) or not 0 <= t <= 1 for t in self.thresholds
-        ):
-            raise ValueError("Thresholds must be finite probabilities")
-        if any(a <= b for a, b in zip(self.thresholds, self.thresholds[1:], strict=False)):
-            raise ValueError("Fallback thresholds must be strictly descending")
-        if self.descend is not None and (
-            not math.isfinite(self.descend) or not 0 <= self.descend <= 1
-        ):
-            raise ValueError("Descent threshold must be a finite probability")
 
     @property
     def sha256(self):
@@ -71,10 +62,8 @@ class ScoringResult:
         ``question_sha256``, ``n_questions``, ``model``, ``error`` (None on success,
         otherwise why the group has no scores), ``input_tokens``, ``output_tokens``.
     lineage : dict
-        ``taxonomy``, ``questions_sha256``, ``max_question_tokens``, ``subject_kind``,
-        ``taxonomy_path``, ``taxonomy_sha256``, ``question_variant``, ``model``,
-        ``question_sets`` (group -> question hash), ``n_nodes``, ``n_groups``,
-        ``n_subjects``, ``n_failed_requests``.
+        ``taxonomy``, ``taxonomy_path``, ``taxonomy_sha256``, ``questions_sha256``,
+        ``model``, ``n_nodes``, ``n_groups``, ``n_subjects``, ``n_failed_requests``.
     """
 
     scores: pd.DataFrame
@@ -82,7 +71,28 @@ class ScoringResult:
     lineage: dict
 
 
+@dataclass
+class SubjectMappingResult:
+    """Everything ``map_subjects`` produces for one taxonomy.
+
+    Attributes
+    ----------
+    subject_paths : pandas.DataFrame
+        Selected matches from ``select_matches``.
+    scores, usage : pandas.DataFrame
+        As on ``ScoringResult``.
+    lineage : dict
+        The scoring lineage plus ``policy``, ``policy_sha256`` and ``max_mapping_level``.
+    """
+
+    subject_paths: pd.DataFrame
+    scores: pd.DataFrame
+    usage: pd.DataFrame
+    lineage: dict
+
+
 def _noul_values(raw, questions):
+    """Parse a Jev answer payload into ``{node_id: probability}``; raise if incomplete or invalid."""
     answers = json.loads(raw) if isinstance(raw, str) else raw
     if not isinstance(answers, dict) or set(answers) != set(questions):
         raise ValueError("Missing or unexpected Jev answers")
@@ -97,7 +107,7 @@ def _noul_values(raw, questions):
     return values
 
 
-def question_sets(taxonomy: Taxonomy, *, max_tokens: int = 48_000) -> dict[str, dict]:
+def question_sets(taxonomy: Taxonomy, *, max_tokens: int = MAX_QUESTION_TOKENS) -> dict[str, dict]:
     """Pack the taxonomy's questions into deterministic request groups under a token budget.
 
     Parameters
@@ -105,9 +115,7 @@ def question_sets(taxonomy: Taxonomy, *, max_tokens: int = 48_000) -> dict[str, 
     taxonomy : Taxonomy
         Its ``nodes`` are taken in order; each contributes ``node_id -> question``.
     max_tokens : int
-        cl100k estimate allowed per group, at most 48 000. That reserves at least
-        16k of the gateway's 64k context for subject state, request framing and
-        tokenizer differences.
+        cl100k estimate allowed per group.
 
     Returns
     -------
@@ -118,28 +126,23 @@ def question_sets(taxonomy: Taxonomy, *, max_tokens: int = 48_000) -> dict[str, 
     Raises
     ------
     ValueError
-        A budget outside 1..48000, or a single question that alone exceeds it.
-        Definitions are never truncated to make a request fit.
+        A single question that alone exceeds the budget. Definitions are never
+        truncated to make a request fit.
     """
-    if max_tokens <= 0 or max_tokens > 48_000:
-        raise ValueError("Question token budget must be in 1..48000")
     encoding = tiktoken.get_encoding("cl100k_base")
+
+    def size(questions):
+        return len(encoding.encode(json.dumps(questions, sort_keys=True), disallowed_special=()))
+
     groups, current = {}, {}
     for row in taxonomy.nodes.to_dict("records"):
-        candidate = {**current, row["node_id"]: row["question"]}
-        tokens = len(encoding.encode(json.dumps(candidate, sort_keys=True), disallowed_special=()))
-        if tokens > max_tokens:
-            if not current:
-                raise ValueError(f"Taxonomy question exceeds request budget: {row['node_id']}")
+        single = {row["node_id"]: row["question"]}
+        if size(single) > max_tokens:
+            raise ValueError(f"Taxonomy question exceeds request budget: {row['node_id']}")
+        if current and size({**current, **single}) > max_tokens:
             groups[f"g{len(groups):03}"] = current
-            current = {row["node_id"]: row["question"]}
-            if (
-                len(encoding.encode(json.dumps(current, sort_keys=True), disallowed_special=()))
-                > max_tokens
-            ):
-                raise ValueError(f"Taxonomy question exceeds request budget: {row['node_id']}")
-        else:
-            current = candidate
+            current = {}
+        current.update(single)
     if current:
         groups[f"g{len(groups):03}"] = current
     return groups
@@ -153,13 +156,12 @@ def sql_request(
     max_workers=4,
     read_from_cache=True,
     write_to_cache=True,
-    session=None,
 ):
     """Send one question group for many subjects through the cached SQL Jev adapter.
 
     This is the default ``request_runner`` of ``score_subjects``; tests inject a fake
-    with the same signature. Imports are local so offline selection needs no
-    database configuration.
+    with the same signature. Imports are local so offline selection needs no database
+    configuration.
 
     Parameters
     ----------
@@ -168,65 +170,38 @@ def sql_request(
     ids_texts : list[tuple[str, str]]
         ``(cache_id, state)`` pairs; ``cache_id`` keys the cache row.
     prompt_name : str
-        Human-readable cache prompt name (taxonomy, subject kind, variant, group).
+        Human-readable cache prompt name.
     max_workers : int
         Parallel gateway calls.
     read_from_cache, write_to_cache : bool
         Cache behaviour, as for ``bulk_get_cache_or_run``.
-    session : sqlalchemy.orm.Session, optional
-        Reuse an open session; otherwise one is opened for the call.
 
     Returns
     -------
     dict[str, dict]
         ``cache_id -> row`` with ``response_text`` (JSON ``{node_id: {"noul": p}}``)
         and ``response_full``. Requests that failed after bounded retries are absent.
-        A cached row whose answers are incomplete or invalid is re-requested once
-        without reading the cache, so malformed rows written by older callers heal.
     """
     from ...database_cache.database_utils import get_session
     from ...openai.prompt_response_cache_jev import JevPromptResponseCacheSQL
 
     class CompleteNoulCache(JevPromptResponseCacheSQL):
+        """Store an incomplete or invalid gateway answer as an error so a later run retries it."""
+
         def get_completion(self, prompt_str, text, return_all=False, **kwargs):
             response = super().get_completion(prompt_str, text, return_all=True, **kwargs)
-            # Invalid gateway responses must be stored as errors so later runs
-            # can retry, rather than caching incomplete answers as a success.
             _noul_values(response.output_text, self.questions)
             return response if return_all else response.payload["answers"]
 
-    with get_session(session=session) as active:
-        cache = CompleteNoulCache(session=active, questions=questions, prompt_name=prompt_name)
-        rows = (
-            cache.bulk_get_cache_or_run(
-                ids_texts,
-                max_workers=max_workers,
-                max_errors=3,
-                read_from_cache=read_from_cache,
-                write_to_cache=write_to_cache,
-            )
-            or {}
+    with get_session() as session:
+        cache = CompleteNoulCache(session=session, questions=questions, prompt_name=prompt_name)
+        return cache.bulk_get_cache_or_run(
+            ids_texts,
+            max_workers=max_workers,
+            max_errors=3,
+            read_from_cache=read_from_cache,
+            write_to_cache=write_to_cache,
         )
-        invalid = set()
-        for uid, row in rows.items():
-            try:
-                _noul_values(row.get("response_text"), questions)
-            except (ValueError, TypeError):
-                invalid.add(uid)
-        if invalid:
-            # Repair malformed rows written by older callers of the base cache.
-            rows = {uid: row for uid, row in rows.items() if uid not in invalid}
-            rows.update(
-                cache.bulk_get_cache_or_run(
-                    [(uid, state) for uid, state in ids_texts if uid in invalid],
-                    max_workers=max_workers,
-                    max_errors=3,
-                    read_from_cache=False,
-                    write_to_cache=write_to_cache,
-                )
-                or {}
-            )
-        return rows
 
 
 def score_subjects(
@@ -234,12 +209,9 @@ def score_subjects(
     taxonomy,
     *,
     request_runner=None,
-    session=None,
     max_workers=4,
     read_from_cache=True,
     write_to_cache=True,
-    max_question_tokens=48_000,
-    namespace="",
 ) -> ScoringResult:
     """Ask every node's question of every subject and keep every probability.
 
@@ -247,65 +219,42 @@ def score_subjects(
     ----------
     subjects : pandas.DataFrame
         One row per subject with ``subject_id`` (unique, non-null) and ``state`` (the
-        text Jev judges, at most 8 000 cl100k tokens). Optional ``cache_id`` replaces
-        the derived key ``create_deterministic_sha256([namespace, subject_id, state])``; optional
-        ``kind`` must equal ``taxonomy.subject_kind`` when both are set.
+        non-empty text Jev judges). Optional ``cache_id`` keys the cache row; when
+        absent it is the SHA-256 of ``[subject_id, state]``.
     taxonomy : Taxonomy
         Supplies the questions and the identity recorded in ``lineage``.
     request_runner : callable, optional
         ``runner(questions, ids_texts, *, prompt_name, max_workers, read_from_cache,
-        write_to_cache, session) -> {cache_id: row}``; defaults to ``sql_request``.
-    session : sqlalchemy.orm.Session, optional
-        Passed to the runner.
+        write_to_cache) -> {cache_id: row}``; defaults to ``sql_request``.
     max_workers : int
         Passed to the runner.
     read_from_cache, write_to_cache : bool
         Passed to the runner.
-    max_question_tokens : int
-        Budget per request group; see ``question_sets``.
-    namespace : str
-        Caller namespace mixed into derived cache IDs so two projects never share a
-        subject's cached answers by accident.
 
     Returns
     -------
     ScoringResult
         A request group whose answers are missing, incomplete or invalid yields no
         scores for that subject and a non-null ``error`` in ``usage``; selection later
-        refuses such a subject rather than matching on partial evidence.
+        skips such a subject rather than matching on partial evidence.
 
     Raises
     ------
     ValueError
-        Missing columns, null or duplicate subject IDs, a ``kind`` that contradicts
-        the taxonomy, an empty or oversized ``state``, or one ``cache_id`` used for
-        two different states.
+        Missing columns, null or duplicate subject IDs, or an empty ``state``.
     """
     subjects = subjects.copy()
-    required = {"subject_id", "state"}
-    if missing := required - set(subjects):
+    if missing := {"subject_id", "state"} - set(subjects):
         raise ValueError(f"Missing subject columns: {sorted(missing)}")
     if subjects.subject_id.isna().any() or subjects.subject_id.duplicated().any():
         raise ValueError("Subject IDs must be non-null and unique")
+    if not all(isinstance(s, str) and s.strip() for s in subjects.state):
+        raise ValueError("Subject state cannot be empty")
     if "cache_id" not in subjects:
         subjects["cache_id"] = [
-            create_deterministic_sha256([namespace, str(r.subject_id), r.state]) for r in subjects.itertuples()
+            create_deterministic_sha256([str(r.subject_id), r.state]) for r in subjects.itertuples()
         ]
-    if (
-        taxonomy.subject_kind
-        and "kind" in subjects
-        and not subjects.kind.eq(taxonomy.subject_kind).all()
-    ):
-        raise ValueError("Subject kind does not match taxonomy question wording")
-    groups = question_sets(taxonomy, max_tokens=max_question_tokens)
-    encoding = tiktoken.get_encoding("cl100k_base")
-    for row in subjects.to_dict("records"):
-        if not isinstance(row["state"], str) or not row["state"].strip():
-            raise ValueError("Subject state cannot be empty")
-        if len(encoding.encode(row["state"], disallowed_special=())) > 8_000:
-            raise ValueError(f"Subject state exceeds token budget: {row['subject_id']}")
-    if subjects.groupby("cache_id").state.nunique().gt(1).any():
-        raise ValueError("A cache ID cannot refer to multiple subject states")
+    groups = question_sets(taxonomy)
     pairs = list(
         subjects[["cache_id", "state"]].drop_duplicates().itertuples(index=False, name=None)
     )
@@ -316,11 +265,10 @@ def score_subjects(
             runner(
                 questions,
                 pairs,
-                prompt_name=f"{taxonomy.name} Jev {'activities' if taxonomy.subject_kind == 'activity' else 'subjects'} ({taxonomy.variant}) {group}",
+                prompt_name=f"{taxonomy.name} Jev {group}",
                 max_workers=max_workers,
                 read_from_cache=read_from_cache,
                 write_to_cache=write_to_cache,
-                session=session,
             )
             if pairs
             else {}
@@ -354,17 +302,16 @@ def score_subjects(
                     "output_tokens": token_usage.get("output_tokens"),
                 }
             )
-            if error is None:
-                scores.extend(
-                    {
-                        "subject_id": subject["subject_id"],
-                        "node_id": node,
-                        "prob": p,
-                        "request_group": group,
-                        "question_sha256": question_hash,
-                    }
-                    for node, p in values.items()
-                )
+            scores.extend(
+                {
+                    "subject_id": subject["subject_id"],
+                    "node_id": node,
+                    "prob": p,
+                    "request_group": group,
+                    "question_sha256": question_hash,
+                }
+                for node, p in values.items()
+            )
     score_frame = pd.DataFrame(
         scores, columns=["subject_id", "node_id", "prob", "request_group", "question_sha256"]
     )
@@ -386,14 +333,10 @@ def score_subjects(
         usage_frame,
         {
             "taxonomy": taxonomy.name,
-            "questions_sha256": taxonomy.questions_sha256,
-            "max_question_tokens": max_question_tokens,
-            "subject_kind": taxonomy.subject_kind,
             "taxonomy_path": taxonomy.path,
             "taxonomy_sha256": taxonomy.sha256,
-            "question_variant": taxonomy.variant,
+            "questions_sha256": taxonomy.questions_sha256,
             "model": JEV_MODEL,
-            "question_sets": {g: create_deterministic_sha256(q) for g, q in groups.items()},
             "n_nodes": len(taxonomy.nodes),
             "n_groups": len(groups),
             "n_subjects": len(subjects),
@@ -429,13 +372,12 @@ def drop_implied(paths, columns, *, id_col="subject_id"):
 
 
 def select_matches(result: ScoringResult, taxonomy: Taxonomy, policy: MatchPolicy) -> pd.DataFrame:
-    """Turn saved probabilities into matched paths with an explicit policy; no API calls.
+    """Turn probabilities into matched paths with an explicit policy; no API calls.
 
     Parameters
     ----------
     result : ScoringResult
-        Scores and usage for the subjects. Must have been produced for ``taxonomy``
-        (same payload hash, variant and question hash) and the same subject kind.
+        Scores and usage produced for ``taxonomy`` (same payload hash and question hash).
     taxonomy : Taxonomy
         Supplies node paths and the hierarchy used for descent and implication.
     policy : MatchPolicy
@@ -451,54 +393,23 @@ def select_matches(result: ScoringResult, taxonomy: Taxonomy, policy: MatchPolic
         ``level``, ``assignment`` of ``own`` / ``descend`` / ``implied`` and
         ``prob``) and ``policy_sha256``. Ancestors of a selected node are implied
         regardless of their own probabilities; a path implied by a deeper selected
-        path is not repeated as its own row.
+        path is not repeated as its own row. A subject with a failed request group is
+        skipped, never partially matched.
 
     Raises
     ------
     ValueError
-        Scores from a different taxonomy, variant, question set or subject kind;
-        a subject with scores for only some nodes; a probability outside [0, 1]; or
-        duplicate (subject, node) scores. Subjects with a failed request group are
-        skipped, not partially matched.
+        Scores from a different taxonomy payload or question set.
     """
-    if (
-        result.lineage.get("taxonomy_sha256") != taxonomy.sha256
-        or result.lineage.get("question_variant") != taxonomy.variant
+    if (result.lineage["taxonomy_sha256"], result.lineage["questions_sha256"]) != (
+        taxonomy.sha256,
+        taxonomy.questions_sha256,
     ):
-        raise ValueError("Stored scores belong to a different taxonomy or question variant")
-    questions_match = result.lineage.get("questions_sha256") == taxonomy.questions_sha256
-    if "questions_sha256" not in result.lineage:
-        # Older saved activity runs recorded hashes per request group instead.
-        groups = question_sets(
-            taxonomy, max_tokens=result.lineage.get("max_question_tokens", 48_000)
-        )
-        questions_match = result.lineage.get("question_sets") == {
-            group: create_deterministic_sha256(questions) for group, questions in groups.items()
-        }
-    if not questions_match:
-        raise ValueError("Stored scores belong to different taxonomy questions; re-run scoring")
-    if result.lineage.get("subject_kind", taxonomy.subject_kind) != taxonomy.subject_kind:
-        raise ValueError("Stored scores belong to a different subject kind")
+        raise ValueError("Scores belong to a different taxonomy or question set; re-run scoring")
     failed = set(result.usage.loc[result.usage.error.notna(), "subject_id"])
-    rows = result.scores[~result.scores.subject_id.isin(failed)]
-    expected_subjects = set(result.usage.subject_id) - failed
-    if set(rows.subject_id) != expected_subjects:
-        raise ValueError("Incomplete subject scores cannot be matched; re-run scoring")
-    if any(
-        isinstance(p, bool)
-        or not isinstance(p, (int, float))
-        or not math.isfinite(p)
-        or not 0 <= p <= 1
-        for p in rows.prob
-    ):
-        raise ValueError("Stored probabilities must be finite values in [0, 1]")
-    if rows.duplicated(["subject_id", "node_id"]).any():
-        raise ValueError("Duplicate subject/node scores")
-    expected = set(taxonomy.nodes.node_id)
-    for _, group in rows.groupby("subject_id"):
-        if set(group.node_id) != expected:
-            raise ValueError("Incomplete node scores cannot be matched; re-run scoring")
-    scores = rows.merge(taxonomy.nodes, on="node_id", validate="many_to_one")
+    scores = result.scores[~result.scores.subject_id.isin(failed)].merge(
+        taxonomy.nodes, on="node_id", validate="many_to_one"
+    )
     matched, chosen = set(), []
     for tier, minimum in enumerate(policy.thresholds, start=1):
         hits = scores[(~scores.subject_id.isin(matched)) & (scores.prob >= minimum)]
@@ -546,50 +457,33 @@ def select_matches(result: ScoringResult, taxonomy: Taxonomy, policy: MatchPolic
     )
 
 
-def score_activities(activities, taxonomy, **kwargs):
-    """``score_subjects`` for a frame keyed by ``activity_id`` instead of ``subject_id``.
+def map_subjects(subjects, taxonomy, *, policy: MatchPolicy, **scoring_options):
+    """Score supplied subjects against one taxonomy and select matches offline.
 
     Parameters
     ----------
-    activities : pandas.DataFrame
-        ``ExtractionResult.activities`` or any frame with ``activity_id`` and ``state``.
-    taxonomy : Taxonomy
-    **kwargs
-        Forwarded to ``score_subjects``.
-
-    Returns
-    -------
-    ScoringResult
-        ``scores`` and ``usage`` carry ``activity_id`` rather than ``subject_id``.
-    """
-    scored = score_subjects(
-        activities.rename(columns={"activity_id": "subject_id"}), taxonomy, **kwargs
-    )
-    return ScoringResult(
-        scored.scores.rename(columns={"subject_id": "activity_id"}),
-        scored.usage.rename(columns={"subject_id": "activity_id"}),
-        scored.lineage,
-    )
-
-
-def apply_policy(result, taxonomy, policy):
-    """``select_matches`` for a ``score_activities`` result; returns ``activity_id`` rows.
-
-    Parameters
-    ----------
-    result : ScoringResult
-        From ``score_activities``.
+    subjects : pandas.DataFrame
+        As for ``score_subjects``.
     taxonomy : Taxonomy
     policy : MatchPolicy
+        Thresholds and optional descent that turn probabilities into matches.
+    **scoring_options
+        Forwarded to ``score_subjects``: ``request_runner``, ``max_workers``,
+        ``read_from_cache``, ``write_to_cache``.
 
     Returns
     -------
-    pandas.DataFrame
-        As ``select_matches``, with ``subject_id`` renamed to ``activity_id``.
+    SubjectMappingResult
     """
-    scored = ScoringResult(
-        result.scores.rename(columns={"activity_id": "subject_id"}),
-        result.usage.rename(columns={"activity_id": "subject_id"}),
-        result.lineage,
+    scored = score_subjects(subjects, taxonomy, **scoring_options)
+    return SubjectMappingResult(
+        select_matches(scored, taxonomy, policy),
+        scored.scores,
+        scored.usage,
+        {
+            **scored.lineage,
+            "policy": asdict(policy),
+            "policy_sha256": policy.sha256,
+            "max_mapping_level": len(taxonomy.columns) - 1,
+        },
     )
-    return select_matches(scored, taxonomy, policy).rename(columns={"subject_id": "activity_id"})

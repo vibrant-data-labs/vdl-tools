@@ -5,15 +5,17 @@ Implementation contract, updated 2026-10-29. Canonical project spec: [Linear](ht
 ## General mapping boundary and independent loading
 
 `map_subjects(subjects, taxonomy, policy=...)` accepts supplied text with `subject_id`
-and returns scores, statuses and paths. Extraction, entity grouping, compatibility
-columns and funding are separate optional operations. `Taxonomy` and the parameterized
-`load_workbook` reader accept configured levels and explicit built questions; the core
-has no fixed Solution ceiling. One- and four-level Education fixtures demonstrate
-direct organization input without core changes.
+and returns scores, statuses and paths. Extraction and the tracker-shaped export are
+separate operations. `Taxonomy` and the parameterized `load_workbook` reader accept
+configured levels and explicit built questions; the core has no fixed Solution ceiling.
+One- and four-level Education fixtures demonstrate direct organization input without
+core changes.
 
 `taxonomy_mapping.one_earth.load_taxonomy` and `taxonomy_mapping.drawdown.load_taxonomy`
-are separate packages that load only their own definitions and question wording; the
-core has no name-switching dispatcher. Climate Landscape loads only the selected
+are separate packages that load only their own definitions and question wording, one
+production wording each (`cc_routing`, `stewardship_yes`); the core has no
+name-switching dispatcher and no variant mechanism. Tracker column names and display
+conventions live in Climate Landscape. Climate Landscape loads only the selected
 taxonomy's workbook; shared-data may hold both, and a missing or invalid sibling
 workbook does not block the selected loader.
 
@@ -33,7 +35,7 @@ outputs.
 | Component | Source and revision | Reused behavior |
 | -- | -- | -- |
 | Shared infrastructure | vdl-tools `40a33ad45936ff53fadaa6ee310bb97c8a33bd93` | SQL Jev adapter; structured response cache; mapping columns; funding allocation |
-| Extraction | oneearth `d6811ca9286b846cd2093e1b5327a8346393143a`, `activity_extraction/` | General prompt and schema, text assembly/caps, cached website reader, structured cache, rendering, grounding |
+| Extraction | oneearth `d6811ca9286b846cd2093e1b5327a8346393143a`, `activity_extraction/` | General prompt and schema, text assembly/caps, cached website reader, rendering |
 | One Earth questions | Same revision, `jev/jev_mapping.py` | Activity wording and `cc_routing`; independent node probabilities; ancestor implication |
 | Drawdown questions and rules | drawdown `dfc03de9cd7b3fd4331631ab6153647db7b386ce`, `jev/jev_drawdown.py` | `stewardship_yes`; 0.7/0.5 tiers; 0.6 descent; full-path prefix deduplication |
 
@@ -52,7 +54,7 @@ The One Earth filename is still May 14 in the newest source revision. Its conten
 
 ## Input and extraction
 
-* One unique, non-null organization ID, name, and Website column per organization. Caller column names are configurable; IDs are normalized internally and restored at export.
+* One unique, non-null `id`, `Organization` and `Website` per organization. IDs are strings in every output.
 * Read the existing SQL website cache, or accept caller-provided `SiteText` pages. No new scrape, 990 content, archived descriptions, or implicit repo-local overlay is used by `extract_frame`.
 * Keep the general source prompt and schema. Production extraction uses `gpt-5.4-mini`, medium reasoning, through the shared `InstructorPRC` cache, which puts the response schema in the prompt identity and keys rows by model (`filter_by_model=True`). A cached row that no longer validates raises rather than being dropped.
 * Keep all extracted activities, including minor, one-off and past activities. Importance is metadata and never an assignment or funding weight.
@@ -64,13 +66,13 @@ Activity IDs are SHA-256 over `[extraction_run_id, org_uid, activity_index]`; th
 
 ## Scores and policies
 
-`Taxonomy` holds configured path columns, level specs, exact node questions, payload hash, path, variant and optional subject kind. Nodes use hashes of taxonomy name plus full ancestor path, preventing same-name children from colliding. The two first-adopter loaders select three levels through Solution.
+`Taxonomy` holds configured path columns, exact node questions, payload hash and path. Nodes use hashes of taxonomy name plus full ancestor path, preventing same-name children from colliding. The two first-adopter loaders select three levels through Solution.
 
-`ScoringResult` holds every successful `(subject_id, node_id, probability)` plus one usage/status record per subject/request group. Activity compatibility APIs retain `activity_id`. Generic cache IDs include caller namespace, subject identity and supplied state; existing activity cache IDs remain usable. Each group records the question hash and returned model. Successful raw gateway responses remain in the existing SQL cache. Jev's gateway alias is not a version pin; retain observed response metadata when judging reproducibility.
+`ScoringResult` holds every successful `(subject_id, node_id, probability)` plus one usage/status record per subject/request group. Cache IDs hash subject identity and supplied state; extraction supplies `cache_id` from organization and activity state so an unchanged activity reuses its cached answers across runs. Each group records the question hash and returned model. Successful raw gateway responses remain in the existing SQL cache. Jev's gateway alias is not a version pin; retain observed response metadata when judging reproducibility.
 
 Questions are packed deterministically under a 48k cl100k token estimate, with activity state limited to 8k. This leaves context headroom under the gateway's nominal 64k limit; tokenizer estimates are not a contractual guarantee. Oversized individual questions fail instead of truncating definitions. This replaces Drawdown's October-specific fixed sector groups with reusable bounded groups.
 
-Missing, extra, nonnumeric, nonfinite, or out-of-range answers fail the request. Malformed responses are cached as errors; malformed old success rows are refreshed. If any request group fails, that activity contributes no matches. Other activities still run; the failed group's successful peers and raw scores remain reviewable.
+Missing, extra, nonnumeric, nonfinite, or out-of-range answers fail the request and are cached as errors, so a later run retries them. If any request group fails, that activity contributes no matches. Other activities still run; the failed group's successful peers and raw scores remain reviewable.
 
 The initial, versioned development policy follows the inspected activity prototypes:
 
@@ -78,15 +80,15 @@ The initial, versioned development policy follows the inspected activity prototy
 * One Earth: no third tier or descent by default.
 * Drawdown: recursively admit children at 0.6 under matched parents, through Solution only.
 
-These are first-adopter implementation baselines, not validated production thresholds or universal defaults. `select_matches` and the compatibility `apply_policy` make no requests and reject different payloads, variants or questions. Selection is a library call (`select_matches` / `apply_policy`) that needs neither SQL nor gateway access; there is no CLI.
+These are first-adopter implementation baselines (`DEFAULT_POLICY` in each package), not validated production thresholds. `select_matches` makes no requests and rejects scores from a different payload or question set; it needs neither SQL nor gateway access.
 
 ## Rollup and consumer outputs
 
 * Take the deduplicated union of every activity's paths. Remove shallow rows implied by deeper paths, preserving the source prototypes' representation. Keep the raw activity-path table for complete provenance.
 * Each organization path records supporting activity IDs, per-activity evidence and source hashes, best probability, best tier, and support count. Probability and importance never determine dollars.
-* Reuse `attach_mapping_columns` and `distribute_funding_from_matches(max_level=2)`. Preserve native-list legacy mapping columns and blank level-3 columns. Unmatched organizations stay in mapped metadata and have explicit statuses; existing serving consumers emit their No Match rows.
+* Reuse `attach_mapping_columns` and `distribute_funding_from_matches(max_level=2)` through `exports.export_extraction`. Preserve native-list legacy mapping columns and blank level-3 columns. Unmatched organizations stay in mapped metadata and have explicit statuses; existing serving consumers emit their No Match rows.
 * Funding fractions sum to one for each matched organization at the existing allocation grain. Hierarchical parent and child rows are never summed as separate allocations.
-* Preserve Drawdown Solution properties and the legacy `Sector: Cluster` display prefix. The October workbook already carries the new sector/cluster structure, so Climate Landscape emits regrouped aliases without applying the June crosswalk.
+* Climate Landscape preserves Drawdown Solution properties and the legacy `Sector: Cluster` display prefix in its export settings. The October workbook already carries the new sector/cluster structure, so Climate Landscape emits regrouped aliases without applying the June crosswalk.
 
 ## Validation and release
 

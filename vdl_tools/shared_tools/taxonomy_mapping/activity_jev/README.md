@@ -1,55 +1,46 @@
 # General JEV taxonomy mapping
 
-The engine accepts supplied subjects and one taxonomy per call. It does not import
-activity extraction, name a taxonomy, allocate funding or modify tracker columns.
-See [the implementation contract](../../../../docs/activity_jev_contract.md).
+The engine accepts supplied subjects and one taxonomy per call. It does not extract
+text, name a taxonomy, allocate funding or write tracker columns. See
+[the implementation contract](../../../../docs/activity_jev_contract.md).
 
 ```python
-from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.engine import MatchPolicy
-from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.pipeline import map_subjects, group_matches
-from vdl_tools.shared_tools.taxonomy_mapping.one_earth import load_taxonomy, default_policy
+from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.engine import map_subjects
+from vdl_tools.shared_tools.taxonomy_mapping.one_earth import DEFAULT_POLICY, load_taxonomy
 
-# This package does not import Drawdown or read its workbook or configuration.
+# This package does not import Drawdown or read its workbook.
 taxonomy = load_taxonomy(one_earth_workbook)
-# subjects: subject_id, state; optional entity_id, kind and evidence fields.
-result = map_subjects(subjects, taxonomy, policy=default_policy())
-# result.subject_paths, scores, usage, nodes, lineage
-entities = group_matches(result.subject_paths, subjects, taxonomy)  # optional entity union
+# subjects: subject_id, state; optional cache_id.
+result = map_subjects(subjects, taxonomy, policy=DEFAULT_POLICY)
+# result.subject_paths, scores, usage, lineage
 ```
 
 ## Layout
 
 | Package | Holds |
 | -- | -- |
-| `taxonomy_mapping/activity_jev/` | `engine` (scoring, offline selection), `taxonomies` (`Taxonomy`, `load_workbook`), `pipeline` (`map_subjects`, `group_matches`), `activity_rollup`, `exports` |
-| `taxonomy_mapping/one_earth/` | One Earth loader, question wording, default policy, compatibility export |
-| `taxonomy_mapping/drawdown/` | Drawdown loader, question wording, default policy, compatibility export |
+| `taxonomy_mapping/activity_jev/` | `engine` (`score_subjects`, `select_matches`, `map_subjects`), `taxonomies` (`Taxonomy`, `load_workbook`), `exports` (`rollup_paths`, `export_extraction`: tracker-shaped columns, statuses, funding) |
+| `taxonomy_mapping/one_earth/` | `load_taxonomy`, question wording (`cc_routing`), `DEFAULT_POLICY` |
+| `taxonomy_mapping/drawdown/` | `load_taxonomy`, question wording (`stewardship_yes`), `DEFAULT_POLICY` |
 
-The two taxonomy packages are independent of each other. Both currently use
-activity-worded questions through Solution. The core supports arbitrary configured
-depths and other subject kinds: construct a `Taxonomy` with explicit levels, nodes
-and questions, or call `load_workbook` with a question builder. A third taxonomy
-needs its own package and no core edits. Match question wording to the supplied
-subject kind; supplying `kind` enables an explicit consistency check.
+The two taxonomy packages are independent of each other and carry one production
+wording each; a wording change shows up as a new `questions_sha256`. The core supports
+any configured depth: construct a `Taxonomy` or call `load_workbook` with a question
+builder. A third taxonomy needs its own package and no core edits.
 
-## Extraction and compatibility exports
+## Extraction and export
 
-Extraction is an optional upstream step. `ExtractionResult.save(directory)` and
-`ExtractionResult.load(directory)` persist a snapshot as Parquet through
-`parquet_cache`, with the extraction lineage in the file footers. For
-extracted activities, rename `activity_id` to `subject_id` before calling the core.
-Scores keep subject IDs; evidence remains in the supplied subject table.
+`activity_extraction.pipeline.extract_frame` extracts website activities once per
+organization; `ExtractionResult.save/load` persist the snapshot as Parquet through
+`parquet_cache` with the lineage in the footers. Rename `activity_id` to `subject_id`
+before calling the engine.
 
-`score_activities` and `apply_policy` are the same operations keyed by `activity_id`.
-Each taxonomy package's `export_extraction(organizations, extraction, taxonomy, mapped)`
-rolls activity matches up to organizations (`activity_rollup.rollup_paths`) and
-attaches the legacy tracker columns and level-2 funding through `exports`. Those
-output conventions are outside generic inference.
+`exports.export_extraction(organizations, extraction, taxonomy, mapped, mapping_name=...,
+format_paths=...)` rolls activity matches up to organizations and attaches the legacy
+mapping columns (four levels), per-organization statuses and level-2 funding. Which
+column name and display conventions to use is the consumer's choice; Climate Landscape
+keeps its One Earth and Drawdown settings in `process_map_activities.py`.
 
-## Reselecting saved scores
-
-`select_matches(result, taxonomy, policy)` makes no requests. Policy changes reuse
-saved probabilities; a changed payload, variant, question set or subject kind is
-rejected. Older activity manifests with per-group question hashes are checked using
-those hashes. Gateway credentials and caller configuration come from the existing
-JEV SQL adapter.
+`select_matches(result, taxonomy, policy)` makes no requests, so a policy change
+re-applies to the same scores; scores from a different workbook or question set are
+rejected.
