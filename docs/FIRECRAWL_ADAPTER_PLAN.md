@@ -83,6 +83,12 @@ A separate function, `scrape_websites_firecrawl`, that shares helpers with
 function. The old function keeps its chunk-then-fan-out shape and its tables; the new one is
 a per-org pipeline, which is where the pilot's 5.5 pages per second came from.
 
+All new code lives in its own package, `vdl_tools/scrape_enrich/scraper/firecrawl/`: the
+text and link rules (`markdown_clean.py`, `site_links.py`), the client (`client.py`), the
+pipeline (`pipeline.py`), the Phase 0 measurements (`validation/`) and their tests. Retiring
+the in-house path in Phase 7 then deletes modules from `scraper/` and leaves the package
+untouched.
+
 ```
 scrape_websites_firecrawl(urls, run_config)
   |
@@ -503,7 +509,7 @@ Estimates are working days for one engineer who knows the pipeline.
 
 ### Phase 1: Firecrawl client (2.5 days)
 
-`vdl_tools/scrape_enrich/scraper/firecrawl_client.py`, lifted from the pilot's `_common.py`
+`vdl_tools/scrape_enrich/scraper/firecrawl/client.py`, lifted from the pilot's `_common.py`
 and `run_firecrawl.py`: typed `scrape()` capturing `url` and `sourceURL` explicitly (the
 pilot's `KEEP_METADATA` omits them); semaphore and rpm limiter from a `[scraping_vendors]`
 config section; retries with `Retry-After` on 429, 5xx and transport errors; the error

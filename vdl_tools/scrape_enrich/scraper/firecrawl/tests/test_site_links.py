@@ -1,4 +1,4 @@
-from vdl_tools.scrape_enrich.scraper.site_links import normalize_host, same_site_paths
+from vdl_tools.scrape_enrich.scraper.firecrawl.site_links import normalize_host, same_site_paths
 
 
 def test_normalize_host():

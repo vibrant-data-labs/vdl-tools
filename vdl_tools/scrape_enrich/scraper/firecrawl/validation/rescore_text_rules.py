@@ -27,7 +27,7 @@ Outputs, in ``--out-dir``:
 Every parquet carries ``CLEANER_VERSION`` and the git sha in its lineage
 footer, so a D3 result can name the text it was measured on.
 
-    python -m vdl_tools.scrape_enrich.scraper.vendor_pilot.rescore_text_rules \\
+    python -m vdl_tools.scrape_enrich.scraper.firecrawl.validation.rescore_text_rules \\
         --out-dir /path/to/.cache/vendor_pilot
 """
 
@@ -40,8 +40,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from vdl_tools.scrape_enrich.scraper import markdown_clean as mc
-from vdl_tools.scrape_enrich.scraper.site_links import normalize_host, same_site_paths
+from vdl_tools.scrape_enrich.scraper.firecrawl import markdown_clean as mc
+from vdl_tools.scrape_enrich.scraper.firecrawl.site_links import normalize_host, same_site_paths
 from vdl_tools.scrape_enrich.scraper.text_quality import classify_text_quality
 from vdl_tools.scrape_enrich.scraper.vendor_pilot._common import DEFAULT_OUT_DIR, git_sha
 from vdl_tools.scrape_enrich.scraper.vendor_pilot._e2e import MAX_PER_SUBPATH, picks_from_array
@@ -328,7 +328,7 @@ def main(argv=None):
     picks = rescore_picks(read_dataframe(d / "firecrawl_results.parquet"))
 
     lineage = {
-        "created_by": "vdl_tools.scrape_enrich.scraper.vendor_pilot.rescore_text_rules",
+        "created_by": "vdl_tools.scrape_enrich.scraper.firecrawl.validation.rescore_text_rules",
         "git_sha": git_sha(),
         "cleaner_version": mc.CLEANER_VERSION,
         "extractor": mc.EXTRACTOR,

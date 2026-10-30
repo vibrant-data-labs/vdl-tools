@@ -7,7 +7,7 @@ always was, decide whether a page is junk before the stripping can hide the
 evidence, and build one org's combined text from its pages. Why each rule
 exists, with the measurements behind it, is in section 5 of
 ``docs/FIRECRAWL_ADAPTER_PLAN.md``; the numbers this version was checked
-against are in the vendor pilot README under "Phase 0 rescore".
+against are in this package's README under "Phase 0 rescore".
 
 Order of operations. The caller has already applied the status gate: only a
 page whose ``metadata.statusCode`` is 2xx reaches ``page_text``.

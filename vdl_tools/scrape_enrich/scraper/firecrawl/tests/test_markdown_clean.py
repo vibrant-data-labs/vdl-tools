@@ -1,12 +1,12 @@
 """Tests for the Firecrawl text rules (markdown_clean).
 
-Golden tests run every page in fixtures/firecrawl_markdown (real pilot
+Golden tests run every page in fixtures/markdown (real pilot
 markdown, chosen for the case each one pins down; see cases.json) through
 ``page_text`` and one four-page org through ``org_text``, and compare against
 the expected files byte for byte. A rule change that alters any output must
 bump ``CLEANER_VERSION``; then regenerate with
 
-    REGENERATE_GOLDEN=1 pytest vdl_tools/scrape_enrich/scraper/tests/test_markdown_clean.py -k golden
+    REGENERATE_GOLDEN=1 pytest vdl_tools/scrape_enrich/scraper/firecrawl/tests/test_markdown_clean.py -k golden
 
 which refuses to overwrite changed outputs under an unchanged version.
 """
@@ -21,9 +21,9 @@ from pathlib import Path
 
 import pytest
 
-from vdl_tools.scrape_enrich.scraper import markdown_clean as mc
+from vdl_tools.scrape_enrich.scraper.firecrawl import markdown_clean as mc
 
-FIXTURES = Path(__file__).parent / "fixtures" / "firecrawl_markdown"
+FIXTURES = Path(__file__).parent / "fixtures" / "markdown"
 EXPECTED = FIXTURES / "expected"
 LONG = "Real org text about restoring wetlands in the river basin. " * 20
 
@@ -320,7 +320,7 @@ def test_no_usable_pages_gives_empty():
 _DETERMINISM_SCRIPT = """
 import hashlib, json, sys
 from pathlib import Path
-from vdl_tools.scrape_enrich.scraper import markdown_clean as mc
+from vdl_tools.scrape_enrich.scraper.firecrawl import markdown_clean as mc
 fixtures = Path(sys.argv[1])
 cases = json.loads((fixtures / "cases.json").read_text())
 case = cases["orgs"][0]
