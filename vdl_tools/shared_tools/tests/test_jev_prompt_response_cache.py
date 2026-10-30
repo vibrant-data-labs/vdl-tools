@@ -11,7 +11,6 @@ from vdl_tools.shared_tools.database_cache.database_models.prompt import Prompt,
 from vdl_tools.shared_tools.openai import prompt_response_cache_jev as jev
 from vdl_tools.shared_tools.openai.prompt_response_cache_sql import PromptResponseCacheSQL
 
-
 QUESTIONS = {
     "group": {
         "type": "choice",
@@ -50,7 +49,7 @@ def gateway(monkeypatch):
 
     def post(url, **kwargs):
         calls.append((url, kwargs))
-        response = MagicMock()
+        response = MagicMock(status_code=200)
         response.json.return_value = ANSWER
         return response
 
@@ -104,7 +103,7 @@ def test_cache_hit_reuses_typed_answers_without_gateway(cache, monkeypatch):
 
 
 def test_single_error_is_recorded_then_retried(cache, monkeypatch, gateway):
-    error_response = MagicMock()
+    error_response = MagicMock(status_code=503)
     error_response.raise_for_status.side_effect = requests.HTTPError("503 Service Unavailable")
     monkeypatch.setattr(jev.requests, "post", lambda *a, **k: error_response)
     cache.session.query.return_value.filter.return_value.first.return_value = None
@@ -166,10 +165,10 @@ def test_bulk_keeps_successes_and_records_http_errors(cache, gateway, monkeypatc
     def post(url, **kwargs):
         if kwargs["json"]["state"] == "bad":
             bad_calls.append(kwargs)
-            response = MagicMock()
+            response = MagicMock(status_code=400)
             response.raise_for_status.side_effect = requests.HTTPError("400 Bad Request")
             return response
-        response = MagicMock()
+        response = MagicMock(status_code=200)
         response.json.return_value = ANSWER
         return response
 
@@ -200,5 +199,7 @@ def test_rejects_invalid_configuration_and_unhandled_generation_options(cache):
         jev.JevPromptResponseCacheSQL(session=MagicMock(), questions=QUESTIONS, timeout=0)
     with pytest.raises(ValueError, match="max_retries must be nonnegative"):
         jev.JevPromptResponseCacheSQL(session=MagicMock(), questions=QUESTIONS, max_retries=-1)
+    with pytest.raises(ValueError, match="max_server_errors must be positive"):
+        jev.JevPromptResponseCacheSQL(session=MagicMock(), questions=QUESTIONS, max_server_errors=0)
     with pytest.raises(TypeError, match="Responses API options"):
         cache.get_completion("", "state", max_output_tokens=100)
