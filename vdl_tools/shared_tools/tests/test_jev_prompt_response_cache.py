@@ -67,7 +67,6 @@ def test_jev_wire_format_and_single_cache_write(cache, gateway):
         "headers": {"Authorization": "Bearer test-key"},
         "json": {
             "model": "typesafe-ai/jev",
-            "providerOptions": {"gateway": {"only": ["typesafe-ai"]}},
             "state": "Company operates a bank.",
             "questions": QUESTIONS,
         },
@@ -204,3 +203,38 @@ def test_rejects_invalid_configuration_and_unhandled_generation_options(cache):
         jev.JevPromptResponseCacheSQL(session=MagicMock(), questions=QUESTIONS, max_server_errors=0)
     with pytest.raises(TypeError, match="Responses API options"):
         cache.get_completion("", "state", max_output_tokens=100)
+
+
+@pytest.mark.parametrize("provider,extra_body,expected", [
+    (None, {}, None),
+    ("typesafe-ai", {}, {"order": ["typesafe-ai"]}),
+    ("typesafe-ai", {"providerOptions": {"gateway": {"only": ["typesafe-ai"]}}},
+     {"order": ["typesafe-ai"], "only": ["typesafe-ai"]}),
+    ("typesafe-ai", {"providerOptions": {"gateway": {"order": ["digitalocean"]}}},
+     {"order": ["digitalocean"]}),
+])
+def test_shared_routing_matches_single_bulk_and_cache_identity(cache, gateway, provider, extra_body, expected):
+    routed = jev.JevPromptResponseCacheSQL(
+        session=MagicMock(), questions=QUESTIONS, model_provider=provider,
+    )
+    kwargs = {"extra_body": extra_body} if extra_body else {}
+    original = json.dumps(kwargs)
+    single = routed.get_cache_or_run("one", "bank", read_from_cache=False, **kwargs)
+    bulk = routed.bulk_get_cache_or_run([("two", "bank")], read_from_cache=False, **kwargs)["two"]
+    for _, request in gateway:
+        body = request["json"]
+        assert body.get("providerOptions", {}).get("gateway") == expected
+        assert not {"api_backend", "model_provider", "extra_body"} & body.keys()
+    expected_kwargs = {"api_backend": "vercel"}
+    if expected is not None:
+        expected_kwargs["extra_body"] = {"providerOptions": {"gateway": expected}}
+    assert single["request_kwargs"] == bulk["request_kwargs"] == expected_kwargs
+    request_hash = PromptResponse.create_request_hash(expected_kwargs)
+    assert single["request_hash"] == bulk["request_hash"] == request_hash
+    routed.get_prompt_response_obj("one", "bank", request_kwargs=kwargs)
+    filters = routed.session.query.return_value.filter.call_args.args
+    assert request_hash in [condition.right.value for condition in filters]
+    assert json.dumps(kwargs) == original
+    automatic_hash = cache._build_success_row("one", "bank", jev._JevResponse(ANSWER), {})["request_hash"]
+    if expected is not None:
+        assert request_hash != automatic_hash

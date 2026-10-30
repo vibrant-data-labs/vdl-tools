@@ -52,6 +52,10 @@ class JevPromptResponseCacheSQL(PromptResponseCacheSQL):
     Pass the document or other shared state as ``text`` to
     ``get_cache_or_run`` / ``bulk_get_cache_or_run``.
 
+    Routing uses the base cache's ``model_provider`` preference and per-call
+    ``extra_body`` options. Use ``providerOptions.gateway.only`` in ``extra_body``
+    for a strict provider restriction. Routing options participate in cache identity.
+
     A cache instance stops new calls and retries after ``max_server_errors`` HTTP
     5xx responses (default 10, including retry attempts). In-flight calls finish;
     completed responses are cached before the bulk call raises ``BulkRequestAborted``.
@@ -68,6 +72,7 @@ class JevPromptResponseCacheSQL(PromptResponseCacheSQL):
         prompt_name: str = "Jev decision",
         prompt_description: str = "",
         store_results: bool = True,
+        model_provider: str | None = None,
         timeout: float = 120.0,
         max_retries: int = 2,
         max_server_errors: int = 10,
@@ -99,6 +104,7 @@ class JevPromptResponseCacheSQL(PromptResponseCacheSQL):
             model=JEV_GATEWAY_MODEL,
             store_results=store_results,
             api_backend="vercel",
+            model_provider=model_provider,
         )
 
     def _check_circuit(self):
@@ -118,8 +124,12 @@ class JevPromptResponseCacheSQL(PromptResponseCacheSQL):
     ):
         """Evaluate state with Jev; the cache supplies ``prompt_str`` for identity."""
         self._check_circuit()
-        if kwargs:
-            raise TypeError(f"Jev does not accept Responses API options: {sorted(kwargs)}")
+        request_kwargs = self._request_kwargs(kwargs)
+        request_kwargs.pop("api_backend")
+        extra_body = request_kwargs.pop("extra_body", {}) or {}
+        if request_kwargs:
+            raise TypeError(f"Jev does not accept Responses API options: {sorted(request_kwargs)}")
+        body = {"model": self.model, "state": text, "questions": self.questions, **extra_body}
         headers = {"Authorization": f"Bearer {get_vercel_client().api_key}"}
         for attempt in range(self.max_retries + 1):
             self._check_circuit()
@@ -127,12 +137,7 @@ class JevPromptResponseCacheSQL(PromptResponseCacheSQL):
                 response = requests.post(
                     JEV_GATEWAY_URL,
                     headers=headers,
-                    json={
-                        "model": self.model,
-                        "providerOptions": {"gateway": {"only": ["typesafe-ai"]}},
-                        "state": text,
-                        "questions": self.questions,
-                    },
+                    json=body,
                     timeout=self.timeout,
                 )
             except (requests.ConnectionError, requests.Timeout):

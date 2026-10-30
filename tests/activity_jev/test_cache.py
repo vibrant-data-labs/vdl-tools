@@ -27,6 +27,10 @@ def test_incomplete_gateway_answers_are_not_cache_successes(offline_config, monk
     )
 
     def bulk(self, pairs, **kwargs):
+        assert self.model_provider == "typesafe-ai"
+        assert self._request_kwargs(kwargs)["extra_body"]["providerOptions"]["gateway"] == {
+            "order": ["typesafe-ai"], "only": ["typesafe-ai"],
+        }
         with pytest.raises(ValueError, match="Missing or unexpected"):
             self.get_completion("prompt", "state", return_all=True)
         return {}

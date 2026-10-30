@@ -196,11 +196,15 @@ def jev_gateway_request(
             return response if return_all else response.payload["answers"]
 
     with get_session() as session:
-        cache = CompleteNoulCache(session=session, questions=questions, prompt_name=prompt_name)
+        cache = CompleteNoulCache(
+            session=session, questions=questions, prompt_name=prompt_name,
+            model_provider="typesafe-ai",
+        )
         return cache.bulk_get_cache_or_run(
             ids_texts,
             max_workers=max_workers,
             max_errors=3,
+            extra_body={"providerOptions": {"gateway": {"only": ["typesafe-ai"]}}},
             read_from_cache=read_from_cache,
             write_to_cache=write_to_cache,
         )
