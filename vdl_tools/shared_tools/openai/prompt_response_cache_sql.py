@@ -1173,10 +1173,11 @@ class PromptResponseCacheSQL():
         n_completed = 0
         n_cached = len(res)
         calls_started = perf_counter()
+        last_progress_at = calls_started
 
         def _api_only(given_id_text):
             """Worker: API call only, no session access. Returns (given_id, text, response_or_err, error_flag)."""
-            nonlocal n_completed
+            nonlocal n_completed, last_progress_at
             given_id, text = given_id_text
             response, error = self.get_completion_catch_error(
                 prompt_str=self.prompt.prompt_str,
@@ -1186,8 +1187,10 @@ class PromptResponseCacheSQL():
             )
             with progress_lock:
                 n_completed += 1
-                if n_completed % 10 == 0 or n_completed == len_unfound:
-                    logger.info("%s: completed %d/%d model calls (%d cached) in %.1fs", self.prompt.name, n_completed, len_unfound, n_cached, perf_counter() - calls_started)
+                now = perf_counter()
+                if now - last_progress_at >= 30 or n_completed == len_unfound:
+                    logger.info("%s: completed %d/%d model calls (%d cached) in %.1fs", self.prompt.name, n_completed, len_unfound, n_cached, now - calls_started)
+                    last_progress_at = now
             return given_id, text, response, error
 
         if len(unfound_rows) == 0:
