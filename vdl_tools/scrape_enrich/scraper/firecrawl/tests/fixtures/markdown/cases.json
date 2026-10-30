@@ -1,0 +1,88 @@
+{
+  "cleaner_version": 1,
+  "source": ".cache/vendor_pilot/firecrawl_e2e_pages.parquet (vendor pilot phase 2, Firecrawl full-page markdown, 2026-10-21)",
+  "pages": [
+    {
+      "name": "pbb_me_parked",
+      "url": "http://pbb.me",
+      "verdict": "parked",
+      "why": "The only parked marker is the label of a link-only line ('Buy this domain'), which the cleaner drops; the gate must run first."
+    },
+    {
+      "name": "solfocus_parked",
+      "url": "http://www.solfocus.com",
+      "verdict": "parked",
+      "why": "Same as pbb.me: 'Buy this domain.' as a link-only line, plus a tracking-pixel image with a long URL."
+    },
+    {
+      "name": "moonridgezoo_frame_only",
+      "url": "https://www.moonridgezoo.org",
+      "verdict": "blocked",
+      "why": "A parked domain redirecting to an ad host: the page is nothing but Chrome's blocked-frame error. Pilot called it ok."
+    },
+    {
+      "name": "genlith_frame_inside",
+      "url": "http://www.genlith.com",
+      "verdict": "ok",
+      "why": "A real, short page with an analytics frame's blocked-frame error appended; the error goes, the page stays ok."
+    },
+    {
+      "name": "streamconservancy_recaptcha",
+      "url": "https://www.streamconservancy.org",
+      "verdict": "ok",
+      "why": "A reCAPTCHA form widget on a short home page; the captcha wall marker must not fire on widget chrome."
+    },
+    {
+      "name": "wvbg_security_check",
+      "url": "https://www.wvbg.org/about-us/the-history-of-tibbs-run-reservoir",
+      "verdict": "blocked",
+      "why": "A real host security-check wall."
+    },
+    {
+      "name": "intersectag_duplicated_header",
+      "url": "https://www.intersectag.com",
+      "verdict": "ok",
+      "why": "Squarespace: the header block rendered once per screen size."
+    },
+    {
+      "name": "rcdmonterey_nav_home",
+      "url": "https://www.rcdmonterey.org/",
+      "verdict": "ok",
+      "why": "A home page that opens with a dozen navigation-menu lines; cleaning keeps about a sixth of it."
+    }
+  ],
+  "orgs": [
+    {
+      "name": "aanikabio",
+      "source": "https://www.aanikabio.com/",
+      "verdict": "ok",
+      "why": "Four pages sharing a header, navigation and footer: cross-page dedupe keeps each line once, home page first.",
+      "pages": [
+        {
+          "file": "aanikabio__home",
+          "subpath": "/",
+          "is_home": true,
+          "url": "https://www.aanikabio.com/"
+        },
+        {
+          "file": "aanikabio__news",
+          "subpath": "news",
+          "is_home": false,
+          "url": "https://www.aanikabio.com/news"
+        },
+        {
+          "file": "aanikabio__products",
+          "subpath": "products",
+          "is_home": false,
+          "url": "https://www.aanikabio.com/products"
+        },
+        {
+          "file": "aanikabio__team",
+          "subpath": "team",
+          "is_home": false,
+          "url": "https://www.aanikabio.com/team"
+        }
+      ]
+    }
+  ]
+}

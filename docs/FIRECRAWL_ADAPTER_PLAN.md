@@ -92,6 +92,12 @@ A separate function, `scrape_websites_firecrawl`, that shares helpers with
 function. The old function keeps its chunk-then-fan-out shape and its tables; the new one is
 a per-org pipeline, which is where the pilot's 5.5 pages per second came from.
 
+All new code lives in its own package, `vdl_tools/scrape_enrich/scraper/firecrawl/`: the
+text and link rules (`markdown_clean.py`, `site_links.py`), the client (`client.py`), the
+pipeline (`pipeline.py`), the Phase 0 measurements (`validation/`) and their tests. Retiring
+the in-house path in Phase 7 then deletes modules from `scraper/` and leaves the package
+untouched.
+
 ```
 scrape_websites_firecrawl(urls, run_config)
   |
@@ -326,12 +332,33 @@ because the raw markdown is stored next to the cleaned text, a cleaner change re
 and wall markers on plain text with link labels kept (`markdown_to_plain`), then the cleaner,
 then the thin check on the cleaned text. The reason is concrete: dropping menu-only link
 lines deletes labels like "buy this domain", and in the review's replay two parked pages
-turned `ok` because of it. A Firecrawl-specific error page, "ERR_BLOCKED_BY_CLIENT / blocked
-by an extension", which sites redirecting to ad domains return, passed as `ok` on about 5 of
-2,000 orgs; it gets its own marker with no length cap.
+turned `ok` because of it (pbb.me and solfocus.com, now golden tests). The markers run once,
+per page: run again on cleaned text, the wall markers called 66 real pages walls in the
+Phase 0 rescore, because cleaning made them short and their footers still said
+"reCAPTCHA". So the cleaned page and the combined text get the length check only, and an
+org whose home page is parked, blocked or garbled takes that verdict; other junk pages are
+left out of the combined text rather than sinking the org.
+
+Browser chrome is removed before the markers. Firecrawl's browser runs an ad blocker, and
+Chrome renders its own error page ("host is blocked / This page has been blocked by an
+extension / ERR_BLOCKED_BY_CLIENT", and the "refused to connect" and "blocked by Chromium"
+variants) wherever a frame was refused. The rescore found it on 363 pages of 61 orgs, 356 of
+them real pages with a refused analytics or shop frame, so the earlier idea of a marker with
+no length cap would have marked 61 orgs blocked. The error page is stripped everywhere, and a
+page is `blocked` only when under 200 characters of plain text remain without it: three
+parked domains that redirect to ad hosts. Captcha widgets and notices ("Recaptcha requires
+verification", "protected by reCAPTCHA", cookie-banner entries) are stripped the same way;
+1,389 pages carry the widget, and on a short page the `captcha` wall marker took it for a
+challenge screen (8 real pages, two of them home pages).
 
 **The cleaner steps** (`markdown_clean.py`, `CLEANER_VERSION`), each with what it removes:
 
+- Turn non-breaking and other Unicode spaces into plain spaces. Half the pages carry them,
+  and `clean_scraped_text` deletes non-ASCII characters before its own `\xa0` replacement
+  can fire, which glues words together ("formed in 2017focused"). That is a bug in the
+  shared function, which in-house text has too; it is fixed here, not there, because fixing
+  it there changes every in-house text and its cache keys.
+- Drop browser chrome, as above.
 - Drop image markup `![alt](url)`. The alt text is file names ("s1 img 3.png") and each URL
   tokenizes into dozens of tokens.
 - Collapse `[label](url)` to `label`. The label is real text, often the only text on
@@ -339,11 +366,13 @@ by an extension", which sites redirecting to ad domains return, passed as `ok` o
   need links keep them through the existing `add_section_links` flag.
 - Drop menu-only lines, lines that consist of nothing but a link or a list-item link. These
   are navigation items and they repeat on every page.
-- Remove blank lines, then run the existing `clean_scraped_text` normalization that in-house
-  text already passes through.
+- Drop bare URLs, the converter's hard line breaks (a trailing backslash, 88,927 of them in
+  the phase 2 pages) and its bold and underline markers and backslash escapes.
+- Remove blank and markup-only lines, then run the existing `clean_scraped_text`
+  normalization that in-house text already passes through.
 
-Result: the median page goes from 11,037 characters to about 3,400 (4,793 without the
-menu-line drop), against 2,649 for in-house text.
+Result, measured in the Phase 0 rescore over the 8,879 2xx pages: the median page goes from
+11,335 characters to 3,307, against 2,633 for in-house text on the same day.
 
 **Cross-page dedupe.** The same header, footer and navigation appear on every page of an
 org, and some of it survives the per-page rules as plain text ("Open MenuClose Menu"). Even
@@ -354,7 +383,9 @@ repeats.
 **A per-org cap of 8k tokens.** `make_group_text` never truncates today. In-house combined
 text has a median near 10k characters, about 2.5k tokens, so 8k tokens (about 32k characters)
 covers the largest real organizations while bounding the pathological ones; a summary is a
-few sentences and does not improve with more input; and the cost lands near $43 per 30k orgs.
+few sentences and does not improve with more input; and the cost lands at $37 per 30k orgs
+in the rescore, against $52 for in-house text and $261 for raw markdown. The cap applies to
+`make_group_text`'s output, so the bound includes its URL headers; it cut 228 of 2,000 orgs.
 The cut is deterministic: home page first, then subpages in `deterministic_len_key` order,
 truncated from the end, so what gets cut is the same on every run.
 
@@ -375,18 +406,21 @@ per version rather than once per tweak.
 ```
 per page, from the Firecrawl response
   |- status gate ............ metadata.statusCode 2xx? otherwise a failure row and no text
+  |- browser chrome out ..... blocked-frame error pages, captcha widgets and notices
   |- markdown_to_plain ...... link labels kept, URLs removed; used by the markers only
-  |- parked / wall / blocked  text_quality markers on that plain text
-  |- clean_markdown v1 ...... images out, links to labels, menu lines out, blanks out,
-  |                           then clean_scraped_text
-  |- thin check ............. on the cleaned text
+  |- parked / wall / blocked  text_quality markers on that plain text, once
+  |- clean_markdown v1 ...... spaces, images, menu lines, links to labels, URLs, hard
+  |                           breaks, emphasis, blanks; then clean_scraped_text
+  |- thin check ............. on the cleaned text, by length only
   '- store .................. markdown (raw), parsed_html (cleaned), text_quality, extractor
 
-per org, from this run's pages
-  |- order .................. home page first, then subpages by deterministic_len_key
+per org, from this run's pages (markdown_clean.org_text)
+  |- order .................. home page first, then subpages by deterministic_len_key;
+  |                           only ok and thin pages
   |- cross-page dedupe ...... drop lines already seen in an earlier page of this org
+  |- make_group_text ........ unchanged
   |- cap .................... 8k tokens, cut from the end
-  '- make_group_text ........ combined_text, classify_text_quality, web_pages_parsed_v2
+  '- verdict ................ a junk home page's verdict, else the length check
 ```
 
 The diagram shows why the raw markdown is stored and the cleaned text is what everyone
@@ -484,7 +518,7 @@ Estimates are working days for one engineer who knows the pipeline.
 
 ### Phase 1: Firecrawl client (2.5 days)
 
-`vdl_tools/scrape_enrich/scraper/firecrawl_client.py`, lifted from the pilot's `_common.py`
+`vdl_tools/scrape_enrich/scraper/firecrawl/client.py`, lifted from the pilot's `_common.py`
 and `run_firecrawl.py`: typed `scrape()` capturing `url` and `sourceURL` explicitly (the
 pilot's `KEEP_METADATA` omits them); semaphore and rpm limiter from a `[scraping_vendors]`
 config section; retries with `Retry-After` on 429, 5xx and transport errors; the error

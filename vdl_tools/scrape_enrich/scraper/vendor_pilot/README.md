@@ -676,6 +676,12 @@ artifacts (phase 1 `firecrawl_results.parquet`, phase 2
    17% of the credits in phase 2) is a later optimization if credits
    become the constraint.
 
+## Phase 0 rescore (moved)
+
+The production text and link rules built from this pilot, their zero-credit rescore over
+these artifacts and the results now live with the Firecrawl code, in
+[`scraper/firecrawl/README.md`](../firecrawl/README.md).
+
 ## Caveats and dead ends
 
 - **Firecrawl's `links` array is only usable with `onlyMainContent=false`.**
