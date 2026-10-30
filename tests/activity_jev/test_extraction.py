@@ -22,11 +22,11 @@ def test_all_orgs_accounted_and_minor_activity_kept(extraction):
         "empty": 1,
     }
     assert not extraction.activities.source_sha256.isna().any()
-    assert "Evidence:" not in extraction.activities.state.iloc[0]
-    assert "Prominence:" not in extraction.activities.state.iloc[0]
+    assert "state" not in extraction.activities
+    assert "cache_id" not in extraction.activities
 
 
-def test_run_identity_changes_but_request_cache_identity_does_not(organizations):
+def test_run_identity_changes_but_source_hash_does_not(organizations):
     url = organizations.Website.iloc[0]
     texts = {url: "URL: " + url + "/\nTEXT: We install rooftop solar panels with our own trained crews."}
     first = extract_frame(
@@ -36,7 +36,6 @@ def test_run_identity_changes_but_request_cache_identity_does_not(organizations)
         organizations.iloc[:1], run_id="second", website_texts=texts, runner=lambda *a, **k: {"1": profile()}
     )
     assert set(first.activities.activity_id).isdisjoint(second.activities.activity_id)
-    assert first.activities.cache_id.tolist() == second.activities.cache_id.tolist()
     assert first.activities.source_sha256.tolist() == second.activities.source_sha256.tolist()
 
 
@@ -117,3 +116,29 @@ def test_load_website_texts_uses_shared_scraper_and_junk_verdicts(monkeypatch):
     assert list(texts) == ["https://solar.example"]
     assert texts["https://solar.example"].startswith("URL: https://solar.example/")
     assert load_website_texts([]) == {}
+
+
+def test_extraction_accepts_a_schema_without_jev_fields(organizations):
+    from pydantic import BaseModel
+
+    from vdl_tools.shared_tools.activity_extraction.extraction import ExtractionPrompt
+
+    class Activity(BaseModel):
+        activity: str
+        evidence: str
+        certainty: str
+
+    class Profile(BaseModel):
+        summary: str
+        coverage: str
+        activities: list[Activity]
+
+    prompt = ExtractionPrompt(text="Extract activities", prompt_name="minimal", response_model=Profile, model="offline")
+    profile = Profile(summary="Teaches", coverage="adequate", activities=[Activity(activity="Teaching", evidence="We teach", certainty="high")])
+    result = extract_frame(
+        organizations.iloc[:1], run_id="independent", prompt=prompt,
+        website_texts={organizations.Website.iloc[0]: "We teach"},
+        runner=lambda *a, **kw: {"1": profile},
+    )
+    assert result.activities.activity.tolist() == ["Teaching"]
+    assert "state" not in result.activities and "cache_id" not in result.activities

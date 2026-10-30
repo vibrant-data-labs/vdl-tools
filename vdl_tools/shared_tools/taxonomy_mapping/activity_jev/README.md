@@ -44,3 +44,10 @@ keeps its One Earth and Drawdown settings in `process_map_activities.py`.
 `select_matches(result, taxonomy, policy)` makes no requests, so a policy change
 re-applies to the same scores; scores from a different workbook or question set are
 rejected.
+
+
+Activity extraction is independent of taxonomy mapping. Its result contains schema
+fields and extraction provenance. Before JEV scoring, call
+`subjects.build_activity_subjects(extraction.activities)` to construct `subject_id`,
+the six-field scoring text, and stable JEV cache IDs. Other consumers can use the
+extracted activities directly or supply their own extraction schema.

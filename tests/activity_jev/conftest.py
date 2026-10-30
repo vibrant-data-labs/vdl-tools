@@ -8,6 +8,7 @@ from vdl_tools.shared_tools.activity_extraction.pipeline import extract_frame
 from vdl_tools.shared_tools.taxonomy_mapping import drawdown, one_earth
 from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.engine import map_subjects, score_subjects
 from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.exports import export_extraction
+from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.subjects import build_activity_subjects
 
 PACKAGES = {"one_earth": one_earth, "drawdown": drawdown}
 # The Drawdown wording names these two nodes; a fixture workbook must contain them.
@@ -130,7 +131,7 @@ def fake_jev(probabilities=None):
 
 def subjects_of(extraction):
     """An extraction's activities as the subject frame the engine takes."""
-    return extraction.activities.rename(columns={"activity_id": "subject_id"})
+    return build_activity_subjects(extraction.activities)
 
 
 def score_activities(extraction, tax, **options):

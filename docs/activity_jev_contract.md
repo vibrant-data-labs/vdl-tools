@@ -61,15 +61,17 @@ The One Earth filename is still May 14 in the newest source revision. Its conten
 * Keep all extracted activities, including minor, one-off and past activities. Importance is metadata and never an assignment or funding weight.
 * Return one profile/status record for every input organization: `success`, `empty`, `missing_text`, or `request_failed`. A failed or unparsable model response never silently removes its organization.
 
+Extraction has no taxonomy or JEV dependency and returns the supplied schema's activity fields without scoring text or mapping cache keys. The downstream `build_activity_subjects` adapter creates those inputs for JEV.
+
 `ExtractionResult.organizations` records the rendered profile, source hash, text length, coverage, activity count, extraction run, and status. `activities` records every schema field, evidence, organization identity and run-qualified activity identity.
 
-Activity IDs are SHA-256 over `[extraction_run_id, org_uid, activity_index]`; they are only stable within a fixed extraction run. Jev cache IDs hash `[org_uid, six-field activity state]`, so a new run ID does not invalidate unchanged activity requests. No durable identity is inferred across changed activities.
+Activity IDs are SHA-256 over `[extraction_run_id, org_uid, activity_index]`; they are only stable within a fixed extraction run. `activity_jev.subjects.build_activity_subjects` builds the JEV text and cache IDs from `[org_uid, six-field activity state]`, so a new run ID does not invalidate unchanged activity requests. No durable identity is inferred across changed activities.
 
 ## Scores and policies
 
 `Taxonomy` holds configured path columns, exact node questions, payload hash and path. Nodes use hashes of taxonomy name plus full ancestor path, preventing same-name children from colliding. The two first-adopter loaders select three levels through Solution.
 
-`ScoringResult` holds every successful `(subject_id, node_id, probability)` plus one usage/status record per subject/request group. Cache IDs hash subject identity and supplied state; extraction supplies `cache_id` from organization and activity state so an unchanged activity reuses its cached answers across runs. Each group records the question hash and returned model. Successful raw gateway responses remain in the existing SQL cache. Jev's gateway alias is not a version pin; retain observed response metadata when judging reproducibility.
+`ScoringResult` holds every successful `(subject_id, node_id, probability)` plus one usage/status record per subject/request group. Cache IDs hash subject identity and supplied state; the JEV activity adapter supplies `cache_id` from organization and activity state so an unchanged activity reuses its cached answers across runs. Each group records the question hash and returned model. Successful raw gateway responses remain in the existing SQL cache. Jev's gateway alias is not a version pin; retain observed response metadata when judging reproducibility.
 
 Questions are packed deterministically under a 48k cl100k token estimate. This leaves context headroom under the gateway's nominal 64k limit; tokenizer estimates are not a contractual guarantee. Oversized individual questions fail instead of truncating definitions. This replaces Drawdown's October-specific fixed sector groups with reusable bounded groups.
 

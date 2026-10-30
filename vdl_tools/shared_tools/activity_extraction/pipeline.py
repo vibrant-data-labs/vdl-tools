@@ -15,21 +15,7 @@ from .general import GENERAL_EXTRACTION_PROMPT
 
 ID_COL, NAME_COL, URL_COL = "id", "Organization", "Website"
 
-STATE_FIELDS = {
-    "activity": "Activity",
-    "what_happens": "What happens",
-    "who_carries_it_out": "Who carries it out",
-    "aim": "Aim",
-    "sector": "Sector",
-    "methods": "Methods",
-}
-
 SNAPSHOT_TABLES = ("activity_extraction_orgs", "activity_extraction_activities")
-
-
-def activity_state(row) -> str:
-    """The six activity fields Jev judges; no summary or importance."""
-    return "\n".join(f"{label}: {str(row[field]).strip()}" for field, label in STATE_FIELDS.items())
 
 
 @dataclass
@@ -46,7 +32,7 @@ class ExtractionResult:
     activities : pandas.DataFrame
         One row per extracted activity: ``activity_id``, ``uid``, ``Organization``,
         ``activity_index``, ``extraction_run_id``, ``source_sha256``, every activity
-        schema field, ``state`` (the six fields Jev judges) and ``cache_id``.
+        schema field. Mapping-specific input text and cache keys are built by consumers.
     lineage : dict
         Run, prompt, schema and model identity plus ``status_counts``.
     """
@@ -161,10 +147,6 @@ def extract_frame(
                     "source_sha256": source_hash,
                     **activity.model_dump(),
                 }
-                row["state"] = activity_state(row)
-                # Stable across run IDs, while text hashes in the shared cache prevent
-                # old answers being reused after source activities change or reorder.
-                row["cache_id"] = create_deterministic_sha256([org.uid, row["state"]])
                 activity_rows.append(row)
         org_rows.append(record)
     org_columns = [
@@ -189,8 +171,6 @@ def extract_frame(
         "extraction_run_id",
         "source_sha256",
         *prompt.activity_model.model_fields,
-        "state",
-        "cache_id",
     ]
     org_frame = pd.DataFrame(org_rows, columns=org_columns)
     activities = pd.DataFrame(activity_rows, columns=activity_columns)
