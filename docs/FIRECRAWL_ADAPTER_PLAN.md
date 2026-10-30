@@ -461,7 +461,7 @@ reads: every step below "store" is a pure function of stored inputs and can be r
 
 Estimates are working days for one engineer who knows the pipeline.
 
-### Phase 0: prerequisites and zero-credit validation (2 days plus waiting)
+### Phase 0: prerequisites, text rules and zero-credit validation (4 days plus waiting)
 
 - RDS per the runbook agreed on #150: `AllocatedStorage` to 250 (max 300), gp2 to gp3, and
   a TTL policy. The volume was 182 of 200 GB in July; the sizes in section 4 do not fit
@@ -470,17 +470,31 @@ Estimates are working days for one engineer who knows the pipeline.
   resting plan and is active. Refresh months move to Growth or a top-up.
 - Merge PR #237 so the benchmark, the adapter notes and the `vendor_pilot` scripts are on
   main as regression tooling.
-- Rescore from the saved artifacts, for free: run the cleaner, dedupe and cap over
+- Build the text rules first, as the production module rather than as pilot scripts:
+  `markdown_clean.py` with `CLEANER_VERSION = 1`, `markdown_to_plain`, the gate order, the
+  cross-page dedupe and the 8k-token cap of section 5, with their golden tests on saved pilot
+  markdown including the parked and blocked-by-extension pages. Both measurements below
+  consume this text, and the team's Q1 decision rests on them, so the rules are written once
+  in their final home instead of being prototyped here and rewritten after the decision.
+  They are pure functions over strings with no vendor, database or dependency surface, about
+  two days. The review's 85.5% replay used a cleaner that was never committed, so nothing on
+  main reproduces it today; this closes that gap as well.
+- Rescore from the saved artifacts, for free, importing that module: run it over
   `firecrawl_e2e_pages.parquet`, recombine with the production `make_group_text`, recompute
-  usable (the review's cleaned-text replay gave 85.5% against 86.0%, so the headline is not a
-  length artifact); run the new link rule over the phase 1 links arrays and diff the picks
-  against the pilot's.
-- Paired LLM test on the 1,547 orgs usable on both runs: summarize both texts, run summary
-  of summaries and the One Earth mapping, and compare against a noise floor (the same text
-  re-run with the cache bypassed) on summary embedding cosine, taxonomy node Jaccard per
-  level, relevance flips, and an LLM judge plus 50 human spot checks, oversampling the 173
-  rescues and the largest length ratios. This is the number the team needs to decide, not
-  the fetch rate.
+  usable (the review's replay gave 85.5% against 86.0%, so the headline is not a length
+  artifact); run the new link rule over the phase 1 links arrays and diff the picks against
+  the pilot's.
+- Paired LLM test on the 1,547 orgs usable on both runs, on the text the module produces:
+  summarize both texts, run summary of summaries and the One Earth mapping, and compare
+  against a noise floor (the same text re-run with the cache bypassed) on summary embedding
+  cosine, taxonomy node Jaccard per level, relevance flips, and an LLM judge plus 50 human
+  spot checks, oversampling the 173 rescues and the largest length ratios. Record the
+  `CLEANER_VERSION` beside the result, so a later rule change is an explicit choice to re-run
+  this test or to lean on the Phase 5 gate. One limit to state up front: the phase 2
+  artifacts hold full-page subpages, so if Phase 5 picks main-content-only subpages the
+  production text differs from what was measured here; the Phase 5 gate re-measures the same
+  LLM outcomes on the production path for that reason. This is the number the team needs to
+  decide, not the fetch rate.
 
 ### Phase 1: Firecrawl client (2.5 days)
 
@@ -492,11 +506,14 @@ semantics of section 6; the credit ceiling; `dry_run`; a fake transport for test
 read before and after a run. Tests with an httpx mock transport cover retry paths, terminal
 codes, the 402 stop, the status gate and metadata capture including redirects.
 
-### Phase 2: text pipeline (2 days)
+### Phase 2: text pipeline wiring (0.5 day)
 
-`markdown_clean.py`, `markdown_to_plain`, the gate order, the per-org cap and cross-page
-dedupe in the combine helper. Golden tests on saved pilot markdown including the parked
-pages and the blocked-by-extension pages the review found.
+The rules themselves ship in Phase 0. What is left is wiring them into the combine helper in
+the order of section 5.4, tagged with the `extractor` version, and a determinism test on the
+real path: two runs over the same stored pages give byte-identical combined text, and the
+combine helper's output on the phase 2 sample matches the Phase 0 rescore byte for byte. Any
+rule change from here on bumps `CLEANER_VERSION` and either re-runs the Phase 0 paired test
+or defers to the Phase 5 gate; the PR says which.
 
 ### Phase 3: models and migration (1.5 days)
 
@@ -662,9 +679,9 @@ Storage: section 4. Compute: no browser or extractor runs locally; orchestration
 
 | Phase | Days |
 |---|---|
-| 0 Prerequisites and zero-credit validation | 2 plus waiting on RDS and the plan |
+| 0 Prerequisites, text rules and zero-credit validation | 4 plus waiting on RDS and the plan |
 | 1 Client | 2.5 |
-| 2 Text pipeline | 2 |
+| 2 Text pipeline wiring | 0.5 |
 | 3 Models and migration | 1.5 |
 | 4 Per-org pipeline and id lookup | 5 to 6 |
 | 5 Validation | 3 plus run time |
@@ -673,6 +690,7 @@ Storage: section 4. Compute: no browser or extractor runs locally; orchestration
 | Total, this PR's scope | 20 to 23 working days |
 | Separate PRs: `filter_links` determinism, #232, #226 | 0.5, 1 to 2, 2 |
 
-Phases 1 through 3 are independent and can run in parallel; Phase 4 needs all three; Phase 5
-needs 4; Phase 6 needs 5's gate to pass; Phase 7 waits for every project to have run on the
-new pipeline.
+Phase 0 builds the text rules because both of its measurements consume them. Phases 1
+through 3 are independent and can run in parallel; Phase 4 needs all three; Phase 5 needs 4;
+Phase 6 needs 5's gate to pass; Phase 7 waits for every project to have run on the new
+pipeline.
