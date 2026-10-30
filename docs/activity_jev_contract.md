@@ -26,7 +26,7 @@ It maps selected taxonomies in turn, writes each taxonomy's files as it finishes
 records the input, extraction and per-taxonomy identities in the mapped Parquet's
 lineage footer (`get_lineage`). Errors leave completed mapping files in place, and
 reruns reuse unchanged cached responses. Progress logs cover website-cache reads,
-extraction, JEV request groups, model-call progress at most every 30 seconds plus completion, and output writes.
+extraction, JEV request groups, and output writes. The shared prompt cache uses its existing chunk-level logging.
 `assemble_mapping_runs` reads each selected run's mapped Parquet and joins its export
 columns by organization ID, preserving an unselected taxonomy's approved legacy
 columns. No assembly or mapping function promotes production outputs.

@@ -14,8 +14,6 @@ docstring and method Notes for model-specific parameters.
 """
 
 from collections import defaultdict
-from threading import Lock
-from time import perf_counter
 from concurrent.futures import ThreadPoolExecutor as ThreadPool
 import datetime as dt
 import json
@@ -1141,7 +1139,6 @@ class PromptResponseCacheSQL():
 
         requested_given_ids = {given_id for given_id, _ in given_ids_texts}
         if read_from_cache:
-            logger.info("Checking prompt cache for %s: %d inputs", self.prompt.name, len(given_ids_texts))
             # The raw API kwargs travel to the lookup and the row builders;
             # request_hash is derived from them at those seams, so every
             # item in the batch reads and writes under the same key.
@@ -1169,15 +1166,8 @@ class PromptResponseCacheSQL():
         logger.info("Found %s cached responses", len(res))
         logger.info("Need to run %s responses", len_unfound)
 
-        progress_lock = Lock()
-        n_completed = 0
-        n_cached = len(res)
-        calls_started = perf_counter()
-        last_progress_at = calls_started
-
         def _api_only(given_id_text):
             """Worker: API call only, no session access. Returns (given_id, text, response_or_err, error_flag)."""
-            nonlocal n_completed, last_progress_at
             given_id, text = given_id_text
             response, error = self.get_completion_catch_error(
                 prompt_str=self.prompt.prompt_str,
@@ -1185,12 +1175,6 @@ class PromptResponseCacheSQL():
                 return_all=True,
                 **kwargs,
             )
-            with progress_lock:
-                n_completed += 1
-                now = perf_counter()
-                if now - last_progress_at >= 30 or n_completed == len_unfound:
-                    logger.info("%s: completed %d/%d model calls (%d cached) in %.1fs", self.prompt.name, n_completed, len_unfound, n_cached, now - calls_started)
-                    last_progress_at = now
             return given_id, text, response, error
 
         if len(unfound_rows) == 0:
