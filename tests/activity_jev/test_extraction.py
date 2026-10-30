@@ -107,12 +107,13 @@ def test_load_website_texts_uses_shared_scraper_and_junk_verdicts(monkeypatch):
                 {"cleaned_home_key": "solar.example", "home_url": "https://solar.example", "combined_text": "URL: https://solar.example/\nTEXT: We install rooftop solar panels for homes and train installers.", "num_errors": 0},
                 {"cleaned_home_key": "parked.example", "home_url": "https://parked.example", "combined_text": "This domain is for sale. Buy this domain today.", "num_errors": 0},
                 {"cleaned_home_key": "dead.example", "home_url": "https://dead.example", "combined_text": None, "num_errors": 2},
+                {"cleaned_home_key": "moved.example", "home_url": "https://moved.example", "combined_text": "URL: https://moved.example/\nTEXT: The page you are looking for might have been removed, had its name changed, or is temporarily unavailable.", "num_errors": 0},
             ]
         )
 
     monkeypatch.setattr(scrape_websites, "scrape_websites_psql", fake_scrape)
-    texts = load_website_texts(["https://solar.example", "https://parked.example", "https://dead.example", "", "https://solar.example"])
-    assert calls == [["https://solar.example", "https://parked.example", "https://dead.example"]]
+    texts = load_website_texts(["https://solar.example", "https://parked.example", "https://dead.example", "https://moved.example", "", "https://solar.example"])
+    assert calls == [["https://solar.example", "https://parked.example", "https://dead.example", "https://moved.example"]]
     assert list(texts) == ["https://solar.example"]
     assert texts["https://solar.example"].startswith("URL: https://solar.example/")
     assert load_website_texts([]) == {}

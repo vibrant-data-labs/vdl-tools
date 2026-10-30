@@ -55,7 +55,7 @@ The One Earth filename is still May 14 in the newest source revision. Its conten
 ## Input and extraction
 
 * One unique, non-null `id`, `Organization` and `Website` per organization. IDs are strings in every output.
-* Website text comes from the shared scraper (`scrape_websites_psql`: pages already in the SQL scrape cache are served, missing sites are scraped once) with the website summarizer's junk verdicts applied (parked, blocked, garbled, dead and empty sites are skipped); callers may supply `website_texts` directly. No 990 content or archived descriptions are used by `extract_frame`.
+* Website text comes from the shared scraper (`scrape_websites_psql`: pages already in the SQL scrape cache are served, missing sites are scraped once) with the website summarizer's junk verdicts applied (parked, blocked, not-found, garbled, dead and empty sites are skipped); callers may supply `website_texts` directly. No 990 content or archived descriptions are used by `extract_frame`.
 * Keep the general source prompt and schema. Production extraction uses `gpt-5.4-mini`, medium reasoning, through the shared `InstructorPRC` cache, which puts the response schema in the prompt identity and keys rows by model (`filter_by_model=True`). A cached row that no longer validates raises rather than being dropped.
 * Keep all extracted activities, including minor, one-off and past activities. Importance is metadata and never an assignment or funding weight.
 * Return one profile/status record for every input organization: `success`, `empty`, `missing_text`, or `request_failed`. A failed or unparsable model response never silently removes its organization.

@@ -127,8 +127,8 @@ def load_website_texts(urls: list[str]) -> dict[str, str]:
     ``scrape_websites_psql`` serves the pages already in the SQL scrape cache and
     scrapes only what is missing, and returns each site's pages combined into one
     prompt-ready text (``URL:`` / ``TEXT:`` blocks separated by ``----``). Sites whose
-    text is parked, blocked, garbled, dead or empty are left out, using the same
-    verdicts the website summarizer applies.
+    text is parked, blocked, a not-found screen, garbled, dead or empty are left
+    out, using the same verdicts the website summarizer applies.
 
     Parameters
     ----------

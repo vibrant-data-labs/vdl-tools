@@ -307,6 +307,10 @@ def website_evidence(df, domain_cache, scraped=None, id_col="id"):
 # would veto the "nothing was ever scraped" rule below.
 KEEP_URL_QUALITIES = {"garbled", "blocked"}
 
+# Left-alone pages worth a human look: too short to judge, or a not-found screen
+# (in the 2026-10-30 cache profile, mostly a stale deep path on a live domain).
+REVIEW_QUALITIES = ("thin", "not_found")
+
 # Sheet names in the review file.
 ACTIONS = ["remove_website", "remove_url", "fix_website"]
 
@@ -401,7 +405,7 @@ def apply_website_gate(df, decisions, id_col="id"):
 
 
 def write_website_review(decisions, path):
-    """One sheet per action, plus the thin pages that were left alone."""
+    """One sheet per action, plus the thin and not-found pages that were left alone."""
     path = pathlib.Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(path, engine="xlsxwriter") as writer:
@@ -409,7 +413,8 @@ def write_website_review(decisions, path):
         for action in ACTIONS:
             rows = decisions[decisions["action"] == action]
             rows.to_excel(writer, sheet_name=action, index=False)
-        review = decisions[(decisions["action"] == "") & (decisions["text_quality"] == "thin")]
+        left_alone = (decisions["action"] == "") & decisions["text_quality"].isin(REVIEW_QUALITIES)
+        review = decisions[left_alone]
         review.to_excel(writer, sheet_name="review", index=False)
     logger.info(
         "Website quality: wrote %s (%s, review %d)",
@@ -417,7 +422,7 @@ def write_website_review(decisions, path):
         ", ".join(
             f"{a} {int((decisions['action'] == a).sum())}" for a in ACTIONS
         ),
-        int(((decisions["action"] == "") & (decisions["text_quality"] == "thin")).sum()),
+        int(left_alone.sum()),
     )
 
 
