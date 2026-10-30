@@ -48,12 +48,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from functools import lru_cache
 from typing import Iterable
 
-import tiktoken
-
 from vdl_tools.scrape_enrich.scraper.text_quality import THIN_TEXT_CHARS, classify_text_quality
+from vdl_tools.shared_tools.openai.openai_api_utils import get_num_tokens, truncate_text
 from vdl_tools.shared_tools.tools.text_cleaning import clean_scraped_text
 from vdl_tools.shared_tools.web_summarization.make_page_text import MODEL, _make_full_url, make_group_text
 from vdl_tools.shared_tools.web_summarization.page_choice.choose_pages import deterministic_len_key
@@ -357,25 +355,18 @@ def dedupe_lines(texts: Iterable[str]) -> list[str]:
     return out
 
 
-@lru_cache(maxsize=1)
-def _encoding():
-    try:
-        return tiktoken.encoding_for_model(MODEL)
-    except KeyError:
-        return tiktoken.get_encoding("o200k_base")
-
-
 def count_tokens(text: str | None) -> int:
-    return len(_encoding().encode(text or "", disallowed_special=()))
+    """Tokens in the summarizer's encoding."""
+    return get_num_tokens(text or "", MODEL)
 
 
 def cap_tokens(text: str | None, max_tokens: int = ORG_TOKEN_CAP) -> str:
-    """``text`` cut from the end to at most ``max_tokens`` tokens, on a whitespace boundary."""
+    """``text`` cut from the end to at most ``max_tokens`` tokens, then back to the
+    last whitespace so the cut never splits a word."""
     text = text or ""
-    ids = _encoding().encode(text, disallowed_special=())
-    if len(ids) <= max_tokens:
+    cut = truncate_text(text, MODEL, max_tokens)
+    if cut == text:
         return text
-    cut = _encoding().decode(ids[:max_tokens])
     boundary = max(cut.rfind("\n"), cut.rfind(" "))
     return (cut[:boundary] if boundary > 0 else cut).rstrip()
 
