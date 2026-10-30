@@ -342,8 +342,20 @@ def stage_rel(orgs, ws: Store, store: Store, workers: int):
 
 def stage_adapt(orgs, ws: Store, store: Store, chunk_size: int = 50):
     api_key = get_configuration()["baseten"]["api_key"]
-    deployment = adp.ensure_deployment_active(ADAPT_MODEL_ID, api_key)
-    logger.info("Baseten deployment %s is %s", deployment.get("id"), deployment.get("status"))
+    # The management API that reports the deployment's status timed out once
+    # mid-run. A scaled-to-zero deployment wakes on a predict call by itself,
+    # so a status check that keeps failing is logged, not fatal.
+    max_workers = 1
+    try:
+        deployment = _retry(lambda: adp.ensure_deployment_active(ADAPT_MODEL_ID, api_key), attempts=3)
+        # One chunk in flight per replica the deployment can scale to, the rule
+        # AdaptationMitigationCache.bulk_predict follows since #241. bulk_predict
+        # itself is not called because it always writes to the shared cache.
+        max_workers = (deployment.get("autoscaling_settings") or {}).get("max_replica") or 1
+        logger.info("Baseten deployment %s is %s; %s chunks at a time",
+                    deployment.get("id"), deployment.get("status"), max_workers)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Baseten status check failed (%s); predicting one chunk at a time", exc)
     pending = []
     for org in orgs.itertuples(index=False):
         for chain in CHAINS:
@@ -352,15 +364,23 @@ def stage_adapt(orgs, ws: Store, store: Store, chunk_size: int = 50):
             fields = pd.DataFrame([_fields(org, chain, ws)])
             text = cf.join_strings_no_missing(fields, list(TEXT_FIELDS)).iloc[0]
             pending.append((chain, org.org_id, text))
+    chunks = [pending[i:i + chunk_size] for i in range(0, len(pending), chunk_size)]
     with get_session() as session:
         cache = adp.AdaptationMitigationCache(session=session, api_key=api_key, model_id=ADAPT_MODEL_ID)
-        for i in range(0, len(pending), chunk_size):
-            chunk = pending[i:i + chunk_size]
-            preds = _retry(lambda: cache._post_batch([(f"{c}:{o}", t) for c, o, t in chunk]))
-            for (chain, org_id, _), pred in zip(chunk, preds):
-                label = pred if isinstance(pred, str) else (pred.get("label") or pred.get("prediction"))
-                store.put({"chain": chain, "org_id": org_id, "label": label, "raw": pred})
-            logger.info("adapt: %s/%s", min(i + chunk_size, len(pending)), len(pending))
+
+        def post(chunk):
+            # _post_batch is a plain HTTP call; nothing here touches the session.
+            return chunk, _retry(lambda: cache._post_batch([(f"{c}:{o}", t) for c, o, t in chunk]))
+
+        done = 0
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            for future in as_completed([pool.submit(post, chunk) for chunk in chunks]):
+                chunk, preds = future.result()
+                for (chain, org_id, _), pred in zip(chunk, preds):
+                    label = pred if isinstance(pred, str) else (pred.get("label") or pred.get("prediction"))
+                    store.put({"chain": chain, "org_id": org_id, "label": label, "raw": pred})
+                done += len(chunk)
+                logger.info("adapt: %s/%s", done, len(pending))
         session.rollback()
 
 
