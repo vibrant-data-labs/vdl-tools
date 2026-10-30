@@ -9,6 +9,7 @@ from vdl_tools.scrape_enrich.display_name import (
     NameChoice,
     build_input_text,
     drop_legal_suffix,
+    name_words,
     normalize_name,
     pick_display_names,
     restore_apostrophes,
@@ -127,6 +128,11 @@ def test_legal_suffixes_at_the_end_are_dropped(name, expected):
     assert drop_legal_suffix(name) == expected
 
 
+def test_name_words_leave_out_the_words_that_say_what_kind_of_organization_it_is():
+    assert name_words("The Harlow Charitable Trust, Inc.") == {"harlow"}
+    assert name_words("Northfield School of Music") == {"northfield", "music"}
+
+
 def test_apostrophe_can_come_from_the_dba():
     assert restore_apostrophes("Joes Garage", "GARAGE INC", "JOE'S GARAGE") == "Joe's Garage"
 
@@ -208,3 +214,104 @@ def test_orgs_whose_call_failed_are_left_out(monkeypatch):
             "reason": "The website uses the DBA.",
         }
     ]
+
+
+def test_keeps_every_word():
+    assert display_name.keeps_every_word("Caldwell County School", "Caldwell County Schools")
+    assert display_name.keeps_every_word("Education Development Center (EDC)", "Education Development Center")
+    assert display_name.keeps_every_word("Partnership for Students, & Sustainability", "Partnership for Students and Sustainability")
+    assert display_name.keeps_every_word("HORIZON EDUCATIONAL SERVICES OF COLUMBUSINC", "Horizon Educational Services of Columbus")
+    assert not display_name.keeps_every_word("LEAP", "Learning through an Expanded Arts Program")
+    assert not display_name.keeps_every_word("goEzz", "GoEasy")
+    assert not display_name.keeps_every_word("YouthDevelopment Corporation", "Youth Development")
+
+
+def test_siblings_are_the_other_names_on_the_site_sorted():
+    names = ["Zeta Campus", "Alpha Campus", "Solo", "No Site", "Alpha Campus"]
+    sites = ["net.org", "net.org", "solo.org", None, "net.org"]
+    assert display_name.site_siblings(names, sites) == [
+        ["Alpha Campus", "Alpha Campus"], ["Alpha Campus", "Zeta Campus"], [], [], ["Alpha Campus", "Zeta Campus"],
+    ]
+
+
+def test_site_texts_skip_junk_pages_and_try_the_key_without_www(monkeypatch):
+    pages = {"good.org": ("Good Org runs after-school clubs. " * 20, 0), "parked.org": ("This domain is for sale.", 0)}
+    monkeypatch.setattr(display_name, "combined_texts", lambda keys, session: {k: pages[k] for k in keys if k in pages})
+    out = display_name.site_texts(["https://WWW.Good.org/", "parked.org", None], session=None)
+    assert list(out) == ["https://WWW.Good.org/"]
+
+
+class AnswerPicker:
+    """Stands in for ``pick_display_names``: records each call and answers ``(name, confidence)`` from ``answers``."""
+
+    def __init__(self, answers):
+        self.answers, self.calls = answers, []
+
+    def __call__(self, rows, session, name_col, id_col, prompt=None, **kwargs):
+        self.calls.append({"prompt": prompt, "ids": list(rows[id_col]), **kwargs})
+        found = [(i, *self.answers[(prompt, i)]) for i in rows[id_col] if (prompt, i) in self.answers]
+        return pd.DataFrame(
+            {id_col: [f[0] for f in found], "display_name": [f[1] for f in found],
+             "confidence": [f[2] for f in found], "source": "legal_name", "reason": ""}
+        )
+
+
+def network():
+    return pd.DataFrame(
+        {
+            "id": ["n", "s", "x"],
+            "Organization": ["RIVERBEND PREP NORTH", "RIVERBEND PREP SOUTH", "HARLOW YOUTH CLUBS"],
+            "Website": ["riverbend.org", "https://www.riverbend.org/south", "old-harlow.org"],
+        }
+    )
+
+
+def test_siblings_on_one_site_with_one_name_are_named_again_from_their_filed_names(monkeypatch):
+    picker = AnswerPicker(
+        {
+            (PROMPT_SHARED_SITE, "n"): ("Riverbend Prep", "high"),
+            (PROMPT_SHARED_SITE, "s"): ("Riverbend Prep", "high"),
+            (PROMPT, "x"): ("Harlow Youth Clubs", "high"),
+            (PROMPT_FILED_NAME, "n"): ("Riverbend Prep North", "high"),
+            (PROMPT_FILED_NAME, "s"): ("Riverbend Prep South", "high"),
+        }
+    )
+    monkeypatch.setattr(display_name, "pick_display_names", picker)
+    names = display_name.pick_names(network(), None, "id", "Organization", website_col="Website")
+    assert names.to_dict() == {"x": "Harlow Youth Clubs", "n": "Riverbend Prep North", "s": "Riverbend Prep South"}
+    assert [c["prompt"] for c in picker.calls] == [PROMPT, PROMPT_SHARED_SITE, PROMPT_FILED_NAME]
+    assert "siblings_col" not in picker.calls[2]
+
+
+def test_sites_follow_redirects_from_the_domain_cache(monkeypatch):
+    picker = AnswerPicker({})
+    monkeypatch.setattr(display_name, "pick_display_names", picker)
+    cache = {"old-harlow.org": {"final_domain": "riverbend.org"}}
+    display_name.pick_names(network(), None, "id", "Organization", domain_cache=cache, website_col="Website")
+    (shared,) = [c for c in picker.calls if c["prompt"] == PROMPT_SHARED_SITE]
+    assert shared["ids"] == ["n", "s", "x"]
+
+
+def test_a_low_confidence_or_refused_answer_is_named_again_from_the_filed_name(monkeypatch):
+    picker = AnswerPicker(
+        {
+            (PROMPT, "x"): ("Somebody Else", "low"),
+            (PROMPT_SHARED_SITE, "n"): ("Riverbend North", "high"),
+            (PROMPT_SHARED_SITE, "s"): ("Riverbend South", "high"),
+            (PROMPT_FILED_NAME, "x"): ("Harlow Youth Clubs", "high"),
+            (PROMPT_FILED_NAME, "s"): ("Riverbend Academy", "high"),
+        }
+    )
+    monkeypatch.setattr(display_name, "pick_display_names", picker)
+    refuse = lambda answers, rows: answers["id"] == "s"  # noqa: E731
+    names = display_name.pick_names(network(), None, "id", "Organization", refuse=refuse, website_col="Website")
+    # "Riverbend Academy" drops words of the filed name, so "s" gets no name.
+    assert names.to_dict() == {"n": "Riverbend North", "x": "Harlow Youth Clubs"}
+
+
+def test_without_choose_every_row_only_gets_its_filed_name_cased(monkeypatch):
+    picker = AnswerPicker({(PROMPT_FILED_NAME, "x"): ("Harlow Youth Clubs", "high")})
+    monkeypatch.setattr(display_name, "pick_display_names", picker)
+    names = display_name.pick_names(network(), None, "id", "Organization", choose=False, website_col="Website")
+    assert [c["prompt"] for c in picker.calls] == [PROMPT_FILED_NAME]
+    assert names.to_dict() == {"x": "Harlow Youth Clubs"}

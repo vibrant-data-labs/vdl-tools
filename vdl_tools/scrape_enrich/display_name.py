@@ -25,6 +25,11 @@ go through the model.
 For Giving Tuesday, run ``givingtuesday.name_lines.resolve_name_lines`` first, so
 the legal name is the complete name and the DBA is cleaned.
 
+``pick_names`` is the routine around the model that orgs and funders share: which
+prompt each row gets, the other organizations on a shared website, which answers
+are not used, and naming those again from the filed name. ``site_texts`` looks up
+the scraped text to show the model.
+
 ``gpt-oss-120b`` was chosen over ``qwen3.8-27b`` and ``mistral-small`` on 400
 Giving Tuesday orgs, 100 from each of four kinds (DBA, name joined from two lines,
 all capitals, already mixed case). On the 90 where the three disagreed, judged by
@@ -38,6 +43,9 @@ from typing import Literal
 import pandas as pd
 from pydantic import BaseModel, ValidationError
 
+from vdl_tools.scrape_enrich.scraper.text_quality import classify_text_quality
+from vdl_tools.scrape_enrich.url_keys import extract_website_name
+from vdl_tools.scrape_enrich.website_quality import combined_texts, final_domain
 from vdl_tools.shared_tools.openai.prompt_response_cache_sql import PromptResponseCacheSQL
 from vdl_tools.shared_tools.tools.logger import logger
 
@@ -286,3 +294,127 @@ def pick_display_names(
         )
     logger.info("Display names: %d of %d orgs have a usable answer", len(rows), len(ids_texts))
     return pd.DataFrame(rows, columns=[id_col, *NameChoice.model_fields])
+
+
+NAME_KEY_DROP_RE = re.compile(r"\b(inc|incorporated|llc|ltd|nfp|corp|the)\b")
+# A suffix filed without its space ("COLUMBUSINC").
+GLUED_SUFFIX_RE = re.compile(r"(?<=[a-z0-9]{3})(inc|llc)$")
+TRAILING_PARENS_RE = re.compile(r"\s*\([^)]*\)\s*$")
+# Words that say what kind of organization it is, not which one.
+GENERIC_WORDS = frozenset({
+    "the", "of", "and", "for", "a", "in", "inc", "llc", "ltd", "corp", "incorporated",
+    "foundation", "association", "center", "school", "schools", "fund", "trust", "charitable",
+})  # fmt: skip
+
+
+def name_key(name):
+    """``name`` without case, punctuation, "the" or legal suffixes, "&" read as "and": the same key
+    means the same name shown."""
+    name = str(name).lower().replace("&", " and ")
+    return GLUED_SUFFIX_RE.sub("", re.sub(r"[^a-z0-9]", "", NAME_KEY_DROP_RE.sub("", name)))
+
+
+def keeps_every_word(filed, answer):
+    """True when ``answer`` keeps every word of ``filed``; it may add words or drop a trailing "(EDC)"."""
+    return name_key(TRAILING_PARENS_RE.sub("", str(filed))) in name_key(TRAILING_PARENS_RE.sub("", str(answer)))
+
+
+def name_words(name):
+    """The lowercase words of ``name`` that say which organization it is (without ``GENERIC_WORDS``)."""
+    return set(re.findall(r"[a-z0-9]+", str(name).lower())) - GENERIC_WORDS
+
+
+def site_texts(websites, session):
+    """``website`` -> the scraped text of its site, where the scrape cache has one that
+    ``classify_text_quality`` calls ``ok`` (not parked, blocked, garbled or thin).
+
+    ``websites`` are URLs or ``extracted_website_key`` values. The cache key can be written with
+    or without ``www.`` and in either case, so both forms are tried.
+    """
+    keys = {w: extract_website_name(w) for w in websites if isinstance(w, str) and w}
+    variants = {w: list(dict.fromkeys([k, k.lower().removeprefix("www.")])) for w, k in keys.items() if k}
+    found = combined_texts({k for ks in variants.values() for k in ks}, session)
+    out = {}
+    for website, ks in variants.items():
+        for k in ks:
+            text, errors = found.get(k, ("", 0))
+            if text and classify_text_quality(text, errors) == "ok":
+                out[website] = text
+                break
+    return out
+
+
+def site_siblings(names, sites):
+    """For each row, the sorted names of the other rows on the same site; ``[]`` for a row with no site.
+
+    Sorted so the model input, and so its cache key, does not depend on row order.
+    """
+    on_site = {}
+    for i, (name, site) in enumerate(zip(names, sites)):
+        if isinstance(site, str) and site:
+            on_site.setdefault(site, []).append((i, str(name)))
+    return [
+        sorted(n for j, n in on_site[site] if j != i) if isinstance(site, str) and site else []
+        for i, site in enumerate(sites)
+    ]
+
+
+def _ask(rows, session, **kwargs):
+    if rows.empty:
+        return pd.DataFrame(columns=[kwargs["id_col"], *NameChoice.model_fields])
+    return pick_display_names(rows, session, **kwargs)
+
+
+def pick_names(df, session, id_col, name_col, choose=True, domain_cache=None, refuse=None, **input_kwargs):
+    """``id`` -> display name, for the rows of ``df`` that get a usable answer.
+
+    With ``choose``, the model chooses among the filed name, the DBA and the website (``PROMPT``). A
+    row whose website ends up on the same domain as other rows (redirects from ``domain_cache``) is
+    one school, campus or chapter of a network, and is named with the others listed
+    (``PROMPT_SHARED_SITE``). An answer is not used when its confidence is ``low``, when ``refuse``
+    (``answers, rows`` -> a boolean per answer) says so, or when two rows on one site get the same
+    name; those rows are named again from their filed name. Without ``choose``, every row is named
+    from its filed name (``PROMPT_FILED_NAME``), which keeps every word of it and only fixes the
+    casing, a legal suffix and a cut-off; an answer that drops or replaces a word is not used.
+
+    ``input_kwargs`` go to ``pick_display_names``: ``dba_col``, ``website_col``, ``summary_col``,
+    ``text_col``, ``max_errors``.
+    """
+    rows = df.assign(**{id_col: df[id_col].astype(str)})
+    kwargs = dict(name_col=name_col, id_col=id_col, **input_kwargs)
+    names = pd.Series(dtype=object)
+    again = rows
+    if choose:
+        website_col = input_kwargs.get("website_col")
+        sites = rows[website_col].map(lambda url: final_domain(url, domain_cache)) if website_col else pd.Series(None, index=rows.index)
+        rows = rows.assign(siblings=site_siblings(rows[name_col], sites))
+        shared = rows["siblings"].map(len) > 0
+        answers = pd.concat(
+            [
+                _ask(rows[~shared], session, prompt=PROMPT, **kwargs),
+                _ask(rows[shared], session, prompt=PROMPT_SHARED_SITE, siblings_col="siblings", **kwargs),
+            ],
+            ignore_index=True,
+        )
+        unused = (answers["confidence"] == "low") | (answers["display_name"].fillna("").astype(str).str.strip() == "")
+        if refuse is not None and len(answers):
+            unused |= refuse(answers, rows).to_numpy()
+        names = answers[~unused].set_index(id_col)["display_name"]
+        site_of = dict(zip(rows[id_col], sites))
+        named = pd.DataFrame({"site": names.index.map(site_of), "key": names.map(name_key).values}, index=names.index)
+        named = named[named.index.isin(rows.loc[shared, id_col])]
+        clash = named[named.duplicated(["site", "key"], keep=False)].index
+        names = names.drop(clash)
+        again = rows[rows[id_col].isin(answers.loc[unused, id_col]) | rows[id_col].isin(clash)]
+        logger.info(
+            "Display names: %d rows share a website with another; %d answers not used and %d siblings "
+            "with the same name are named again from the filed name",
+            int(shared.sum()), int(unused.sum()), len(clash),
+        )
+    filed = _ask(again, session, prompt=PROMPT_FILED_NAME, **kwargs).set_index(id_col)["display_name"]
+    kept = pd.Series(
+        [keeps_every_word(f, a) for f, a in zip(again.set_index(id_col)[name_col].reindex(filed.index), filed)],
+        index=filed.index, dtype=bool,
+    )
+    logger.info("Display names: %d filed-name answers removed or replaced a word and were not used", int((~kept).sum()))
+    return pd.concat([names, filed[kept]])
