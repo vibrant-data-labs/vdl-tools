@@ -7,6 +7,7 @@ sending Jev's native request shape to the gateway.
 """
 
 import json
+import logging
 import time
 from collections.abc import Mapping
 from threading import Event, Lock
@@ -23,6 +24,7 @@ from vdl_tools.shared_tools.openai.prompt_response_cache_sql import (
 JEV_GATEWAY_URL = "https://ai-gateway.vercel.sh/typesafe/v1/systemone"
 JEV_GATEWAY_MODEL = "typesafe-ai/jev"
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+logger = logging.getLogger(__name__)
 
 
 class _JevResponse:
@@ -127,7 +129,7 @@ class JevPromptResponseCacheSQL(PromptResponseCacheSQL):
                     headers=headers,
                     json={
                         "model": self.model,
-                        "model_provider": "typesafe-ai",
+                        "providerOptions": {"gateway": {"only": ["typesafe-ai"]}},
                         "state": text,
                         "questions": self.questions,
                     },
@@ -138,6 +140,13 @@ class JevPromptResponseCacheSQL(PromptResponseCacheSQL):
                     raise
             else:
                 if 500 <= response.status_code < 600:
+                    logger.error(
+                        "JEV gateway HTTP %s (attempt %s/%s, x-vercel-id=%s, x-request-id=%s): %s",
+                        response.status_code, attempt + 1, self.max_retries + 1,
+                        response.headers.get("x-vercel-id", "-"),
+                        response.headers.get("x-request-id", "-"),
+                        response.text[:2000],
+                    )
                     with self._server_error_lock:
                         self._server_errors += 1
                         if self._server_errors >= self.max_server_errors:

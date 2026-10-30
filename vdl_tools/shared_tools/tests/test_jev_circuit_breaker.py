@@ -114,3 +114,20 @@ def test_client_and_rate_limit_errors_do_not_trip_5xx_circuit(cache, monkeypatch
     with pytest.raises(requests.HTTPError):
         cache.get_completion("", "solar")
     assert not cache._circuit_open.is_set()
+
+
+def test_triggering_5xx_logs_gateway_details_before_abort(cache, monkeypatch, caplog):
+    monkeypatch.setattr(jev.logger, "handlers", [caplog.handler])
+    cache.max_server_errors = 1
+    failed = response(503)
+    failed.headers["x-vercel-id"] = "vercel-test-id"
+    failed.headers["x-request-id"] = "request-test-id"
+    failed._content = b'{"message":"provider unavailable","error_type":"upstream_error"}'
+    monkeypatch.setattr(jev.requests, "post", lambda *a, **kw: failed)
+    with pytest.raises(BulkRequestAborted):
+        cache.get_completion("", "private activity text")
+    assert "HTTP 503 (attempt 1/3" in caplog.text
+    assert "vercel-test-id" in caplog.text
+    assert "request-test-id" in caplog.text
+    assert "provider unavailable" in caplog.text
+    assert "private activity text" not in caplog.text
