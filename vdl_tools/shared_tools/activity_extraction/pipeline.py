@@ -65,7 +65,7 @@ def extract_frame(
     website_texts: dict[str, str] | None = None,
     prompt=GENERAL_EXTRACTION_PROMPT,
     runner=None,
-    max_workers: int = 50,
+    max_workers: int = 20,
 ) -> ExtractionResult:
     """Extract once per organization, keeping every organization and recording every outcome.
 

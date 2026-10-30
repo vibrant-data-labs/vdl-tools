@@ -155,7 +155,7 @@ def jev_gateway_request(
     ids_texts,
     *,
     prompt_name,
-    max_workers=50,
+    max_workers=20,
     read_from_cache=True,
     write_to_cache=True,
 ):
@@ -215,7 +215,7 @@ def score_subjects(
     taxonomy,
     *,
     request_runner=None,
-    max_workers=50,
+    max_workers=20,
     read_from_cache=True,
     write_to_cache=True,
 ) -> ScoringResult:

@@ -212,7 +212,7 @@ def run_extraction_prompt(
     given_ids_texts: list[tuple[str, str]],
     prompt: ExtractionPrompt,
     *,
-    max_workers: int = 50,
+    max_workers: int = 20,
     read_from_cache: bool = True,
     write_to_cache: bool = True,
     n_per_commit: int = 200,
