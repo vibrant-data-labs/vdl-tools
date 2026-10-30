@@ -609,7 +609,14 @@ Standard plan's settings. Two ways to adopt it:
    scraper, Playwright and the bot-wall logic in production, which is the
    thing this pilot set out to retire; it only makes sense if that layer
    moves to a server (the EC2 baseline showed the datacenter IP costs
-   little) and someone owns it.
+   little) and someone owns it. It also needs one fix first: the in-house
+   scraper must store the URL each page resolved to after redirects and
+   build subpage links from it, with a per-host pause on 429. Today it
+   joins links onto the stored `http://www.` home URL, so each page costs
+   four requests through redirects, and WordPress.com's rate limiter
+   rejects the burst for minutes (lagunacanyon.org, 2026-10-30: 13 of 16
+   subpages failed). Under the hybrid every such failure would be a paid
+   Firecrawl call. See section 2 of `docs/FIRECRAWL_ADAPTER_PLAN.md`.
 
 The pilot's recommendation stays Firecrawl only, with the subpage
 `onlyMainContent=true` trim as the first optimization to measure, and the
