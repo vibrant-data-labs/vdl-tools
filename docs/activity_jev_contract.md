@@ -19,17 +19,23 @@ conventions live in Climate Landscape. Climate Landscape loads only the selected
 taxonomy's workbook; shared-data may hold both, and a missing or invalid sibling
 workbook does not block the selected loader.
 
-Climate Landscape obtains activities through the `InstructorPRC` prompt cache on
-all runs; it writes no separate extraction snapshot and requires no extraction-run
-path. The output prefix is derived from the existing S3 `results_path` and run label.
-It maps selected taxonomies in turn, writes each taxonomy's files as it finishes, and
-records the input, extraction and per-taxonomy identities in the mapped Parquet's
-lineage footer (`get_lineage`). Errors leave completed mapping files in place, and
-reruns reuse unchanged cached responses. Progress logs cover website-cache reads,
-extraction, JEV request groups, and output writes. The shared prompt cache uses its existing chunk-level logging.
-`assemble_mapping_runs` reads each selected run's mapped Parquet and joins its export
-columns by organization ID, preserving an unselected taxonomy's approved legacy
-columns. No assembly or mapping function promotes production outputs.
+`activity_jev.runs.run_activity_mapping` is the shared runner a project calls. It
+obtains activities through the `InstructorPRC` prompt cache, writes no separate
+extraction snapshot, maps each `MappingJob`'s taxonomy in turn, writes each taxonomy's
+files as it finishes, and records the input, the organization columns used, the
+extraction and per-taxonomy identities in the organizations file's lineage footer
+(`get_lineage`). Errors leave completed mapping files in place and write no
+organizations file; reruns reuse unchanged cached responses. Progress logs cover
+website-cache reads, extraction, JEV request groups, and output writes. The shared
+prompt cache uses its existing chunk-level logging. `assemble_mapping_runs` reads each
+selected run's organizations file and joins its export columns by organization ID,
+preserving an unselected taxonomy's approved legacy columns. No assembly or mapping
+function promotes production outputs.
+
+Climate Landscape is the first caller. It supplies its column names, mapping names,
+display formatting, Drawdown properties, padding, funding depth and legacy file names,
+loads the selected workbooks before extraction, and writes under its S3 `results_path`
+and run label.
 
 ## Source revisions
 
@@ -55,8 +61,8 @@ The One Earth filename is still May 14 in the newest source revision. Its conten
 
 ## Input and extraction
 
-* One unique, non-null `id`, `Organization` and `Website` per organization. IDs are strings in every output.
-* Website text comes from the shared scraper (`scrape_websites_psql`: pages already in the SQL scrape cache are served, missing sites are scraped once) with the website summarizer's junk verdicts applied (parked, blocked, not-found, garbled, dead and empty sites are skipped); callers may supply `website_texts` directly. No 990 content or archived descriptions are used by `extract_frame`.
+* The caller names its organization columns: `id_col` (unique, non-null; IDs are strings in every output), `name_col` (heads the prompt text) and `url_col` (required only when the text is read from websites). Extraction's own tables use `uid`, `name` and `url`; the export writes the caller's ID and name columns back.
+* Website text comes from the shared scraper (`scrape_websites_psql`: pages already in the SQL scrape cache are served, missing sites are scraped once) with the website summarizer's junk verdicts applied (parked, blocked, not-found, garbled, dead and empty sites are skipped); callers may supply `website_texts` directly, keyed by organization ID. No 990 content or archived descriptions are used by `extract_frame`.
 * Keep the general source prompt and schema. Production extraction uses `gpt-5.4-mini`, medium reasoning, through the shared `InstructorPRC` cache, which puts the response schema in the prompt identity and keys rows by model (`filter_by_model=True`). A cached row that no longer validates raises rather than being dropped.
 * Keep all extracted activities, including minor, one-off and past activities. Importance is metadata and never an assignment or funding weight.
 * Return one profile/status record for every input organization: `success`, `empty`, `missing_text`, or `request_failed`. A failed or unparsable model response never silently removes its organization.
@@ -89,7 +95,7 @@ These are first-adopter implementation baselines (`DEFAULT_POLICY` in each packa
 
 * Take the deduplicated union of every activity's paths. Remove shallow rows implied by deeper paths, preserving the source prototypes' representation. Keep the raw activity-path table for complete provenance.
 * Each organization path records supporting activity IDs, per-activity evidence and source hashes, best probability, best tier, and support count. Probability and importance never determine dollars.
-* Reuse `attach_mapping_columns` and `distribute_funding_from_matches(max_level=2)` through `exports.export_extraction`. Preserve native-list legacy mapping columns and blank level-3 columns. Unmatched organizations stay in mapped metadata and have explicit statuses; existing serving consumers emit their No Match rows.
+* Reuse `attach_mapping_columns` and `distribute_funding_from_matches` through `exports.export_extraction`. Level padding and funding depth are caller settings, defaulting to the taxonomy's own levels; Climate Landscape asks for four levels, keeping blank level-3 columns, and level-2 funding. Preserve native-list legacy mapping columns. Unmatched organizations stay in mapped metadata and have explicit statuses; existing serving consumers emit their No Match rows.
 * Funding fractions sum to one for each matched organization at the existing allocation grain. Hierarchical parent and child rows are never summed as separate allocations.
 * Climate Landscape preserves Drawdown Solution properties and the legacy `Sector: Cluster` display prefix in its export settings. The October workbook already carries the new sector/cluster structure, so Climate Landscape emits regrouped aliases without applying the June crosswalk.
 

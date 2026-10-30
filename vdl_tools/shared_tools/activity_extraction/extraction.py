@@ -22,7 +22,7 @@ Entry points
 ``load_website_texts(urls)``
     Website text per URL through the shared scraper, junk sites excluded.
 ``build_inputs(orgs, prompt, website_texts)``
-    Assembles the (cache key, prompt text) pairs.
+    Assembles the (cache key, prompt text) pairs from text keyed by organization ID.
 ``run_extraction_prompt(given_ids_texts, prompt, ...)``
     The cached model call, through the shared ``InstructorPRC`` cache.
 ``render_profile(profile, prompt)``
@@ -167,7 +167,7 @@ def load_website_texts(urls: list[str]) -> dict[str, str]:
 def build_inputs(
     orgs: list[OrgInput],
     prompt: ExtractionPrompt,
-    website_texts: dict[str, str] | None = None,
+    website_texts: dict[str, str],
 ) -> tuple[list[tuple[str, str]], dict[str, dict]]:
     """Assemble the (cache key, prompt text) pairs and per-org provenance.
 
@@ -178,21 +178,19 @@ def build_inputs(
     ----------
     orgs : list[OrgInput]
     prompt : ExtractionPrompt
-    website_texts : dict, optional
-        ``url -> text`` as `load_website_texts` returns; None calls it.
+    website_texts : dict
+        ``organization ID -> text``; an organization absent from it has no usable text.
 
     Returns
     -------
     tuple[list[tuple[str, str]], dict[str, dict]]
         ``given_ids_texts`` as ``(uid, text)`` pairs, and ``meta[uid]`` with ``uid``,
-        ``Organization``, ``Website`` and ``text_chars``.
+        ``name``, ``url`` and ``text_chars``.
     """
-    if website_texts is None:
-        website_texts = load_website_texts([o.url for o in orgs if o.url])
     given_ids_texts: list[tuple[str, str]] = []
     meta: dict[str, dict] = {}
     for org in orgs:
-        text = website_texts.get(org.url) if org.url else None
+        text = website_texts.get(org.uid)
         if not text:
             logger.warning("No usable website text for %s (%s); skipped", org.name, org.uid)
             continue
@@ -200,8 +198,8 @@ def build_inputs(
         given_ids_texts.append((org.uid, f"ORGANIZATION: {org.name}\n\n{text}"))
         meta[org.uid] = {
             "uid": org.uid,
-            "Organization": org.name,
-            "Website": org.url,
+            "name": org.name,
+            "url": org.url,
             "text_chars": len(text),
         }
     logger.info("Extraction inputs ready: %d/%d organizations have website text", len(given_ids_texts), len(orgs))

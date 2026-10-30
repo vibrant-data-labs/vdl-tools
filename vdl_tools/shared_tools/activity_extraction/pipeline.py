@@ -10,10 +10,14 @@ import pandas as pd
 from ..parquet_cache import get_lineage, read_dataframes, write_dataframes
 from ..tools.logger import logger
 from ..tools.unique_ids import create_deterministic_sha256
-from .extraction import OrgInput, build_inputs, render_profile, run_extraction_prompt
+from .extraction import (
+    OrgInput,
+    build_inputs,
+    load_website_texts,
+    render_profile,
+    run_extraction_prompt,
+)
 from .general import GENERAL_EXTRACTION_PROMPT
-
-ID_COL, NAME_COL, URL_COL = "id", "Organization", "Website"
 
 SNAPSHOT_TABLES = ("activity_extraction_orgs", "activity_extraction_activities")
 
@@ -25,12 +29,13 @@ class ExtractionResult:
     Attributes
     ----------
     organizations : pandas.DataFrame
-        One row per input organization: ``uid``, ``Organization``, ``Website``,
+        One row per input organization: ``uid``, ``name``, ``url`` (the caller's
+        ID, name and website values; ``url`` is None without a URL column),
         ``extraction_run_id``, ``source_sha256``, ``text_chars``, ``Description``, ``summary``, ``coverage``, ``n_activities``,
         ``extraction_status`` (``success``, ``empty``, ``missing_text`` or
         ``request_failed``) and the prompt's organization-level fields.
     activities : pandas.DataFrame
-        One row per extracted activity: ``activity_id``, ``uid``, ``Organization``,
+        One row per extracted activity: ``activity_id``, ``uid``, ``name``,
         ``activity_index``, ``extraction_run_id``, ``source_sha256``, every activity
         schema field. Mapping-specific input text and cache keys are built by consumers.
     lineage : dict
@@ -62,6 +67,9 @@ def extract_frame(
     organizations: pd.DataFrame,
     *,
     run_id: str,
+    id_col: str,
+    name_col: str,
+    url_col: str | None = None,
     website_texts: dict[str, str] | None = None,
     prompt=GENERAL_EXTRACTION_PROMPT,
     runner=None,
@@ -72,14 +80,22 @@ def extract_frame(
     Parameters
     ----------
     organizations : pandas.DataFrame
-        One row per organization with ``id`` (unique and non-null), ``Organization``
-        and ``Website``.
+        One row per organization, carrying the columns named below.
     run_id : str
         Label of this extraction run; mixed into every ``activity_id``.
+    id_col : str
+        Column with each organization's ID; unique and non-null. IDs are compared as
+        strings.
+    name_col : str
+        Column with the organization's name, which heads its prompt text.
+    url_col : str, optional
+        Column with the organization's website. Required when ``website_texts`` is
+        None, because the text is then read by URL; otherwise only recorded.
     website_texts : dict, optional
-        ``url -> text`` already loaded; None calls `load_website_texts`, which serves
-        the SQL scrape cache through the shared scraper. No descriptions or Form 990
-        programs are ever used as a fallback.
+        ``organization ID -> text`` already loaded. None reads each organization's
+        website through `load_website_texts`, which serves the SQL scrape cache through
+        the shared scraper. No descriptions or Form 990 programs are ever used as a
+        fallback.
     prompt : ExtractionPrompt
         What to extract; defaults to the general prompt.
     runner : callable, optional
@@ -94,20 +110,26 @@ def extract_frame(
     """
     started = perf_counter()
     logger.info("Extracting activities for %d organizations (run=%s, workers=%d)", len(organizations), run_id, max_workers)
-    if missing := {ID_COL, NAME_COL, URL_COL} - set(organizations):
+    if website_texts is None and url_col is None:
+        raise ValueError("Pass url_col to read website text, or supply website_texts")
+    columns = [c for c in (id_col, name_col, url_col) if c is not None]
+    if missing := set(columns) - set(organizations):
         raise ValueError(f"Missing organization columns: {sorted(missing)}")
-    ids = organizations[ID_COL].astype(str)
-    if organizations[ID_COL].isna().any() or ids.duplicated().any():
+    ids = organizations[id_col].astype(str)
+    if organizations[id_col].isna().any() or ids.duplicated().any():
         raise ValueError("Organization IDs must be non-null and unique")
     orgs = [
         OrgInput(
-            uid=str(row[ID_COL]),
-            name=str(row[NAME_COL]),
-            url=str(row[URL_COL]).strip() if pd.notna(row[URL_COL]) and row[URL_COL] else None,
+            uid=str(row[id_col]),
+            name=str(row[name_col]),
+            url=str(row[url_col]).strip() if url_col and pd.notna(row[url_col]) and row[url_col] else None,
         )
         for row in organizations.to_dict("records")
     ]
-    inputs, meta = build_inputs(orgs, prompt, website_texts=website_texts)
+    if website_texts is None:
+        by_url = load_website_texts([o.url for o in orgs if o.url])
+        website_texts = {o.uid: by_url[o.url] for o in orgs if o.url in by_url}
+    inputs, meta = build_inputs(orgs, prompt, website_texts)
     texts = dict(inputs)
     logger.info("Extracting %d usable organization profiles through %s", len(inputs), "the shared prompt cache" if runner is None else "the supplied runner")
     profiles = (runner or run_extraction_prompt)(inputs, prompt, max_workers=max_workers)
@@ -117,8 +139,8 @@ def extract_frame(
         source_hash = create_deterministic_sha256(texts[org.uid]) if org.uid in texts else None
         record = {
             "uid": org.uid,
-            "Organization": org.name,
-            "Website": org.url,
+            "name": org.name,
+            "url": org.url,
             "extraction_run_id": run_id,
             "source_sha256": source_hash,
             "text_chars": meta.get(org.uid, {}).get("text_chars", 0),
@@ -141,7 +163,7 @@ def extract_frame(
                 row = {
                     "activity_id": create_deterministic_sha256([run_id, org.uid, index]),
                     "uid": org.uid,
-                    "Organization": org.name,
+                    "name": org.name,
                     "activity_index": index,
                     "extraction_run_id": run_id,
                     "source_sha256": source_hash,
@@ -151,8 +173,8 @@ def extract_frame(
         org_rows.append(record)
     org_columns = [
         "uid",
-        "Organization",
-        "Website",
+        "name",
+        "url",
         "extraction_run_id",
         "source_sha256",
         "text_chars",
@@ -166,7 +188,7 @@ def extract_frame(
     activity_columns = [
         "activity_id",
         "uid",
-        "Organization",
+        "name",
         "activity_index",
         "extraction_run_id",
         "source_sha256",

@@ -3,7 +3,7 @@ import pytest
 
 from vdl_tools.shared_tools.activity_extraction.pipeline import extract_frame
 
-from .conftest import profile
+from .conftest import COLUMNS, profile
 
 
 def test_all_orgs_accounted_and_minor_activity_kept(extraction):
@@ -27,13 +27,12 @@ def test_all_orgs_accounted_and_minor_activity_kept(extraction):
 
 
 def test_run_identity_changes_but_source_hash_does_not(organizations):
-    url = organizations.Website.iloc[0]
-    texts = {url: "URL: " + url + "/\nTEXT: We install rooftop solar panels with our own trained crews."}
+    texts = {"1": "URL: https://solar.example/\nTEXT: We install rooftop solar panels with our own trained crews."}
     first = extract_frame(
-        organizations.iloc[:1], run_id="first", website_texts=texts, runner=lambda *a, **k: {"1": profile()}
+        organizations.iloc[:1], run_id="first", **COLUMNS, website_texts=texts, runner=lambda *a, **k: {"1": profile()}
     )
     second = extract_frame(
-        organizations.iloc[:1], run_id="second", website_texts=texts, runner=lambda *a, **k: {"1": profile()}
+        organizations.iloc[:1], run_id="second", **COLUMNS, website_texts=texts, runner=lambda *a, **k: {"1": profile()}
     )
     assert set(first.activities.activity_id).isdisjoint(second.activities.activity_id)
     assert first.activities.source_sha256.tolist() == second.activities.source_sha256.tolist()
@@ -45,7 +44,7 @@ def test_missing_text_never_falls_back_to_descriptions(organizations):
     )
     sent = []
     result = extract_frame(
-        source, run_id="missing", website_texts={}, runner=lambda inputs, *a, **kw: sent.append(inputs) or {}
+        source, run_id="missing", **COLUMNS, website_texts={}, runner=lambda inputs, *a, **kw: sent.append(inputs) or {}
     )
     assert sent == [[]]
     assert set(result.organizations.extraction_status) == {"missing_text"}
@@ -55,7 +54,41 @@ def test_missing_text_never_falls_back_to_descriptions(organizations):
 def test_duplicate_normalized_ids_rejected(organizations):
     source = pd.concat([organizations.iloc[:1], organizations.iloc[:1].assign(id=1)])
     with pytest.raises(ValueError, match="unique"):
-        extract_frame(source, run_id="duplicate", website_texts={})
+        extract_frame(source, run_id="duplicate", **COLUMNS, website_texts={})
+
+
+def test_caller_names_the_organization_columns(organizations, monkeypatch):
+    from vdl_tools.shared_tools.activity_extraction import pipeline
+
+    renamed = organizations.rename(columns={"id": "org_key", "Organization": "org_title", "Website": "homepage"})
+    read = []
+
+    def by_url(urls):
+        read.append(urls)
+        return {"https://solar.example": "URL: https://solar.example/\nTEXT: We install rooftop solar panels."}
+
+    monkeypatch.setattr(pipeline, "load_website_texts", by_url)
+    sent = []
+    result = extract_frame(
+        renamed, run_id="renamed", id_col="org_key", name_col="org_title", url_col="homepage",
+        runner=lambda pairs, *a, **kw: sent.extend(pairs) or {"1": profile()},
+    )
+    assert read == [["https://solar.example", "https://failed.example", "https://empty.example"]]
+    assert sent == [("1", "ORGANIZATION: Solar\n\nURL: https://solar.example/\nTEXT: We install rooftop solar panels.")]
+    assert result.organizations[["uid", "name", "url"]].iloc[0].tolist() == ["1", "Solar", "https://solar.example"]
+    assert result.organizations.extraction_status.tolist() == ["success", "missing_text", "missing_text", "missing_text"]
+    assert result.activities.name.unique().tolist() == ["Solar"]
+    with pytest.raises(ValueError, match="url_col"):
+        extract_frame(renamed, run_id="no-url", id_col="org_key", name_col="org_title")
+    with pytest.raises(ValueError, match="Missing organization columns"):
+        extract_frame(renamed, run_id="wrong", id_col="id", name_col="org_title", website_texts={})
+    # Supplied text needs no URL column at all.
+    supplied = extract_frame(
+        renamed.drop(columns="homepage"), run_id="supplied", id_col="org_key", name_col="org_title",
+        website_texts={"1": "We install rooftop solar panels."}, runner=lambda *a, **kw: {"1": profile()},
+    )
+    assert supplied.organizations.url.isna().all()
+    assert supplied.organizations.extraction_status.iloc[0] == "success"
 
 
 def test_run_extraction_prompt_uses_shared_instructor_cache(monkeypatch):
@@ -136,8 +169,8 @@ def test_extraction_accepts_a_schema_without_jev_fields(organizations):
     prompt = ExtractionPrompt(text="Extract activities", prompt_name="minimal", response_model=Profile, model="offline")
     profile = Profile(summary="Teaches", coverage="adequate", activities=[Activity(activity="Teaching", evidence="We teach", certainty="high")])
     result = extract_frame(
-        organizations.iloc[:1], run_id="independent", prompt=prompt,
-        website_texts={organizations.Website.iloc[0]: "We teach"},
+        organizations.iloc[:1], run_id="independent", prompt=prompt, **COLUMNS,
+        website_texts={"1": "We teach"},
         runner=lambda *a, **kw: {"1": profile},
     )
     assert result.activities.activity.tolist() == ["Teaching"]

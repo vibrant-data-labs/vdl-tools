@@ -63,16 +63,26 @@ def organizations():
     )
 
 
+COLUMNS = {"id_col": "id", "name_col": "Organization"}
+
+
+def website_texts(organizations):
+    """Fixture website text keyed by organization ID, for every organization with a URL."""
+    return {
+        uid: "URL: " + url + "/\nTEXT: Our own crews install rooftop solar panels on homes. We also train solar installers."
+        for uid, url in zip(organizations.id, organizations.Website, strict=True)
+        if url
+    }
+
+
 @pytest.fixture
 def extraction(organizations):
-    texts = {
-        url: "URL: " + url + "/\nTEXT: Our own crews install rooftop solar panels on homes. We also train solar installers."
-        for url in organizations.Website.dropna()
-    }
     return extract_frame(
         organizations,
         run_id="fixture",
-        website_texts=texts,
+        **COLUMNS,
+        url_col="Website",
+        website_texts=website_texts(organizations),
         runner=lambda *a, **kw: {"1": profile(), "4": profile(0)},
     )
 
@@ -139,8 +149,11 @@ def score_activities(extraction, tax, **options):
 
 
 def map_and_export(organizations, extraction, tax, **options):
-    """What a Climate Landscape job does: map the activities, then run the tracker export."""
+    """Map the activities, then run the tracker export with the tracker's four padded levels."""
     mapped = map_subjects(
         subjects_of(extraction), tax, policy=PACKAGES[tax.name].DEFAULT_POLICY, **options
     )
-    return export_extraction(organizations, extraction, tax, mapped, mapping_name=f"{tax.name}_category")
+    return export_extraction(
+        organizations, extraction, tax, mapped, **COLUMNS,
+        mapping_name=f"{tax.name}_category", pad_levels=4, funding_level=2,
+    )

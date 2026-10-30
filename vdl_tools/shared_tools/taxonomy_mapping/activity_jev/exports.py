@@ -1,8 +1,8 @@
 """Tracker-shaped export of activity matches: organization rollup, legacy columns, statuses, funding.
 
-Generic inference never imports this module. The caller names the tracker's mapping column
-and may reshape the result rows; four level columns and level-2 funding are the conventions
-every VDL tracker loader reads.
+Generic inference never imports this module. The caller names its organization columns and
+the tracker's mapping column, and chooses the level padding, the funding depth, any node
+attributes to list per organization and any reshaping of the result rows.
 """
 
 from dataclasses import dataclass
@@ -10,11 +10,6 @@ from dataclasses import dataclass
 import pandas as pd
 
 from .engine import drop_implied
-
-ID_COL = "id"
-NAME_COL = "Organization"
-PAD_LEVELS = 4  # legacy consumers expect level0..level3 columns even for three-level taxonomies
-FUNDING_LEVEL = 2  # the existing allocation grain (Q4)
 
 
 @dataclass
@@ -29,7 +24,8 @@ class MappingResult:
         and ``<taxonomy>_mapping_status``.
     paths : pandas.DataFrame
         One row per (organization, path) from ``rollup_paths`` plus one no-match row
-        per unmatched organization, with ``id``, ``Organization``, ``deepest_match``,
+        per unmatched organization, with the caller's ID and name columns, any listed
+        node attributes, ``deepest_match``,
         ``taxonomy_sha256``, ``policy_sha256`` and ``mapping_status`` (``matched``,
         ``unmatched``, ``partial_failure``, ``scoring_failed``, or the extraction
         status when extraction did not succeed).
@@ -136,28 +132,58 @@ def rollup_paths(activity_paths, activities, taxonomy):
     ).reset_index(drop=True)
 
 
-def export_extraction(organizations, extraction, taxonomy, mapped, *, mapping_name, format_paths=None):
+def export_extraction(
+    organizations,
+    extraction,
+    taxonomy,
+    mapped,
+    *,
+    id_col,
+    name_col,
+    mapping_name,
+    format_paths=None,
+    attribute_columns=None,
+    pad_levels=None,
+    funding_level=None,
+):
     """Roll activity matches up to organizations and attach tracker-shaped columns.
 
     Parameters
     ----------
     organizations : pandas.DataFrame
-        One row per organization with ``id`` and ``Organization``; ``id`` unique and
-        non-null. Returned with IDs as strings and columns added, never rows removed.
+        One row per organization with ``id_col`` unique and non-null. Returned with IDs
+        as strings and columns added, never rows removed.
     extraction : ExtractionResult
         The extraction whose ``activities`` were mapped. Its organization cohort must
-        equal ``organizations.id``; its ``extraction_status`` feeds the mapping status
-        of organizations without matches.
+        equal ``organizations[id_col]``; its ``extraction_status`` feeds the mapping
+        status of organizations without matches.
     taxonomy : Taxonomy
         The taxonomy the activities were scored against.
     mapped : SubjectMappingResult
         ``map_subjects`` output for ``extraction.activities`` with ``activity_id``
         renamed to ``subject_id``.
+    id_col : str
+        Organization ID column, used in ``organizations`` and written to the result rows
+        and funding.
+    name_col : str
+        Column the result rows and funding carry the extracted organization name in.
     mapping_name : str
         Suffix of the legacy mapping columns, e.g. ``one_earth_category``.
     format_paths : callable, optional
         ``format_paths(paths) -> paths`` applied to the result rows before statuses are
         attached, for a tracker's display conventions.
+    attribute_columns : dict[str, str], optional
+        ``node attribute -> output column`` for attributes the loader kept on the
+        deepest level's nodes (e.g. Drawdown solution properties). Each output column
+        lists the attribute per organization, aligned with
+        ``all_level{deepest}_<mapping_name>``; each result row gets the attribute
+        under its own name.
+    pad_levels : int, optional
+        Emit ``level{i}`` and ``all_level{i}`` columns up to this many levels even
+        when the taxonomy is shallower. None emits the taxonomy's own levels.
+    funding_level : int, optional
+        Deepest level funding is allocated to. None allocates to the taxonomy's
+        deepest level.
 
     Returns
     -------
@@ -170,22 +196,22 @@ def export_extraction(organizations, extraction, taxonomy, mapped, *, mapping_na
         distribute_funding_from_matches,
     )
 
-    ids = organizations[ID_COL].astype(str)
-    if organizations[ID_COL].isna().any() or ids.duplicated().any():
+    ids = organizations[id_col].astype(str)
+    if organizations[id_col].isna().any() or ids.duplicated().any():
         raise ValueError("Organization IDs must be non-null and unique")
     if set(ids) != set(extraction.organizations.uid):
         raise ValueError("Extraction and mapping organization cohorts differ")
     activity_paths = mapped.subject_paths.rename(columns={"subject_id": "activity_id"})
     union = rollup_paths(activity_paths, extraction.activities, taxonomy)
-    paths = union.rename(columns={"uid": ID_COL})
-    names = extraction.organizations.set_index("uid")[NAME_COL]
-    paths[NAME_COL] = paths[ID_COL].map(names)
+    paths = union.rename(columns={"uid": id_col})
+    names = extraction.organizations.set_index("uid")["name"]
+    paths[name_col] = paths[id_col].map(names)
     # One no-match row per org is required by the legacy attach helpers.
     matched = set(union.uid)
     missing_rows = [
         {
-            ID_COL: uid,
-            NAME_COL: names[uid],
+            id_col: uid,
+            name_col: names[uid],
             **dict.fromkeys(taxonomy.columns),
             "prob": None,
             "tier": None,
@@ -220,30 +246,40 @@ def export_extraction(organizations, extraction, taxonomy, mapped, *, mapping_na
             statuses[uid] = "partial_failure" if uid in matched else "scoring_failed"
         else:
             statuses[uid] = "matched" if uid in matched else "unmatched"
-    paths["mapping_status"] = paths[ID_COL].map(statuses)
+    paths["mapping_status"] = paths[id_col].map(statuses)
 
-    out = organizations.assign(**{ID_COL: ids})
+    deepest = len(taxonomy.columns) - 1
+    funding_level = deepest if funding_level is None else funding_level
+    out = organizations.assign(**{id_col: ids})
     out = attach_mapping_columns(
-        out, paths, taxonomy.levels, ID_COL, mapping_name=mapping_name, pad_to_n_levels=PAD_LEVELS
+        out, paths, taxonomy.levels, id_col, mapping_name=mapping_name, pad_to_n_levels=pad_levels
     )
-    out[f"{taxonomy.name}_mapping_status"] = out[ID_COL].map(statuses)
+    out[f"{taxonomy.name}_mapping_status"] = out[id_col].map(statuses)
     funding = distribute_funding_from_matches(
-        paths, taxonomy.levels, ID_COL, NAME_COL, max_level=FUNDING_LEVEL
+        paths, taxonomy.levels, id_col, name_col, max_level=funding_level
     )
     export_columns = [
         *[
             f"{prefix}level{i}_{mapping_name}"
-            for i in range(PAD_LEVELS)
+            for i in range(max(pad_levels or 0, deepest + 1))
             for prefix in ("", "all_")
         ],
         mapping_name,
         f"cat_level_{mapping_name}",
         f"{taxonomy.name}_mapping_status",
     ]
+    leaves = taxonomy.nodes[taxonomy.nodes.depth == deepest].set_index(taxonomy.columns[-1])
+    for attribute, column in (attribute_columns or {}).items():
+        lookup = leaves[attribute].to_dict()
+        out[column] = out[f"all_level{deepest}_{mapping_name}"].map(
+            lambda values, lookup=lookup: [lookup.get(v) for v in values]
+        )
+        paths[attribute] = paths[taxonomy.columns[-1]].map(lookup)
+        export_columns.append(column)
     lineage = {
         **mapped.lineage,
         "export_columns": export_columns,
-        "max_funding_level": FUNDING_LEVEL,
+        "max_funding_level": funding_level,
         "status_counts": pd.Series(statuses).value_counts().to_dict(),
     }
     return MappingResult(
