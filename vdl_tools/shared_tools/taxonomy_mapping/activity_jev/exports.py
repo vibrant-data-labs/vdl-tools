@@ -9,7 +9,6 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from ..hierarchical_taxonomy_mapping import attach_mapping_columns, distribute_funding_from_matches
 from .engine import drop_implied
 
 ID_COL = "id"
@@ -164,6 +163,13 @@ def export_extraction(organizations, extraction, taxonomy, mapped, *, mapping_na
     -------
     MappingResult
     """
+    # Imported here: the legacy helpers' module pulls in the SQL prompt cache, which reads
+    # the database configuration at import time; offline callers need none of that.
+    from ..hierarchical_taxonomy_mapping import (
+        attach_mapping_columns,
+        distribute_funding_from_matches,
+    )
+
     ids = organizations[ID_COL].astype(str)
     if organizations[ID_COL].isna().any() or ids.duplicated().any():
         raise ValueError("Organization IDs must be non-null and unique")
