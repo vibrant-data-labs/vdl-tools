@@ -48,7 +48,18 @@ def _clean(value):
 
 
 def clean_funder_text(name):
-    """Plain characters, no invisible marks, ligatures expanded, no trailing junk."""
+    """Plain characters, no invisible marks, ligatures expanded, no trailing junk.
+
+    Parameters
+    ----------
+    name : str or None
+        A funder name as filed or listed.
+
+    Returns
+    -------
+    str
+        The cleaned name; ``""`` for a missing name.
+    """
     name = unicodedata.normalize("NFKC", _clean(name))
     name = normalize_name(INVISIBLE_RE.sub("", name))
     name = TRAILING_JUNK_RE.sub("", " ".join(name.split()))
@@ -59,15 +70,43 @@ def funder_name_and_dba(name, name_secondary=None, dba_name=None):
     """The complete filed name of a Giving Tuesday granter and its DBA, from the three name lines.
 
     Line 2 often finishes a name cut at the field width ("COMMUNITY FOUNDATION OF" +
-    "ELKHART COUNTY INC"); a "C/O ..." tail is care-of text, not part of the name. The DBA is
-    ``""`` when there is none.
+    "ELKHART COUNTY INC"); a "C/O ..." tail is care-of text, not part of the name.
+
+    Parameters
+    ----------
+    name : str or None
+        Name line 1 (``businessname1``).
+    name_secondary : str or None, optional
+        Name line 2 (``businessname2``).
+    dba_name : str or None, optional
+        The filed DBA (``dba_name``).
+
+    Returns
+    -------
+    tuple of (str, str)
+        The cleaned filed name, and the cleaned DBA (``""`` when there is none).
     """
     organization, dba = resolve_name_lines(_clean(name), _clean(name_secondary), _clean(dba_name))
     return clean_funder_text(CARE_OF_RE.sub("", organization)), clean_funder_text(dba)
 
 
 def funder_filed_name(name, name_secondary=None, dba_name=None):
-    """The complete filed name of a Giving Tuesday granter (see ``funder_name_and_dba``)."""
+    """The complete filed name of a Giving Tuesday granter.
+
+    Parameters
+    ----------
+    name, name_secondary, dba_name : str or None
+        Name lines 1 and 2 and the filed DBA, as in ``funder_name_and_dba``.
+
+    Returns
+    -------
+    str
+        The cleaned filed name.
+
+    See Also
+    --------
+    funder_name_and_dba : The same, with the DBA.
+    """
     return funder_name_and_dba(name, name_secondary, dba_name)[0]
 
 
@@ -75,6 +114,16 @@ def funder_key(name):
     """A loose key to compare funder names: case, punctuation, "The", "&" and a legal suffix ignored.
 
     Not an identity: many funders share a key, and one funder can have several.
+
+    Parameters
+    ----------
+    name : str or None
+        A funder name.
+
+    Returns
+    -------
+    str
+        Lowercase words separated by single spaces; ``""`` for a missing name.
     """
     key = drop_legal_suffix(unicodedata.normalize("NFKC", _clean(name))).lower().replace("&", " and ")
     key = re.sub(r"['\u2019.]", "", key)
@@ -86,6 +135,16 @@ def pick_spelling(names):
     """One spelling for a funder: the most frequent that is not ALL CAPS, else the most frequent.
 
     Never title-cases, which would mangle an acronym-only name like ``AARP``.
+
+    Parameters
+    ----------
+    names : iterable of str
+        The funder's names as they appear across orgs, repeats included.
+
+    Returns
+    -------
+    str
+        The chosen spelling after ``clean_funder_text``; ``""`` when no name is left.
     """
     counts = Counter(clean_funder_text(n) for n in names if clean_funder_text(n))
     if not counts:
@@ -96,7 +155,18 @@ def pick_spelling(names):
 
 
 def us_state(value):
-    """Two-letter US state from a name or an abbreviation; ``None`` if it is neither."""
+    """Two-letter US state from a state name or an abbreviation.
+
+    Parameters
+    ----------
+    value : str or None
+        A state name ("North Carolina") or abbreviation ("NC"), in any case.
+
+    Returns
+    -------
+    str or None
+        The two-letter abbreviation, or ``None`` if ``value`` is neither.
+    """
     value = _clean(value)
     if value.upper() in US_STATES.values():
         return value.upper()

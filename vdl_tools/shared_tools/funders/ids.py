@@ -28,7 +28,18 @@ def slugify(s: str) -> str:
 
 
 def normalize_ein(value):
-    """Nine digits without the dash, or ``None`` when ``value`` is not an EIN string."""
+    """Nine digits without the dash, or ``None`` when ``value`` is not an EIN string.
+
+    Parameters
+    ----------
+    value : str or object
+        An EIN with or without the dash (``12-3456789`` or ``123456789``).
+
+    Returns
+    -------
+    str or None
+        The nine digits, or ``None`` when ``value`` is not a string in either form.
+    """
     if not isinstance(value, str):
         return None
     value = value.strip()

@@ -42,15 +42,26 @@ def _names(value):
 
 
 def collect_funders(df):
-    """One row per org and funder: ``pos`` (row position), ``funder_id``, ``name``, ``source``, ``dba``.
+    """One row per org and funder, each funder with an id.
 
-    ``source`` is ``investor`` (Crunchbase) or ``donor`` (Giving Tuesday and the rest); ``dba`` is
-    the granter's DBA from its name lines, ``""`` for the others.
     A name in ``Investors``/``Donors``/``Funder_Names`` that no ``Investors Data`` or ``granters``
     record accounts for is another spelling of a funder when exactly one funder id has its
     ``funder_key`` (on this org first, then anywhere); otherwise it gets a ``name:`` id. A name that
     is only the start of a funder the org already has ("Community Foundation" for "Community
     Foundation of Greater Memphis") is the cut-off first line of it and is dropped.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        One row per org, with any of the columns ``Investors Data``, ``granters``, ``Investors``,
+        ``Donors`` and ``Funder_Names`` (lists, arrays or JSON strings).
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns ``pos`` (the org's row position in ``df``), ``funder_id``, ``name``, ``source``
+        (``investor`` for Crunchbase, ``donor`` for Giving Tuesday and the rest) and ``dba`` (the
+        granter's DBA from its name lines, ``""`` for the others).
     """
     out, leftovers = [], []
     for pos, row in enumerate(df.to_dict("records")):
@@ -91,7 +102,20 @@ def collect_funders(df):
 
 
 def funder_display_names(long, picks=None):
-    """``funder_id`` -> its display name: the best spelling among its names, else the model's ``picks``."""
+    """Each funder's display name: the best spelling among its names, else the model's pick.
+
+    Parameters
+    ----------
+    long : pandas.DataFrame
+        ``collect_funders`` output.
+    picks : pandas.Series, optional
+        ``funder_id`` -> the name the model chose; it replaces the spelling where present.
+
+    Returns
+    -------
+    pandas.Series
+        ``funder_id`` -> display name.
+    """
     names = long.groupby("funder_id")["name"].agg(pick_spelling)
     if picks is not None and len(picks):
         names.update(picks[picks.index.isin(names.index)])
@@ -116,17 +140,34 @@ def _unsupported_dba(answers, rows):
 
 
 def pick_funder_names(names, dbas, websites, session, texts=None, domain_cache=None):
-    """``funder_id`` -> the name the model chose, for the funders it should look at.
+    """The name the model chooses for the funders it should look at.
 
     Giving Tuesday funders (``ein:``) with a DBA or a website go through ``pick_names`` with the choice
     of name, so the model may replace the filed name with the DBA or the website's name; a DBA it
     cannot confirm is not used (``_unsupported_dba``). The other names that are still ALL CAPS only get
     their casing fixed, keeping every word.
 
-    ``dbas`` and ``websites`` are ``funder_id`` -> DBA and website (missing or blank for none).
-    ``texts`` is ``funder_id`` -> the start of the website's scraped text; without it the model only
-    sees the domain. ``domain_cache`` (``website_quality.load_domain_cache``) groups funders whose
-    websites redirect to one site.
+    Parameters
+    ----------
+    names : pandas.Series
+        ``funder_id`` -> current display name.
+    dbas : pandas.Series
+        ``funder_id`` -> DBA; missing or blank for none.
+    websites : pandas.Series
+        ``funder_id`` -> website; missing or blank for none.
+    session : sqlalchemy.orm.Session
+        Session on the database that caches the model's answers.
+    texts : pandas.Series, optional
+        ``funder_id`` -> the start of the website's scraped text. Without it the model only sees
+        the domain.
+    domain_cache : dict, optional
+        ``website_quality.load_domain_cache`` output, to group funders whose websites redirect to
+        one site.
+
+    Returns
+    -------
+    pandas.Series
+        ``funder_id`` -> the model's name, for the funders that got a usable answer.
     """
     inputs = pd.DataFrame(
         {
@@ -153,10 +194,22 @@ def pick_funder_names(names, dbas, websites, session, texts=None, domain_cache=N
 
 
 def add_state_to_shared_names(names, states):
-    """Append " (NC)" to the names that more than one funder id shares, so the player shows them apart.
+    """Append the state, as in " (NC)", to the names that more than one funder id shares.
 
-    ``states`` is ``funder_id`` -> two-letter state (missing or ``None`` where unknown).
-    Funders with a unique name, and shared names with no known state, keep their name.
+    So the player shows them apart. Funders with a unique name, and shared names with no known
+    state, keep their name.
+
+    Parameters
+    ----------
+    names : pandas.Series
+        ``funder_id`` -> display name.
+    states : pandas.Series or dict
+        ``funder_id`` -> two-letter state; missing or ``None`` where unknown.
+
+    Returns
+    -------
+    pandas.Series
+        ``funder_id`` -> the name, with the state added where it is shared.
     """
     shared = names[names.duplicated(keep=False)]
     if shared.empty:
@@ -174,18 +227,34 @@ def add_state_to_shared_names(names, states):
 
 
 def funder_names(df, min_occurrences=2, session=None, attributes_of=None, domain_cache=None):
-    """The names of the funders linked to at least ``min_occurrences`` orgs, indexed by ``funder_id``.
+    """The names of the funders linked to at least ``min_occurrences`` orgs.
 
     ``display_name`` is chosen once for every place that shows the funder (the player, the dashboard):
     the best spelling among its names, else the model's choice, without a legal suffix. ``label`` is what
     the player shows: the display name with the state added where several funders share it
     ("Smith Family Foundation (NC)").
 
-    ``attributes_of`` maps a list of funder ids to a frame indexed by id with the columns ``state`` and
-    ``website``, and optionally ``text`` (the start of the website's scraped text). With it, funders that
-    share a display name get their state in the label; with it and a database ``session``, the model also
-    sees each Giving Tuesday funder's DBA and website (see ``pick_funder_names``, which ``domain_cache``
-    goes to). Without ``attributes_of`` the model only fixes the casing of the names that are still ALL CAPS.
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        One row per org, with the funder columns ``collect_funders`` reads.
+    min_occurrences : int, default 2
+        Keep only the funders linked to at least this many orgs.
+    session : sqlalchemy.orm.Session, optional
+        Session on the database that caches the model's answers. Without it the model is not called.
+    attributes_of : callable, optional
+        Maps a list of funder ids to a frame indexed by id with the columns ``state`` and ``website``,
+        and optionally ``text`` (the start of the website's scraped text). With it, funders that share
+        a display name get their state in the label, and with a ``session`` the model also sees each
+        Giving Tuesday funder's DBA and website (see ``pick_funder_names``). Without it the model only
+        fixes the casing of the names that are still ALL CAPS.
+    domain_cache : dict, optional
+        ``website_quality.load_domain_cache`` output, passed to ``pick_funder_names``.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Indexed by ``funder_id``, with the columns ``display_name`` and ``label``.
     """
     long = collect_funders(df)
     names = funder_display_names(long)
@@ -209,8 +278,20 @@ def funder_names(df, min_occurrences=2, session=None, attributes_of=None, domain
 def build_funder_columns(df, labels):
     """Add ``Funder_Ids`` and rebuild ``Investors``, ``Donors`` and ``Funders`` from funder ids.
 
-    ``labels`` is ``funder_id`` -> the name to show (``funder_names(df)["label"]``), so one funder has
-    one spelling. A funder not in it is dropped; no org row is.
+    One funder has one spelling everywhere. A funder not in ``labels`` is dropped; no org row is.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        One row per org, with the funder columns ``collect_funders`` reads.
+    labels : pandas.Series
+        ``funder_id`` -> the name to show, ``funder_names(df)["label"]``.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A copy of ``df`` with ``Funder_Ids``, ``Funders`` (the labels, in the same order as the ids),
+        ``Investors`` (the Crunchbase funders) and ``Donors`` (the others).
     """
     long = collect_funders(df)
     long = long[long["funder_id"].isin(labels.index)].assign(display=lambda d: d["funder_id"].map(labels))

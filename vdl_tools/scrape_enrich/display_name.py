@@ -308,28 +308,77 @@ GENERIC_WORDS = frozenset({
 
 
 def name_key(name):
-    """``name`` without case, punctuation, "the" or legal suffixes, "&" read as "and": the same key
-    means the same name shown."""
+    """A key for comparing display names: the same key means the same name shown.
+
+    Case, punctuation, "the" and legal suffixes are ignored, and "&" is read as "and".
+
+    Parameters
+    ----------
+    name : str
+        A display or filed name.
+
+    Returns
+    -------
+    str
+        Lowercase letters and digits only.
+    """
     name = str(name).lower().replace("&", " and ")
     return GLUED_SUFFIX_RE.sub("", re.sub(r"[^a-z0-9]", "", NAME_KEY_DROP_RE.sub("", name)))
 
 
 def keeps_every_word(filed, answer):
-    """True when ``answer`` keeps every word of ``filed``; it may add words or drop a trailing "(EDC)"."""
+    """Whether ``answer`` keeps every word of ``filed``.
+
+    It may add words or drop a trailing "(EDC)".
+
+    Parameters
+    ----------
+    filed : str
+        The filed name.
+    answer : str
+        The model's name.
+
+    Returns
+    -------
+    bool
+        True when the key of ``filed`` is inside the key of ``answer`` (see ``name_key``).
+    """
     return name_key(TRAILING_PARENS_RE.sub("", str(filed))) in name_key(TRAILING_PARENS_RE.sub("", str(answer)))
 
 
 def name_words(name):
-    """The lowercase words of ``name`` that say which organization it is (without ``GENERIC_WORDS``)."""
+    """The words of a name that say which organization it is.
+
+    Parameters
+    ----------
+    name : str
+        An organization or funder name.
+
+    Returns
+    -------
+    set of str
+        Its lowercase words, without ``GENERIC_WORDS``.
+    """
     return set(re.findall(r"[a-z0-9]+", str(name).lower())) - GENERIC_WORDS
 
 
 def site_texts(websites, session):
-    """``website`` -> the scraped text of its site, where the scrape cache has one that
-    ``classify_text_quality`` calls ``ok`` (not parked, blocked, garbled or thin).
+    """The scraped text of each website, where the scrape cache has a usable one.
 
-    ``websites`` are URLs or ``extracted_website_key`` values. The cache key can be written with
-    or without ``www.`` and in either case, so both forms are tried.
+    Usable means ``classify_text_quality`` calls it ``ok`` (not parked, blocked, garbled or thin).
+    The cache key can be written with or without ``www.`` and in either case, so both forms are tried.
+
+    Parameters
+    ----------
+    websites : iterable of str
+        URLs or ``extracted_website_key`` values.
+    session : sqlalchemy.orm.Session
+        Session on the database that holds the scrape cache.
+
+    Returns
+    -------
+    dict
+        website -> its scraped text, only for the websites that have a usable one.
     """
     keys = {w: extract_website_name(w) for w in websites if isinstance(w, str) and w}
     variants = {w: list(dict.fromkeys([k, k.lower().removeprefix("www.")])) for w, k in keys.items() if k}
@@ -345,9 +394,21 @@ def site_texts(websites, session):
 
 
 def site_siblings(names, sites):
-    """For each row, the sorted names of the other rows on the same site; ``[]`` for a row with no site.
+    """For each row, the names of the other rows on the same site.
 
     Sorted so the model input, and so its cache key, does not depend on row order.
+
+    Parameters
+    ----------
+    names : sequence of str
+        One name per row.
+    sites : sequence of str or None
+        One site (domain) per row, in the same order; missing or blank for no site.
+
+    Returns
+    -------
+    list of list of str
+        One sorted list per row; ``[]`` for a row with no site.
     """
     on_site = {}
     for i, (name, site) in enumerate(zip(names, sites)):
@@ -366,19 +427,42 @@ def _ask(rows, session, **kwargs):
 
 
 def pick_names(df, session, id_col, name_col, choose=True, domain_cache=None, refuse=None, **input_kwargs):
-    """``id`` -> display name, for the rows of ``df`` that get a usable answer.
+    """The display name the model gives each row, for the rows that get a usable answer.
 
     With ``choose``, the model chooses among the filed name, the DBA and the website (``PROMPT``). A
     row whose website ends up on the same domain as other rows (redirects from ``domain_cache``) is
     one school, campus or chapter of a network, and is named with the others listed
     (``PROMPT_SHARED_SITE``). An answer is not used when its confidence is ``low``, when ``refuse``
-    (``answers, rows`` -> a boolean per answer) says so, or when two rows on one site get the same
-    name; those rows are named again from their filed name. Without ``choose``, every row is named
-    from its filed name (``PROMPT_FILED_NAME``), which keeps every word of it and only fixes the
-    casing, a legal suffix and a cut-off; an answer that drops or replaces a word is not used.
+    says so, or when two rows on one site get the same name; those rows are named again from their
+    filed name. Without ``choose``, every row is named from its filed name (``PROMPT_FILED_NAME``),
+    which keeps every word of it and only fixes the casing, a legal suffix and a cut-off; an answer
+    that drops or replaces a word is not used.
 
-    ``input_kwargs`` go to ``pick_display_names``: ``dba_col``, ``website_col``, ``summary_col``,
-    ``text_col``, ``max_errors``.
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        One row per organization.
+    session : sqlalchemy.orm.Session
+        Session on the database that caches the model's answers.
+    id_col : str
+        Column with each row's id.
+    name_col : str
+        Column with the filed name.
+    choose : bool, default True
+        Let the model choose among the filed name, the DBA and the website. With ``False`` it only
+        fixes the filed name.
+    domain_cache : dict, optional
+        ``website_quality.load_domain_cache`` output, to find rows whose websites redirect to one site.
+    refuse : callable, optional
+        ``refuse(answers, rows)`` -> a boolean per answer, ``True`` for an answer not to use.
+    **input_kwargs
+        Passed to ``pick_display_names``: ``dba_col``, ``website_col``, ``summary_col``,
+        ``text_col``, ``max_errors``.
+
+    Returns
+    -------
+    pandas.Series
+        id -> display name. Rows with no usable answer are left out.
     """
     rows = df.assign(**{id_col: df[id_col].astype(str)})
     kwargs = dict(name_col=name_col, id_col=id_col, **input_kwargs)
