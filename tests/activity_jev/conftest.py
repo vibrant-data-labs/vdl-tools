@@ -7,10 +7,15 @@ from vdl_tools.shared_tools.activity_extraction import pipeline
 from vdl_tools.shared_tools.activity_extraction.general import GeneralActivityProfile
 from vdl_tools.shared_tools.activity_extraction.pipeline import extract_frame
 from vdl_tools.shared_tools.taxonomy_mapping import drawdown, one_earth
-from vdl_tools.shared_tools.taxonomy_mapping.activity_jev import engine
-from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.engine import map_subjects, score_subjects
-from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.exports import export_extraction
-from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.subjects import build_activity_subjects
+from vdl_tools.shared_tools.taxonomy_mapping.activity_jev import mapping
+from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.activities import (
+    build_activity_subjects,
+    export_extraction,
+)
+from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.mapping import (
+    map_subjects,
+    score_subjects,
+)
 
 PACKAGES = {"one_earth": one_earth, "drawdown": drawdown}
 # The Drawdown wording names these two nodes; a fixture workbook must contain them.
@@ -36,7 +41,7 @@ def use_extraction(monkeypatch):
 @pytest.fixture
 def use_jev(monkeypatch):
     """Answer Jev gateway requests with ``fake(questions, ids_texts, **kw) -> {cache_id: row}``."""
-    return lambda fake: monkeypatch.setattr(engine, "jev_gateway_request", fake)
+    return lambda fake: monkeypatch.setattr(mapping, "jev_gateway_request", fake)
 
 
 def profile(activities=2):

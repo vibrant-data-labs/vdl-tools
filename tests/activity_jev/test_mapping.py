@@ -3,14 +3,16 @@ import json
 import pandas as pd
 import pytest
 
-from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.engine import (
+from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.activities import (
+    build_activity_subjects,
+    export_extraction,
+)
+from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.mapping import (
     MatchPolicy,
     map_subjects,
     question_sets,
     select_matches,
 )
-from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.exports import export_extraction
-from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.subjects import build_activity_subjects
 
 from .conftest import COLUMNS, STEWARDSHIP_SECTOR, fake_jev, map_and_export, score_activities
 

@@ -1,12 +1,11 @@
 """One Earth taxonomy for JEV mapping: workbook loader, question wording and default policy.
 
 This package resolves only One Earth inputs. It never imports the Drawdown package, and
-the generic engine in ``taxonomy_mapping.activity_jev`` never imports this one. Tracker
+the generic mapping code in ``taxonomy_mapping.activity_jev`` never imports this one. Tracker
 output conventions belong to the consumer (Climate Landscape), not here.
 """
 
-from ..activity_jev.engine import MatchPolicy
-from ..activity_jev.taxonomies import load_workbook
+from ..activity_jev.mapping import MatchPolicy, load_workbook
 from . import questions as oe
 
 COLUMNS = ("Pillar", "Sub-Pillar", "Solution")

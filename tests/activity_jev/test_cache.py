@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.engine import jev_gateway_request
+from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.mapping import jev_gateway_request
 
 
 def test_incomplete_gateway_answers_are_not_cache_successes(offline_config, monkeypatch):

@@ -19,7 +19,9 @@ conventions live in Climate Landscape. Climate Landscape loads only the selected
 taxonomy's workbook; shared-data may hold both, and a missing or invalid sibling
 workbook does not block the selected loader.
 
-`activity_jev.runs.run_activity_mapping` is the shared runner a project calls. It
+The package has two modules: `activity_jev.mapping` maps any text onto one taxonomy and knows nothing about activities or trackers; `activity_jev.activities` holds everything activity- and tracker-specific. Worked examples are in [the usage guide](ACTIVITY_JEV_MAPPING.md).
+
+`activity_jev.activities.run_activity_mapping` is the shared runner a project calls. It
 obtains activities through the `InstructorPRC` prompt cache, writes no separate
 extraction snapshot, maps each `MappingJob`'s taxonomy in turn, writes each taxonomy's
 files as it finishes, and records the input, the organization columns used, the
@@ -71,7 +73,7 @@ Extraction has no taxonomy or JEV dependency and returns the supplied schema's a
 
 `ExtractionResult.organizations` records the rendered profile, source hash, text length, coverage, activity count, extraction run, and status. `activities` records every schema field, evidence, organization identity and run-qualified activity identity.
 
-Activity IDs are SHA-256 over `[extraction_run_id, org_uid, activity_index]`; they are only stable within a fixed extraction run. `activity_jev.subjects.build_activity_subjects` builds the JEV text and cache IDs from `[org_uid, six-field activity state]`, so a new run ID does not invalidate unchanged activity requests. No durable identity is inferred across changed activities.
+Activity IDs are SHA-256 over `[extraction_run_id, org_uid, activity_index]`; they are only stable within a fixed extraction run. `activity_jev.activities.build_activity_subjects` builds the JEV text and cache IDs from `[org_uid, six-field activity state]`, so a new run ID does not invalidate unchanged activity requests. No durable identity is inferred across changed activities.
 
 ## Scores and policies
 
@@ -95,7 +97,7 @@ These are first-adopter implementation baselines (`DEFAULT_POLICY` in each packa
 
 * Roll up the deduplicated union of the kept activities' paths. One Earth keeps every activity. Drawdown keeps its prototype's adopted `core_first` rule (drawdown `jev/DECISIONS.md`, 2026-10-26; adopted here by Zein on 2026-11-03): the core activities' matches, falling back to core and secondary, then to all activities, when none matched. Remove shallow rows implied by deeper paths, preserving the source prototypes' representation. Keep the raw activity-path table, with every activity's matches, for complete provenance; the rollup choice is in each export's lineage.
 * Each organization path records supporting activity IDs, per-activity evidence and source hashes, best probability, best tier, and support count. Probability never determines dollars; importance affects them only through Drawdown's `core_first` choice of which paths roll up, and each kept path is still split equally by the existing allocation.
-* Reuse `attach_mapping_columns` and `distribute_funding_from_matches` through `exports.export_extraction`. Level padding and funding depth are caller settings, defaulting to the taxonomy's own levels; Climate Landscape asks for four levels, keeping blank level-3 columns, and level-2 funding. Preserve native-list legacy mapping columns. Unmatched organizations stay in mapped metadata and have explicit statuses; existing serving consumers emit their No Match rows.
+* Reuse `attach_mapping_columns` and `distribute_funding_from_matches` through `activities.export_extraction`. Level padding and funding depth are caller settings, defaulting to the taxonomy's own levels; Climate Landscape asks for four levels, keeping blank level-3 columns, and level-2 funding. Preserve native-list legacy mapping columns. Unmatched organizations stay in mapped metadata and have explicit statuses; existing serving consumers emit their No Match rows.
 * Funding fractions sum to one for each matched organization at the existing allocation grain. Hierarchical parent and child rows are never summed as separate allocations.
 * Climate Landscape preserves Drawdown Solution properties and the legacy `Sector: Cluster` display prefix in its export settings. The October workbook already carries the new sector/cluster structure, so Climate Landscape emits regrouped aliases without applying the June crosswalk.
 

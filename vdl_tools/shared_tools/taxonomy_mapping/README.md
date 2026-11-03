@@ -26,7 +26,7 @@ vdl_tools/shared_tools/taxonomy_mapping/
 ├── analyze_judge_results.py             # judge-results analyzer (Tier 1)
 ├── analyze_taxonomy_overlap.py          # term overlap / nesting analyzer
 ├── oe_hierarchical_taxonomy_mapping.py  # OE-specific classifier wiring
-├── activity_jev/                        # JEV engine over extracted activities (see its README)
+├── activity_jev/                        # JEV mapping: generic mapping.py, activity layer activities.py (see its README)
 ├── one_earth/, drawdown/                # JEV loaders, question wording, default policies
 └── …                                    # other domain-agnostic helpers
 ```

@@ -8,12 +8,12 @@ from dataclasses import replace
 import pandas as pd
 import pytest
 
-from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.engine import (
+from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.mapping import (
     MatchPolicy,
+    load_workbook,
     map_subjects,
     select_matches,
 )
-from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.taxonomies import load_workbook
 
 from .conftest import fake_jev
 
