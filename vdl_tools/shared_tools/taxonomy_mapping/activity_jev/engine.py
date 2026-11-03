@@ -161,9 +161,8 @@ def jev_gateway_request(
 ):
     """Send one question group for many subjects to the Jev gateway, through the prompt cache.
 
-    This is the default ``request_runner`` of ``score_subjects``; tests inject a fake
-    with the same signature. Imports are local so offline selection needs no database
-    configuration.
+    ``score_subjects`` sends every request group through this function. Imports are
+    local so offline selection needs no database configuration.
 
     Parameters
     ----------
@@ -214,7 +213,6 @@ def score_subjects(
     subjects,
     taxonomy,
     *,
-    request_runner=None,
     max_workers=20,
     read_from_cache=True,
     write_to_cache=True,
@@ -231,13 +229,10 @@ def score_subjects(
         absent it is the SHA-256 of ``[subject_id, state]``.
     taxonomy : Taxonomy
         Supplies the questions and the identity recorded in ``lineage``.
-    request_runner : callable, optional
-        ``runner(questions, ids_texts, *, prompt_name, max_workers, read_from_cache,
-        write_to_cache) -> {cache_id: row}``; defaults to ``jev_gateway_request``.
     max_workers : int
-        Passed to the runner.
+        Parallel gateway requests, passed to ``jev_gateway_request``.
     read_from_cache, write_to_cache : bool
-        Passed to the runner.
+        Cache behaviour, passed to ``jev_gateway_request``.
 
     Returns
     -------
@@ -267,13 +262,12 @@ def score_subjects(
     pairs = list(
         subjects[["cache_id", "state"]].drop_duplicates().itertuples(index=False, name=None)
     )
-    runner = request_runner or jev_gateway_request
     scores, usage = [], []
     for group_index, (group, questions) in enumerate(groups.items(), start=1):
         started = perf_counter()
         logger.info("JEV %s: group %d/%d (%s), %d questions for %d unique inputs; reading cache and requesting misses", taxonomy.name, group_index, len(groups), group, len(questions), len(pairs))
         rows = (
-            runner(
+            jev_gateway_request(
                 questions,
                 pairs,
                 prompt_name=f"{taxonomy.name} Jev {group}",
@@ -480,8 +474,8 @@ def map_subjects(subjects, taxonomy, *, policy: MatchPolicy, **scoring_options):
     policy : MatchPolicy
         Thresholds and optional descent that turn probabilities into matches.
     **scoring_options
-        Forwarded to ``score_subjects``: ``request_runner``, ``max_workers``,
-        ``read_from_cache``, ``write_to_cache``.
+        Forwarded to ``score_subjects``: ``max_workers``, ``read_from_cache``,
+        ``write_to_cache``.
 
     Returns
     -------

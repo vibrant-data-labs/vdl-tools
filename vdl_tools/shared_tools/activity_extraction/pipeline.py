@@ -72,7 +72,6 @@ def extract_frame(
     url_col: str | None = None,
     website_texts: dict[str, str] | None = None,
     prompt=GENERAL_EXTRACTION_PROMPT,
-    runner=None,
     max_workers: int = 20,
 ) -> ExtractionResult:
     """Extract once per organization, keeping every organization and recording every outcome.
@@ -98,11 +97,8 @@ def extract_frame(
         fallback.
     prompt : ExtractionPrompt
         What to extract; defaults to the general prompt.
-    runner : callable, optional
-        ``runner(given_ids_texts, prompt, max_workers=...) -> {cache key: profile}``
-        replaces `run_extraction_prompt` for offline fixtures.
     max_workers : int
-        Passed to the runner.
+        Parallel extraction requests, passed to `run_extraction_prompt`.
 
     Returns
     -------
@@ -131,8 +127,8 @@ def extract_frame(
         website_texts = {o.uid: by_url[o.url] for o in orgs if o.url in by_url}
     inputs, meta = build_inputs(orgs, prompt, website_texts)
     texts = dict(inputs)
-    logger.info("Extracting %d usable organization profiles through %s", len(inputs), "the shared prompt cache" if runner is None else "the supplied runner")
-    profiles = (runner or run_extraction_prompt)(inputs, prompt, max_workers=max_workers)
+    logger.info("Extracting %d usable organization profiles through the shared prompt cache", len(inputs))
+    profiles = run_extraction_prompt(inputs, prompt, max_workers=max_workers)
     org_rows, activity_rows = [], []
     for org in orgs:
         profile = profiles.get(org.uid)

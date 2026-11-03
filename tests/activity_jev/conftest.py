@@ -3,9 +3,11 @@ import json
 import pandas as pd
 import pytest
 
+from vdl_tools.shared_tools.activity_extraction import pipeline
 from vdl_tools.shared_tools.activity_extraction.general import GeneralActivityProfile
 from vdl_tools.shared_tools.activity_extraction.pipeline import extract_frame
 from vdl_tools.shared_tools.taxonomy_mapping import drawdown, one_earth
+from vdl_tools.shared_tools.taxonomy_mapping.activity_jev import engine
 from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.engine import map_subjects, score_subjects
 from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.exports import export_extraction
 from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.subjects import build_activity_subjects
@@ -23,6 +25,18 @@ def offline_config(tmp_path, monkeypatch):
         "[postgres]\nhost=localhost\nport=1\nuser=offline\npassword=offline\ndatabase=offline\n"
     )
     monkeypatch.setenv("VDL_GLOBAL_CONFIG_PATH", str(config))
+
+
+@pytest.fixture
+def use_extraction(monkeypatch):
+    """Answer extraction requests with ``fake(given_ids_texts, prompt, **kw) -> {uid: profile}``."""
+    return lambda fake: monkeypatch.setattr(pipeline, "run_extraction_prompt", fake)
+
+
+@pytest.fixture
+def use_jev(monkeypatch):
+    """Answer Jev gateway requests with ``fake(questions, ids_texts, **kw) -> {cache_id: row}``."""
+    return lambda fake: monkeypatch.setattr(engine, "jev_gateway_request", fake)
 
 
 def profile(activities=2):
@@ -76,14 +90,14 @@ def website_texts(organizations):
 
 
 @pytest.fixture
-def extraction(organizations):
+def extraction(organizations, use_extraction):
+    use_extraction(lambda *a, **kw: {"1": profile(), "4": profile(0)})
     return extract_frame(
         organizations,
         run_id="fixture",
         **COLUMNS,
         url_col="Website",
         website_texts=website_texts(organizations),
-        runner=lambda *a, **kw: {"1": profile(), "4": profile(0)},
     )
 
 
@@ -144,15 +158,13 @@ def subjects_of(extraction):
     return build_activity_subjects(extraction.activities)
 
 
-def score_activities(extraction, tax, **options):
-    return score_subjects(subjects_of(extraction), tax, **options)
+def score_activities(extraction, tax):
+    return score_subjects(subjects_of(extraction), tax)
 
 
-def map_and_export(organizations, extraction, tax, **options):
+def map_and_export(organizations, extraction, tax):
     """Map the activities, then run the tracker export with the tracker's four padded levels."""
-    mapped = map_subjects(
-        subjects_of(extraction), tax, policy=PACKAGES[tax.name].DEFAULT_POLICY, **options
-    )
+    mapped = map_subjects(subjects_of(extraction), tax, policy=PACKAGES[tax.name].DEFAULT_POLICY)
     return export_extraction(
         organizations, extraction, tax, mapped, **COLUMNS,
         mapping_name=f"{tax.name}_category", pad_levels=4, funding_level=2,

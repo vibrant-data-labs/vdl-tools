@@ -23,12 +23,13 @@ def test_exclusions_and_full_path_identity(taxonomy):
     assert set(tax.nodes.depth) == {0, 1, 2}
 
 
-def test_lower_tier_only_applies_to_empty_activities(taxonomy, extraction):
+def test_lower_tier_only_applies_to_empty_activities(taxonomy, extraction, use_jev):
     tax = taxonomy(duplicate_names=True)
     p = {r.node_id: 0.1 for r in tax.nodes.itertuples()}
     p[tax.nodes[(tax.nodes.Pillar == "Energy") & (tax.nodes.depth == 0)].node_id.iloc[0]] = 0.8
     p[tax.nodes[(tax.nodes.Pillar == "Nature") & (tax.nodes.depth == 2)].node_id.iloc[0]] = 0.6
-    scores = score_activities(extraction, tax, request_runner=fake_jev(p))
+    use_jev(fake_jev(p))
+    scores = score_activities(extraction, tax)
     paths = select_matches(scores, tax, MatchPolicy())
     assert set(paths.Pillar) == {"Energy"}
     assert set(paths.depth) == {0}
@@ -36,12 +37,13 @@ def test_lower_tier_only_applies_to_empty_activities(taxonomy, extraction):
     assert set(changed.Pillar) == {"Energy", "Nature"}
 
 
-def test_parent_names_do_not_collide(taxonomy, extraction):
+def test_parent_names_do_not_collide(taxonomy, extraction, use_jev):
     tax = taxonomy(duplicate_names=True)
     p = {r.node_id: 0.1 for r in tax.nodes.itertuples()}
     p[tax.nodes[(tax.nodes.Pillar == "Energy") & (tax.nodes.depth == 2)].node_id.iloc[0]] = 0.9
     p[tax.nodes[(tax.nodes.Pillar == "Nature") & (tax.nodes.depth == 1)].node_id.iloc[0]] = 0.8
-    scored = score_activities(extraction, tax, request_runner=fake_jev(p))
+    use_jev(fake_jev(p))
+    scored = score_activities(extraction, tax)
     paths = select_matches(scored, tax, MatchPolicy())
     assert len(paths) == 4
     assert set(paths.depth) == {1, 2}
@@ -50,10 +52,11 @@ def test_parent_names_do_not_collide(taxonomy, extraction):
     assert leaf.ancestor_matches[-1]["assignment"] == "own"
 
 
-def test_drawdown_descent_adds_child_and_grandchild(taxonomy, extraction):
+def test_drawdown_descent_adds_child_and_grandchild(taxonomy, extraction, use_jev):
     tax = taxonomy("drawdown")
     p = {r.node_id: (0.8 if r.depth == 0 else 0.65) for r in tax.nodes.itertuples()}
-    scored = score_activities(extraction, tax, request_runner=fake_jev(p))
+    use_jev(fake_jev(p))
+    scored = score_activities(extraction, tax)
     assert set(select_matches(scored, tax, MatchPolicy()).depth) == {0}
     paths = select_matches(scored, tax, MatchPolicy(descend=0.6))
     assert set(paths.depth) == {2} and set(paths.match_origin) == {"descend"}
@@ -68,7 +71,7 @@ def test_drawdown_stewardship_criteria_attach_to_the_named_nodes(taxonomy):
     }
 
 
-def test_partial_request_never_becomes_a_match(taxonomy, extraction):
+def test_partial_request_never_becomes_a_match(taxonomy, extraction, use_jev):
     tax = taxonomy()
 
     def broken(questions, pairs, **kwargs):
@@ -79,18 +82,19 @@ def test_partial_request_never_becomes_a_match(taxonomy, extraction):
         out[first]["response_text"] = json.dumps(answers)
         return out
 
-    scores = score_activities(extraction, tax, request_runner=broken)
+    use_jev(broken)
+
+    scores = score_activities(extraction, tax)
     paths = select_matches(scores, tax, MatchPolicy())
     assert scores.usage.error.notna().sum() == 1
     assert paths.subject_id.nunique() == 1
 
 
 @pytest.mark.parametrize("bad", [True, None, "0.9", float("nan"), -0.1, 1.1])
-def test_invalid_probabilities_are_failed_requests(taxonomy, extraction, bad):
+def test_invalid_probabilities_are_failed_requests(taxonomy, extraction, bad, use_jev):
     tax = taxonomy()
-    bad_scores = score_activities(
-        extraction, tax, request_runner=fake_jev({tax.nodes.node_id.iloc[0]: bad})
-    )
+    use_jev(fake_jev({tax.nodes.node_id.iloc[0]: bad}))
+    bad_scores = score_activities(extraction, tax)
     assert bad_scores.usage.error.notna().all()
     assert select_matches(bad_scores, tax, MatchPolicy()).empty
 
@@ -114,9 +118,10 @@ def test_question_groups_are_bounded_and_cover_each_node_once(taxonomy):
 
 
 @pytest.mark.parametrize("name", ["one_earth", "drawdown"])
-def test_union_export_evidence_and_funding(taxonomy, extraction, organizations, name):
+def test_union_export_evidence_and_funding(taxonomy, extraction, organizations, name, use_jev):
     tax = taxonomy(name)
-    mapped = map_and_export(organizations, extraction, tax, request_runner=fake_jev())
+    use_jev(fake_jev())
+    mapped = map_and_export(organizations, extraction, tax)
     assert len(mapped.organizations) == len(organizations)
     assert mapped.organizations.id.tolist() == organizations.id.tolist()
     assert mapped.organizations.Sector.tolist() == organizations.Sector.tolist()
@@ -137,28 +142,31 @@ def test_union_export_evidence_and_funding(taxonomy, extraction, organizations, 
     }
 
 
-def test_all_unmatched_cohort(taxonomy, extraction, organizations):
+def test_all_unmatched_cohort(taxonomy, extraction, organizations, use_jev):
     tax = taxonomy()
     p = dict.fromkeys(tax.nodes.node_id, 0.1)
-    result = map_and_export(organizations, extraction, tax, request_runner=fake_jev(p))
+    use_jev(fake_jev(p))
+    result = map_and_export(organizations, extraction, tax)
     assert len(result.paths) == 4 and result.funding.empty
     assert set(result.paths.deepest_match) == {"NoMatch"}
 
 
-def test_stored_scores_cannot_be_applied_to_changed_taxonomy(taxonomy, extraction):
+def test_stored_scores_cannot_be_applied_to_changed_taxonomy(taxonomy, extraction, use_jev):
     from dataclasses import replace
 
     tax = taxonomy()
-    scored = score_activities(extraction, tax, request_runner=fake_jev())
+    use_jev(fake_jev())
+    scored = score_activities(extraction, tax)
     with pytest.raises(ValueError, match="different taxonomy"):
         select_matches(scored, replace(tax, sha256="changed"), MatchPolicy())
 
 
-def test_serving_explanations_keep_supporting_activities(taxonomy, extraction, organizations):
+def test_serving_explanations_keep_supporting_activities(taxonomy, extraction, organizations, use_jev):
     from vdl_tools.shared_tools.taxonomy_mapping.mapping_evidence import assignment_explanations
 
     tax = taxonomy()
-    result = map_and_export(organizations, extraction, tax, request_runner=fake_jev())
+    use_jev(fake_jev())
+    result = map_and_export(organizations, extraction, tax)
     mappings = result.paths.rename(columns={c: f"level{i}" for i, c in enumerate(tax.columns)})
     assignments = result.funding.rename(columns={"id": "org_uid"})
     explanations = assignment_explanations(assignments, mappings, source="fixture.json")
@@ -169,7 +177,7 @@ def test_serving_explanations_keep_supporting_activities(taxonomy, extraction, o
     assert payload["activity_evidence"][0]["ancestor_matches"]
 
 
-def test_core_first_rollup_keeps_core_matches_and_falls_back(taxonomy, extraction, organizations):
+def test_core_first_rollup_keeps_core_matches_and_falls_back(taxonomy, extraction, organizations, use_jev):
     tax = taxonomy("drawdown")
     energy = set(tax.nodes.loc[tax.nodes.Sector == "Energy", "node_id"])
 
@@ -192,9 +200,8 @@ def test_core_first_rollup_keeps_core_matches_and_falls_back(taxonomy, extractio
         return run
 
     def export(core_hits, rollup):
-        mapped = map_subjects(
-            build_activity_subjects(extraction.activities), tax, policy=MatchPolicy(), request_runner=gateway(core_hits)
-        )
+        use_jev(gateway(core_hits))
+        mapped = map_subjects(build_activity_subjects(extraction.activities), tax, policy=MatchPolicy())
         return export_extraction(
             organizations, extraction, tax, mapped, **COLUMNS, mapping_name="dd", rollup=rollup
         )

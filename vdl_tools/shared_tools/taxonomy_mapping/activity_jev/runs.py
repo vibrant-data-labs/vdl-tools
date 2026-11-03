@@ -102,8 +102,6 @@ def run_activity_mapping(
     website_texts=None,
     file_names=None,
     max_workers=20,
-    extraction_runner=None,
-    request_runner=None,
     input_lineage=None,
 ):
     """Extract activities once, map them onto every job's taxonomy and write the run.
@@ -135,8 +133,6 @@ def run_activity_mapping(
         ``<job>_activity_paths``.
     max_workers : int
         Parallel extraction and gateway calls.
-    extraction_runner, request_runner : callable, optional
-        Offline replacements for the extraction model and the Jev gateway.
     input_lineage : dict, optional
         Provenance of ``organizations``, recorded in the ``organizations`` file.
 
@@ -163,7 +159,6 @@ def run_activity_mapping(
         name_col=name_col,
         url_col=url_col,
         website_texts=website_texts,
-        runner=extraction_runner,
         max_workers=max_workers,
     )
     subjects = build_activity_subjects(extraction.activities)
@@ -171,9 +166,7 @@ def run_activity_mapping(
     for name, job in jobs.items():
         job_started = perf_counter()
         logger.info("[%s] Mapping %d activities against %d nodes", name, len(subjects), len(job.taxonomy.nodes))
-        scored = map_subjects(
-            subjects, job.taxonomy, policy=job.policy, request_runner=request_runner, max_workers=max_workers
-        )
+        scored = map_subjects(subjects, job.taxonomy, policy=job.policy, max_workers=max_workers)
         logger.info("[%s] Scoring finished: %d score rows, %d failed requests; exporting matches",
                     name, len(scored.scores), int(scored.usage.error.notna().sum()))
         result = export_extraction(

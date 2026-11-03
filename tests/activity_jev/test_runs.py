@@ -34,24 +34,23 @@ def jobs(taxonomy):
     }
 
 
-def run(orgs, jobs, directory, calls=None, **options):
-    texts = website_texts(orgs.rename(columns={"org_key": "id", "homepage": "Website"}))
-
-    def extract(*args, **kwargs):
-        if calls is not None:
-            calls.append(1)
-        return {"1": profile(), "4": profile(0)}
-
-    return run_activity_mapping(
-        orgs, jobs, run_id="run-1", directory=directory, **COLUMNS, website_texts=texts,
-        extraction_runner=extract, request_runner=options.pop("request_runner", fake_jev()), **options,
-    )
-
-
-def test_one_extraction_maps_every_job_and_writes_each_table(orgs, jobs, tmp_path):
+@pytest.fixture(autouse=True)
+def extraction_calls(use_extraction, use_jev):
+    """Offline extraction (counting calls) and Jev answers for every test here."""
     calls = []
-    result = run(orgs, jobs, tmp_path, calls, file_names={"drawdown_paths": "dd_rows.parquet"})
-    assert len(calls) == 1
+    use_extraction(lambda *a, **kw: calls.append(1) or {"1": profile(), "4": profile(0)})
+    use_jev(fake_jev())
+    return calls
+
+
+def run(orgs, jobs, directory, **options):
+    texts = website_texts(orgs.rename(columns={"org_key": "id", "homepage": "Website"}))
+    return run_activity_mapping(orgs, jobs, run_id="run-1", directory=directory, **COLUMNS, website_texts=texts, **options)
+
+
+def test_one_extraction_maps_every_job_and_writes_each_table(orgs, jobs, tmp_path, extraction_calls):
+    result = run(orgs, jobs, tmp_path, file_names={"drawdown_paths": "dd_rows.parquet"})
+    assert len(extraction_calls) == 1
     mapped = result.organizations
     assert mapped.org_key.tolist() == orgs.org_key.tolist()
     assert mapped.one_earth_mapping_status.tolist() == ["matched", "missing_text", "request_failed", "empty"]
@@ -83,7 +82,7 @@ def test_one_extraction_maps_every_job_and_writes_each_table(orgs, jobs, tmp_pat
     assert get_lineage(tmp_path / "dd_rows.parquet")["export_columns"][-2:] == ["speed", "pollutants"]
 
 
-def test_a_failed_job_keeps_finished_files_and_writes_no_organizations_file(orgs, jobs, tmp_path):
+def test_a_failed_job_keeps_finished_files_and_writes_no_organizations_file(orgs, jobs, tmp_path, use_jev):
     drawdown_nodes = set(jobs["drawdown"].taxonomy.nodes.node_id)
     replies = fake_jev()
 
@@ -92,8 +91,9 @@ def test_a_failed_job_keeps_finished_files_and_writes_no_organizations_file(orgs
             raise RuntimeError("gateway down")
         return replies(questions, pairs, **kwargs)
 
+    use_jev(gateway)
     with pytest.raises(RuntimeError, match="gateway down"):
-        run(orgs, jobs, tmp_path, request_runner=gateway)
+        run(orgs, jobs, tmp_path)
     assert (tmp_path / "one_earth_paths.parquet").exists()
     assert not (tmp_path / "drawdown_paths.parquet").exists()
     assert not (tmp_path / "organizations.parquet").exists()

@@ -51,22 +51,22 @@ def custom_taxonomy(tmp_path):
 
 
 @pytest.mark.parametrize("depth", [1, 4])
-def test_direct_entity_and_new_taxonomy_need_no_engine_changes(custom_taxonomy, depth):
+def test_direct_entity_and_new_taxonomy_need_no_engine_changes(custom_taxonomy, depth, use_jev):
     tax = custom_taxonomy(depth)
     subjects = pd.DataFrame([{"subject_id": "org-1", "state": "We run a school."}])
     probabilities = {r.node_id: 0.8 if r.depth == 0 else 0.65 for r in tax.nodes.itertuples()}
-    result = map_subjects(
-        subjects, tax, policy=MatchPolicy(descend=0.6), request_runner=fake_jev(probabilities)
-    )
+    use_jev(fake_jev(probabilities))
+    result = map_subjects(subjects, tax, policy=MatchPolicy(descend=0.6))
     assert result.subject_paths.depth.tolist() == [depth - 1]
     assert len(result.subject_paths.iloc[0].ancestor_matches) == depth
     assert result.lineage["max_mapping_level"] == depth - 1
 
 
-def test_changed_question_rejects_saved_probabilities(custom_taxonomy):
+def test_changed_question_rejects_saved_probabilities(custom_taxonomy, use_jev):
     tax = custom_taxonomy(1)
     subjects = pd.DataFrame([{"subject_id": "a", "state": "school"}])
-    result = map_subjects(subjects, tax, policy=MatchPolicy(), request_runner=fake_jev())
+    use_jev(fake_jev())
+    result = map_subjects(subjects, tax, policy=MatchPolicy())
     nodes = tax.nodes.copy()
     nodes["question"] = [{"type": "noul", "instructions": "A changed meaning"}]
     with pytest.raises(ValueError, match="different taxonomy or question set"):
