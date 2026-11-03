@@ -43,8 +43,9 @@ class MappingJob:
         Match selection, e.g. the package's ``DEFAULT_POLICY``.
     mapping_name : str
         Suffix of the exported mapping columns, e.g. ``one_earth_category``.
-    format_paths, attribute_columns, pad_levels, funding_level
-        Passed to ``export_extraction``; see there. All optional.
+    format_paths, attribute_columns, pad_levels, funding_level, rollup
+        Passed to ``export_extraction``; see there. All optional; ``rollup`` defaults to
+        ``"union"``, and each taxonomy package names its own as ``DEFAULT_ROLLUP``.
     """
 
     taxonomy: Taxonomy
@@ -54,6 +55,7 @@ class MappingJob:
     attribute_columns: dict[str, str] | None = None
     pad_levels: int | None = None
     funding_level: int | None = None
+    rollup: str = "union"
 
 
 @dataclass
@@ -186,6 +188,7 @@ def run_activity_mapping(
             attribute_columns=job.attribute_columns,
             pad_levels=job.pad_levels,
             funding_level=job.funding_level,
+            rollup=job.rollup,
         )
         write_dataframes(
             {

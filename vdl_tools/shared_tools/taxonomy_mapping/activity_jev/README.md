@@ -27,8 +27,12 @@ run = run_activity_mapping(
 
 A `MappingJob` also takes the tracker conventions a consumer wants: `format_paths` to
 reshape result rows, `attribute_columns` to list node attributes per organization,
-`pad_levels` to emit empty deeper level columns, and `funding_level` to stop funding
-above the deepest level. `file_names` renames the result, funding and organization files.
+`pad_levels` to emit empty deeper level columns, `funding_level` to stop funding
+above the deepest level, and `rollup` to choose which activities' matches make up an
+organization's result. `"union"` takes every activity; `"core_first"` takes the core
+activities' matches, falling back to core and secondary, then all, when none matched.
+Each taxonomy package names its own as `DEFAULT_ROLLUP` (Drawdown `core_first`, One
+Earth `union`). `file_names` renames the result, funding and organization files.
 Each taxonomy's files are written as soon as it finishes. `assemble_mapping_runs`
 combines selected taxonomies from finished runs by ID.
 

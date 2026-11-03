@@ -16,6 +16,9 @@ SOLUTION_PROPERTIES = ("CATEGORY", "CLIMATE POLLUTANTS", "SPEED OF ACTION")
 # Tiers 0.7 then 0.5, then descent into children at 0.6 under a matched parent, as in the
 # drawdown prototype. A development default.
 DEFAULT_POLICY = MatchPolicy(descend=0.6)
+# The prototype's adopted organization rollup (drawdown jev/DECISIONS.md, 2026-10-26; Zein
+# adopted it here on 2026-11-03): core activities first, then core and secondary, then all.
+DEFAULT_ROLLUP = "core_first"
 
 
 def load_taxonomy(path):

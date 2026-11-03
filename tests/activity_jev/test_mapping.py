@@ -1,14 +1,18 @@
 import json
 
+import pandas as pd
 import pytest
 
 from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.engine import (
     MatchPolicy,
+    map_subjects,
     question_sets,
     select_matches,
 )
+from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.exports import export_extraction
+from vdl_tools.shared_tools.taxonomy_mapping.activity_jev.subjects import build_activity_subjects
 
-from .conftest import fake_jev, map_and_export, score_activities
+from .conftest import COLUMNS, STEWARDSHIP_SECTOR, fake_jev, map_and_export, score_activities
 
 
 def test_exclusions_and_full_path_identity(taxonomy):
@@ -163,3 +167,51 @@ def test_serving_explanations_keep_supporting_activities(taxonomy, extraction, o
     assert len(payload["activity_evidence"]) == 2
     assert payload["policy_sha256"] == result.lineage["policy_sha256"]
     assert payload["activity_evidence"][0]["ancestor_matches"]
+
+
+def test_core_first_rollup_keeps_core_matches_and_falls_back(taxonomy, extraction, organizations):
+    tax = taxonomy("drawdown")
+    energy = set(tax.nodes.loc[tax.nodes.Sector == "Energy", "node_id"])
+
+    def gateway(core_hits):
+        """Org 1's core activity ("solar work 0") scores high only on ``core_hits``; its minor one on every node."""
+
+        def run(questions, pairs, **kwargs):
+            return {
+                key: {
+                    "response_text": json.dumps(
+                        {
+                            node: {"noul": 0.8 if "solar work 1" in state or node in core_hits else 0.1}
+                            for node in questions
+                        }
+                    )
+                }
+                for key, state in pairs
+            }
+
+        return run
+
+    def export(core_hits, rollup):
+        mapped = map_subjects(
+            build_activity_subjects(extraction.activities), tax, policy=MatchPolicy(), request_runner=gateway(core_hits)
+        )
+        return export_extraction(
+            organizations, extraction, tax, mapped, **COLUMNS, mapping_name="dd", rollup=rollup
+        )
+
+    union = export(energy, "union")
+    core = export(energy, "core_first")
+    org = lambda result: result.paths[result.paths.id == "1"]  # noqa: E731
+    assert set(org(union).Sector) == {"Energy", STEWARDSHIP_SECTOR}
+    assert set(org(core).Sector) == {"Energy"}  # the minor activity's other Sector is dropped
+    assert org(core).n_activities.tolist() == [1] * len(org(core))
+    assert set(core.funding.level0) == {"Energy"}
+    assert core.funding.FundingFrac.sum() == pytest.approx(1)
+    pd.testing.assert_frame_equal(core.activity_paths, union.activity_paths)  # per-activity results keep every match
+    assert core.organizations.drawdown_mapping_status.tolist() == union.organizations.drawdown_mapping_status.tolist()
+    assert (union.lineage["rollup"], core.lineage["rollup"]) == ("union", "core_first")
+    # When the core activity matches nothing, the next prominence group (here the minor activity) is used.
+    fallback = export(set(), "core_first")
+    assert set(org(fallback).Sector) == {"Energy", STEWARDSHIP_SECTOR}
+    with pytest.raises(ValueError, match="Unknown rollup"):
+        export(energy, "core_secondary")

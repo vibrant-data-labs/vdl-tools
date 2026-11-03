@@ -1,8 +1,9 @@
 """Tracker-shaped export of activity matches: organization rollup, legacy columns, statuses, funding.
 
 Generic inference never imports this module. The caller names its organization columns and
-the tracker's mapping column, and chooses the level padding, the funding depth, any node
-attributes to list per organization and any reshaping of the result rows.
+the tracker's mapping column, and chooses which activities' matches roll up, the level
+padding, the funding depth, any node attributes to list per organization and any reshaping
+of the result rows.
 """
 
 from dataclasses import dataclass
@@ -11,6 +12,11 @@ import pandas as pd
 
 from .engine import drop_implied
 
+# Which activities' matches make up an organization's result: "union" takes every
+# activity's matches; "core_first" takes the core activities' matches, falling back to
+# core and secondary when no core activity matched, and to all activities after that.
+ROLLUPS = ("union", "core_first")
+PROMINENCE_ORDER = ("core", "secondary", "minor")
 
 @dataclass
 class MappingResult:
@@ -36,7 +42,8 @@ class MappingResult:
     funding : pandas.DataFrame
         ``distribute_funding_from_matches`` output.
     lineage : dict
-        Mapping lineage plus ``export_columns``, ``max_funding_level`` and ``status_counts``.
+        Mapping lineage plus ``export_columns``, ``rollup``, ``max_funding_level`` and
+        ``status_counts``.
     """
 
     organizations: pd.DataFrame
@@ -46,6 +53,35 @@ class MappingResult:
     usage: pd.DataFrame
     funding: pd.DataFrame
     lineage: dict
+
+
+def core_first_paths(activity_paths, activities):
+    """Keep each organization's matches from its most prominent activities that matched.
+
+    The Drawdown prototype's adopted rule (drawdown ``jev/DECISIONS.md``, 2026-10-26): an
+    organization's result uses its core activities' matches; when no core activity
+    matched anything, core and secondary; when that still matched nothing, every
+    activity. The dropped activities' matches stay in the per-activity results.
+
+    Parameters
+    ----------
+    activity_paths : pandas.DataFrame
+        ``select_matches`` output keyed by ``activity_id``, one row per matched node.
+    activities : pandas.DataFrame
+        ``ExtractionResult.activities`` with ``activity_id``, ``uid`` and ``prominence``
+        (``core``, ``secondary`` or ``minor``).
+
+    Returns
+    -------
+    pandas.DataFrame
+        The kept rows of ``activity_paths``, unchanged.
+    """
+    info = activities.set_index("activity_id")
+    rank = activity_paths.activity_id.map(info.prominence).map(
+        {p: i for i, p in enumerate(PROMINENCE_ORDER)}
+    )
+    best = rank.groupby(activity_paths.activity_id.map(info.uid)).transform("min")
+    return activity_paths[rank <= best]
 
 
 def rollup_paths(activity_paths, activities, taxonomy):
@@ -145,6 +181,7 @@ def export_extraction(
     attribute_columns=None,
     pad_levels=None,
     funding_level=None,
+    rollup="union",
 ):
     """Roll activity matches up to organizations and attach tracker-shaped columns.
 
@@ -184,6 +221,10 @@ def export_extraction(
     funding_level : int, optional
         Deepest level funding is allocated to. None allocates to the taxonomy's
         deepest level.
+    rollup : str
+        One of ``ROLLUPS``. ``"union"`` rolls up every activity's matches;
+        ``"core_first"`` applies ``core_first_paths`` first. The result rows, statuses
+        and funding follow the kept activities; ``activity_paths`` keeps every match.
 
     Returns
     -------
@@ -201,8 +242,11 @@ def export_extraction(
         raise ValueError("Organization IDs must be non-null and unique")
     if set(ids) != set(extraction.organizations.uid):
         raise ValueError("Extraction and mapping organization cohorts differ")
+    if rollup not in ROLLUPS:
+        raise ValueError(f"Unknown rollup {rollup!r}; expected one of {ROLLUPS}")
     activity_paths = mapped.subject_paths.rename(columns={"subject_id": "activity_id"})
-    union = rollup_paths(activity_paths, extraction.activities, taxonomy)
+    kept = activity_paths if rollup == "union" else core_first_paths(activity_paths, extraction.activities)
+    union = rollup_paths(kept, extraction.activities, taxonomy)
     paths = union.rename(columns={"uid": id_col})
     names = extraction.organizations.set_index("uid")["name"]
     paths[name_col] = paths[id_col].map(names)
@@ -279,6 +323,7 @@ def export_extraction(
     lineage = {
         **mapped.lineage,
         "export_columns": export_columns,
+        "rollup": rollup,
         "max_funding_level": funding_level,
         "status_counts": pd.Series(statuses).value_counts().to_dict(),
     }

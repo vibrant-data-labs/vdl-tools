@@ -13,6 +13,8 @@ COLUMNS = ("Pillar", "Sub-Pillar", "Solution")
 SHEETS = ("Pillars", "SubPillars", "Solutions")
 # Tiers 0.7 then 0.5 with no descent, as in the oneearth prototype. A development default.
 DEFAULT_POLICY = MatchPolicy()
+# Every activity's matches roll up; the One Earth prototype never tested a prominence rule.
+DEFAULT_ROLLUP = "union"
 
 
 def load_taxonomy(path):
