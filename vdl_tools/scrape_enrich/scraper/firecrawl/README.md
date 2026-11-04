@@ -102,3 +102,42 @@ including the two parked link-line pages, a frame-only redirect, a real page wit
 frame, a reCAPTCHA form, a real wall and one four-page org for dedupe and the cap. A rule
 change that alters any output fails them until `CLEANER_VERSION` is bumped and the files are
 regenerated.
+
+## D9: main-content-only subpages (run 2026-11-03, 1,967 credits)
+
+D9 of the adapter project ([VIB-61](https://linear.app/vibrant-data-labs/issue/VIB-61)), the
+evidence for Q2: fetch subpages with Firecrawl's `onlyMainContent=true`, which strips navigation,
+header and footer at the source, or full-page as the home page must be? `validation/subpage_main_content.py`
+fetched every subpage of 200 seeded pilot orgs both ways on the same day and scored both with the
+production text rules against the in-house text of the same pages.
+
+```
+python -m vdl_tools.scrape_enrich.scraper.firecrawl.validation.subpage_main_content --out-dir .cache/vendor_pilot
+```
+
+| measure (199 orgs, 977 subpages) | full page | main content only |
+|---|---|---|
+| sentence recall of the in-house text, pooled | 0.915 | 0.880 |
+| median cleaned characters per subpage | 3,720 | 2,801 |
+| duplicated-line share across an org's subpages, before dedupe | 19.2% | 12.4% |
+| tokens per org after the rules (mean) | 3,721 | 3,642 |
+| tokens per org before the 8k cap (mean) | 5,339 | 5,030 |
+| pages ok full-page that go thin | | 24 of 976 (2.5%) |
+| orgs that lose an ok combined text | | 0 of 199 |
+
+Against Q2's default rule (main content only if recall is at least 0.95 of full page and thin
+flips stay under 2%), recall passes at 0.961 and thin flips fail at 2.5%, so the default is
+**full page on subpages**. The detail makes the same case. Main-content detection does not trim
+evenly: on most pages it drops nothing (per-org median ratio 1.000), and on some it drops the
+whole page, which are often the pages a summary needs: a team page of staff bios went from
+29,814 characters to 10, a 2025 annual report from 17,155 to 20, an executive team page lost
+the bios. What it buys is small, because the cleaner and cross-page dedupe already remove the
+repeated navigation: about 6% fewer tokens before the cap and 2% after.
+
+Production must therefore send `onlyMainContent: false` on every request, since Firecrawl's
+default is `true`.
+
+Firecrawl's ad blocker cannot be turned off. Every `blockAds: false` request failed with
+`SCRAPE_ALL_ENGINES_FAILED` ("engines tried: pdf, document, image"), even for
+https://example.com, so the browser engines refuse to run without it. The blocked-frame cleanup
+in `markdown_clean.strip_blocked_frames` stays.
