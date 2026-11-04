@@ -150,13 +150,24 @@ python -m vdl_tools.scrape_enrich.scraper.firecrawl.validation.paired_llm_test -
 Their in-house chain had no website summary, so the comparison is with and without one, and
 it moves everything, as new information should: the summary of summaries (cosine 0.885) and
 the One Earth level-1 nodes of 44% of them. The judge checked each Firecrawl summary against
-its scrape: 96.9% faithful and 94.3% specific, but **16 (10%) are not the organization's site**:
-parked domains for sale (mostly GoDaddy's current sales page) and hijacked or repurposed
-domains. Our parked markers miss GoDaddy's page because it splits "the domain name / x.com /
-is for sale!" across lines, and the tracker's junk-summary rule catches only 2 of the 16.
-The line "the simple, and safe way to buy domain names" appears on 8 of the 10 for-sale pages
-and would make a precise marker. Until something like it is in the gate, about 14 of every
-159 rescues would put a for-sale page's summary in the tracker.
+its scrape (96.9% faithful, 94.3% specific) and flagged 16 as not the organization's site.
+
+Reading all 159 found more: **18 are registrar sale pages**, mostly GoDaddy's current
+for-sale page, which puts the domain on its own line between "The domain name" and "is for
+sale!" so no parked marker matched it. The judge flagged only 10 of them, because the other
+8 summaries honestly say the domain is for sale; all 18 would still put a sale page's
+summary in the tracker ("Chlorofill facilitates the buying and leasing of domain names"),
+and Calxeda's was invented from the company's name. vibrant-data-labs/vdl-tools#251 adds a
+rule to the shared gate for these pages. Rerun through the D2 rescore with that rule, usable
+moves from 85.3% to 84.4%, Firecrawl-only rescues from 159 to 141, and the 1,547 paired orgs
+are untouched; the same rule flips 36 for-sale pages in the in-house cache. The text is
+unchanged, so `CLEANER_VERSION` stays 1 and the paired measures above stand.
+
+The other 6 the judge flagged are not a text-rule problem: 2 gambling sites on lapsed
+domains, which the tracker's junk-summary rule already catches; 2 squatters with unrelated
+content (an SEO agency, a generic nonprofit template); and 2 that are the real successor
+sites, Heila Technologies now part of Rehlko and Wyncote Audubon renamed Liberty Bird
+Alliance. Those two belong to org dedupe through `final_host`, not to the junk gate.
 
 ### Cost
 
