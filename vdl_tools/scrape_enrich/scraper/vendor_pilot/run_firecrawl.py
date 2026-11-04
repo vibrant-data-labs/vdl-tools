@@ -69,9 +69,11 @@ class FirecrawlRunner(VendorRunner):
     default_rpm = 10
     timeout_seconds = 150.0
 
-    def __init__(self, api_key: str, only_main_content: bool = False):
+    def __init__(self, api_key: str, only_main_content: bool = False, payload_overrides: dict | None = None):
         super().__init__(api_key)
         self.only_main_content = only_main_content
+        # Extra or replacement /scrape fields, e.g. {"formats": ["markdown"], "blockAds": False}.
+        self.payload_overrides = dict(payload_overrides or {})
         if only_main_content:
             self.name = "firecrawl_mainonly"
 
@@ -83,6 +85,7 @@ class FirecrawlRunner(VendorRunner):
             "proxy": "auto",
             "onlyMainContent": self.only_main_content,
             "timeout": 60000,
+            **self.payload_overrides,
         }
         response = await client.post(f"{self.base_url}/scrape", json=payload)
         if not _terminal_scrape_error(response):

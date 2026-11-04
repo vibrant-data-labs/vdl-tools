@@ -67,7 +67,7 @@ def _(enriched, mo, pd, re):
             return None, None
         if not has_text:
             q = str(r.get("text_quality") or "no_url")
-            if q in ("dead", "parked", "thin"):
+            if q in ("dead", "parked", "blocked", "garbled", "thin"):
                 return f"site {q}, no other text", "customer ask (new URL or description)"
             return "no url, no source text", "customer ask (description)"
         name_blob = f"{r.get('customer_name')} {str(r.get('Summary'))[:200]}"
