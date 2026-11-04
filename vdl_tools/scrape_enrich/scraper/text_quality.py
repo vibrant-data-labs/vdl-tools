@@ -13,6 +13,8 @@ instead. A squatted domain, a bot wall and binary mojibake all produced
 fabricated summaries before this module was consulted at the summarize step.
 """
 
+import re
+
 # Parked/for-sale pages answer HTTP but carry no org text. Conservative,
 # lowercase substrings. Includes marketplace brand names (squadhelp, afternic,
 # expireddomains, dan.com) alongside the generic for-sale phrasing, since a
@@ -28,6 +30,20 @@ PARKED_MARKERS = [
     # GoDaddy / 123 Reg expired-domain page. Not just "courtesy of godaddy":
     # parked markers have no length gate and real footers say that.
     "is parked free, courtesy of",
+    # GoDaddy's lander for a registered domain with no site.
+    "this domain is registered, but may still be available",
+]
+
+# GoDaddy's current for-sale lander puts the domain on its own line between the
+# words ("The domain name / rowdycreek.com / is for sale!", or "sekr.org / is
+# for sale!"), so no fixed phrase spans it. Matched on lowercased text: a
+# domain-shaped token, then only whitespace or markdown emphasis and heading
+# marks, then "is for sale".
+# Vendor pilot, Oct 2026: 23 such pages across 24,436 pages from five
+# scrapers, every one a real lander, and 10 of the 159 orgs only Firecrawl
+# could read were these pages passing as "ok".
+PARKED_PATTERNS = [
+    re.compile(r"\b(?:[a-z0-9-]+\.)+[a-z]{2,}[\s#*_>]+is for sale\b"),
 ]
 THIN_TEXT_CHARS = 200
 
@@ -91,6 +107,14 @@ def looks_like_bot_wall(text) -> bool:
     return any(marker in lowered for marker in BOT_WALL_MARKERS)
 
 
+def looks_parked(text) -> bool:
+    """Whether ``text`` is a registrar's parked or for-sale page."""
+    lowered = str(text).lower()
+    if any(marker in lowered for marker in PARKED_MARKERS):
+        return True
+    return any(pattern.search(lowered) for pattern in PARKED_PATTERNS)
+
+
 def classify_text_quality(text, num_errors: int = 0) -> str:
     """ok | thin | parked | blocked | garbled | dead | empty.
 
@@ -102,7 +126,7 @@ def classify_text_quality(text, num_errors: int = 0) -> str:
     stripped = str(text).strip()
     if looks_like_garbled_text(stripped):
         return "garbled"
-    if any(marker in stripped.lower() for marker in PARKED_MARKERS):
+    if looks_parked(stripped):
         return "parked"
     if looks_like_bot_wall(stripped):
         return "blocked"

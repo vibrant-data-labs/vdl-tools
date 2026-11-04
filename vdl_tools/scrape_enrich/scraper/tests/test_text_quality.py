@@ -90,3 +90,39 @@ def test_verdict_precedence_garbled_beats_parked_beats_blocked():
     # is garbled first: there is no reliable "for sale" text to trust in it.
     half_decoded = GARBLED + "domain is for sale"
     assert classify_text_quality(half_decoded) == "garbled"
+
+
+# GoDaddy's current for-sale lander, as Firecrawl renders it (vendor pilot,
+# Oct 2026): the domain sits on its own line between "The domain name" and
+# "is for sale!", so no fixed marker phrase spans it.
+GODADDY_LANDER = """Excellent
+4.5 out of 5
+Trustpilot
+###### The domain name
+## RowdyCreek.com
+###### is for sale!
+#### Get this domain
+Own it today for $3,995, or select Lease to Own.
+Buy now
+""" + "Free transaction support. Fast & easy transfers. " * 5
+
+
+def test_godaddy_split_line_lander_is_parked():
+    assert classify_text_quality(GODADDY_LANDER) == "parked"
+    # the short layout, with the domain on the line above
+    assert classify_text_quality("# sekr.org\n\nis for sale!\n\nSimple, secure purchase & transfer") == "parked"
+    # Atom (formerly Squadhelp) and GoDaddy's registered-but-unused page, both
+    # passing as ok or thin in the scrape cache before this rule
+    assert classify_text_quality("# skur.com is for sale! See it live. Strong buyer interest. " * 5) == "parked"
+    assert classify_text_quality("This domain is registered, but may still be available. Powered by") == "parked"
+    assert classify_text_quality("# cygnetenergy.co.uk is for sale! Verified domain seller. " * 5) == "parked"
+
+
+def test_ordinary_for_sale_wording_is_not_parked():
+    for text in (
+        "Our 2026 calendar is for sale at the front desk. " + LONG,
+        "The building at 12 Main St. is for sale, and the trust hopes to buy it. " + LONG,
+        "Version 2.0 is for sale to member libraries. " + LONG,
+        "Visit example.org. Local honey is for sale every Saturday. " + LONG,
+    ):
+        assert classify_text_quality(text) == "ok", text[:40]
