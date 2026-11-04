@@ -103,6 +103,96 @@ frame, a reCAPTCHA form, a real wall and one four-page org for dedupe and the ca
 change that alters any output fails them until `CLEANER_VERSION` is bumped and the files are
 regenerated.
 
+## D3 paired LLM test: what the new text does downstream (run 2026-10-30)
+
+D3 of the adapter project ([VIB-54](https://linear.app/vibrant-data-labs/issue/VIB-54)), the
+evidence for the adoption decision (Q1). `validation/paired_llm_test.py` runs each pilot org
+through the tracker's own LLM stages three times: on its Firecrawl text under
+`firecrawl-md-v1`, on the in-house text from the same day, and on the in-house text again.
+The third run is the noise floor, because identical input still gives different output. The
+stages are the website summary, the summary of summaries, relevance (only orgs whose
+description is under 100 characters read the website summary), the Baseten adaptation filter
+and the One Earth mapping, each with its production prompt, model and code path. The shared
+prompt cache is neither read nor written; results are resumable JSONL in
+`.cache/vendor_pilot/d3/`, and `d3_summary.md` there is the full report.
+
+```
+python -m vdl_tools.scrape_enrich.scraper.firecrawl.validation.paired_llm_test --out-dir .cache/vendor_pilot
+```
+
+### Orgs both scrapers could read (1,547)
+
+| measure | Firecrawl vs in-house | in-house vs its rerun (noise) | difference, 95% interval |
+|---|---|---|---|
+| website summary, cosine | 0.956 | 0.970 | -0.014 (-0.017 to -0.012) |
+| summary of summaries, cosine | 0.953 | 0.955 | -0.002 (-0.005 to 0.000) |
+| One Earth level 1, orgs whose nodes changed | 31.9% | 28.8% | Jaccard -0.021 (-0.042 to 0.001) |
+| One Earth level 2, orgs whose nodes changed | 40.5% | 40.1% | Jaccard -0.008 (-0.030 to 0.015) |
+| relevance flips, 107 orgs with short descriptions | 11 | 5 | 5.6 points (0 to 11) |
+| tracker membership flips | 15 (1.0%) | 9 (0.6%) | 0.4 points (-0.1 to 0.9) |
+
+- The summary the tracker shows, the summary of summaries, moves no more than rerunning the
+  same text does: 5.4% of orgs fall below the noise floor's 5th percentile, against 5% by
+  chance. The website summary itself moves a little more (12.5%), as it should with
+  different input, and the other text fields absorb it.
+- The One Earth mapping changes one to three points more than its own noise at each level,
+  and its own noise is large: rerunning it on identical text changes the level-1 nodes of 29%
+  of orgs and the level-2 nodes of 40%. The mapper's instability, not the vendor, dominates.
+- Membership: 9 orgs would leave the tracker and 6 would join, against 9 changes from rerun
+  noise alone; the adaptation filter flips 0.3% either way.
+- A gpt-4.1 judge on 300 sampled orgs, shown both scrapes and both website summaries in
+  random order, preferred Firecrawl's summary for 108, the in-house one for 84 and called 108
+  ties. It flagged an unsupported statement in 5.7% of Firecrawl summaries and 11.7% of
+  in-house ones.
+
+### Orgs only Firecrawl could read (159)
+
+Their in-house chain had no website summary, so the comparison is with and without one, and
+it moves everything, as new information should: the summary of summaries (cosine 0.885) and
+the One Earth level-1 nodes of 44% of them. The judge checked each Firecrawl summary against
+its scrape (96.9% faithful, 94.3% specific) and flagged 16 as not the organization's site.
+
+Reading all 159 found more: **18 are registrar sale pages**, mostly GoDaddy's current
+for-sale page, which puts the domain on its own line between "The domain name" and "is for
+sale!" so no parked marker matched it. The judge flagged only 10 of them, because the other
+8 summaries honestly say the domain is for sale; all 18 would still put a sale page's
+summary in the tracker ("Chlorofill facilitates the buying and leasing of domain names"),
+and Calxeda's was invented from the company's name. vibrant-data-labs/vdl-tools#251 adds a
+rule to the shared gate for these pages. Rerun through the D2 rescore with that rule, usable
+moves from 85.3% to 84.4%, Firecrawl-only rescues from 159 to 141, and the 1,547 paired orgs
+are untouched; the same rule flips 36 for-sale pages in the in-house cache. The text is
+unchanged, so `CLEANER_VERSION` stays 1 and the paired measures above stand.
+
+The other 6 the judge flagged are not a text-rule problem: 2 gambling sites on lapsed
+domains, which the tracker's junk-summary rule already catches; 2 squatters with unrelated
+content (an SEO agency, a generic nonprofit template); and 2 that are the real successor
+sites, Heila Technologies now part of Rehlko and Wyncote Audubon renamed Liberty Bird
+Alliance. Those two belong to org dedupe through `final_host`, not to the junk gate.
+
+### Cost
+
+| stage | per 1,000 chain runs |
+|---|---|
+| website summary (gpt-4.1-mini) | $2.13 |
+| summary of summaries (gpt-4.1-mini) | $0.46 |
+| One Earth (gpt-5.4-mini; 62% of input is cached, billed here at 10%) | $7.40 |
+| relevance (fine-tuned gpt-4o-mini, short descriptions only) | under $0.01 per org overall |
+| adaptation (Baseten, CPU replicas) | not metered here; about 8 minutes for 2,000 texts at 6 replicas |
+
+Re-running the downstream stages for an org whose text changed costs about $10 per 1,000
+orgs, about $300 for a 30k-org refresh, plus Baseten time. D3 itself cost about $56 in OpenAI
+calls (at most $83 if cached input were billed in full), including a $5 judge.
+
+Two engineering notes from the run. The shared OpenAI client in `openai_api_utils` keeps the
+library's 600-second timeout with four retries, so one silent connection stalled this run for
+37 minutes; D3 uses a copy with a 90-second timeout, and production runs have the same
+exposure. The adaptation stage sends chunks in parallel the way `bulk_predict` does since
+#241, without that method's cache writes.
+
+Human spot checks: `.cache/vendor_pilot/d3/d3_spot_checks.xlsx` holds 50 orgs (20 Firecrawl-only,
+20 with the largest length difference, 10 at random) with both summaries, the judge's verdict
+and empty columns for a reviewer.
+
 ## D9: main-content-only subpages (run 2026-11-03, 1,967 credits)
 
 D9 of the adapter project ([VIB-61](https://linear.app/vibrant-data-labs/issue/VIB-61)), the
