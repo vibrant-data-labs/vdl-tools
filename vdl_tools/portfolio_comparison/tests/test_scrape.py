@@ -3,7 +3,6 @@
 import pandas as pd
 
 from vdl_tools.portfolio_comparison.enrichment.scrape import (
-    classify_text_quality,
     scrape_texts,
     select_scrape_targets,
 )
@@ -105,9 +104,37 @@ def test_scrape_texts_fans_out_and_gates(tmp_path):
     assert (tmp_path / "scraped_texts.parquet").exists()
 
 
-def test_quality_classifier():
-    assert classify_text_quality(LONG) == "ok"
-    assert classify_text_quality("tiny") == "thin"
-    assert classify_text_quality("THIS DOMAIN IS FOR SALE — act now " * 20) == "parked"
-    assert classify_text_quality(None, num_errors=3) == "dead"
-    assert classify_text_quality("", num_errors=0) == "empty"
+# GoDaddy's split-line for-sale lander (vendor pilot, Oct 2026): the domain
+# sits on its own line, so no fixed marker phrase spans it. Only the shared
+# gate's PARKED_PATTERNS catch it; the module's old local copy passed it as ok.
+GODADDY_LANDER = (
+    "###### The domain name\n## RowdyCreek.com\n###### is for sale!\n"
+    "#### Get this domain\nOwn it today for $3,995, or select Lease to Own.\n"
+    + "Free transaction support. Fast & easy transfers. " * 5
+)
+BOT_WALL = "Checking your browser before accessing the site. Verify you are human."
+
+
+def test_godaddy_for_sale_lander_is_parked(tmp_path):
+    def fake_scraper(urls, force=False):
+        from vdl_tools.scrape_enrich.scraper.scrape_websites import (
+            extract_website_name,
+        )
+
+        texts = {"rowdycreek.com": GODADDY_LANDER, "rowdycreek.org": BOT_WALL}
+        return pd.DataFrame([{
+            "cleaned_home_key": extract_website_name(u), "home_url": u,
+            "combined_text": next(t for d, t in texts.items() if d in u),
+            "num_errors": 0,
+        } for u in urls])
+
+    frame = pd.DataFrame([{
+        "customer_row_id": "r1", "customer_url": "https://rowdycreek.com",
+        "nzi_website": "https://rowdycreek.org", "cb_website": pd.NA,
+        "gt_website": pd.NA,
+    }])
+    row = scrape_texts(frame, tmp_path, scraper=fake_scraper).iloc[0]
+    assert row["customer_url_quality"] == "parked"
+    # The source site's "blocked" verdict ranks with parked, not past it.
+    assert row["source_url_quality"] == "blocked"
+    assert row["text_quality"] == "parked"
