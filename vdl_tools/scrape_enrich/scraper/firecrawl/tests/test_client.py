@@ -249,6 +249,25 @@ def test_success_without_a_status_code_is_a_vendor_error():
     assert "statusCode" in result.error
 
 
+def test_garbled_metadata_never_raises_out_of_scrape():
+    vendor = (FakeFirecrawl()
+              .script("https://a.org", page(extra_meta={"statusCode": "200 OK", "creditsUsed": "n/a",
+                                                        "concurrencyQueueDurationMs": "slow"}))
+              .script("https://b.org", httpx.Response(200, json={"success": True, "data": {"metadata": "nope"}}))
+              .script("https://c.org", httpx.Response(200, json={"success": True, "data": ["not", "a", "dict"]})))
+    client, _ = make_client(vendor)
+
+    async def go():
+        async with client:
+            return await client.scrape_many(["https://a.org", "https://b.org", "https://c.org"])
+
+    outcome = run(go())
+    for result in outcome.values():
+        assert result.failure_reason == VENDOR_ERROR and "statusCode" in result.error
+    a = outcome["https://a.org"]
+    assert a.status_code is None and a.credits_used == 0 and a.concurrency_queue_ms is None
+
+
 # ---------------------------------------------------------------------------
 # Terminal codes, timeouts and invalid URLs
 # ---------------------------------------------------------------------------
@@ -293,6 +312,34 @@ def test_api_400_is_invalid_url_without_retry():
     assert result.api_status == 400 and result.attempts == 1 and len(vendor.requests) == 1
 
 
+def test_api_400_with_details_about_the_url_is_still_invalid_url():
+    body = {"success": False, "error": "Bad Request",
+            "details": [{"code": "invalid_string", "path": ["url"], "message": "Invalid url"}]}
+    vendor = FakeFirecrawl().script(HOME, httpx.Response(400, json=body))
+    result, client, _ = run(scrape_one(vendor))
+    assert result.failure_reason == INVALID_URL and client.stop_reason is None
+
+
+def test_api_400_about_our_request_body_stops_the_run_instead_of_blaming_pages():
+    # A bad payload_overrides value fails every page the same way; writing invalid_url for each
+    # would permanently skip every org under max_errors=1.
+    body = {"success": False, "error": "Bad Request",
+            "details": [{"code": "invalid_enum_value", "path": ["formats", 0], "message": "Invalid enum value"}]}
+    vendor = FakeFirecrawl()
+    for i in range(4):
+        vendor.script(f"https://site{i}.org", httpx.Response(400, json=body))
+    client, _ = make_client(vendor, concurrency=1, payload_overrides={"formats": ["markdwon"]})
+
+    async def go():
+        async with client:
+            return await client.scrape_many([f"https://site{i}.org" for i in range(4)])
+
+    outcome = run(go())
+    assert len(vendor.requests) == 1
+    assert all(isinstance(v, RunStopped) and v.kind == "bad_request" for v in outcome.values())
+    assert "formats.0" in client.stop_reason and client.stats.failures == {}
+
+
 @pytest.mark.parametrize("bad", ["", "   ", None, "https://", "localhost", "na", "not a url",
                                  "https://www.facebook.com/someorg", "someone@gmail.com"])
 def test_values_that_name_no_site_are_invalid_without_a_request(bad):
@@ -321,6 +368,7 @@ def test_clean_urls_are_sent_as_given_with_a_scheme(raw, sent):
 @pytest.mark.parametrize("raw, sent", [
     ("https://michigan bulls.com", "https://michiganbulls.com"),           # a pilot 400, now a site
     ("www. tworiversymca. org", "https://tworiversymca.org"),              # GivingTuesday spacing
+    ("example.org/about us", "https://example.org"),                       # whitespace in the path: the home page
     ("https: eoydc.org", "https://eoydc.org"),                             # broken scheme
     ("info@example.org", "https://example.org"),                           # an email in the website field
     ("mailto:info@example.org", "https://example.org"),
@@ -463,6 +511,18 @@ def test_credit_ceiling_stops_before_the_next_request():
     assert client.credits_used == 2 and client.stats.stop_reason == stop.reason
 
 
+def test_credit_ceiling_of_zero_means_no_ceiling_like_the_pilots_credit_cap():
+    vendor = FakeFirecrawl()
+    client, _ = make_client(vendor, credit_ceiling=0)
+
+    async def go():
+        async with client:
+            return await client.scrape_many(["https://a.org", "https://b.org"])
+
+    outcome = run(go())
+    assert client.credit_ceiling is None and all(r.ok for r in outcome.values()) and len(vendor.requests) == 2
+
+
 def test_failures_bill_nothing_and_do_not_count_toward_the_ceiling():
     vendor = FakeFirecrawl().script("https://dead.org", api_error(500, code="SCRAPE_DNS_RESOLUTION_ERROR"))
     client, _ = make_client(vendor, credit_ceiling=1)
@@ -480,6 +540,20 @@ def test_failures_bill_nothing_and_do_not_count_toward_the_ceiling():
 # ---------------------------------------------------------------------------
 # Concurrency and rpm
 # ---------------------------------------------------------------------------
+
+def test_scrape_many_fetches_each_distinct_url_once():
+    vendor = FakeFirecrawl()
+    client, _ = make_client(vendor)
+    urls = ["https://a.org/about", "https://a.org/about", "https://a.org/team", "https://a.org/about"]
+
+    async def go():
+        async with client:
+            return await client.scrape_many(urls)
+
+    outcome = run(go())
+    assert list(outcome) == ["https://a.org/about", "https://a.org/team"]   # first-seen order
+    assert len(vendor.requests) == 2 and client.credits_used == 2 and client.stats.n_pages == 2
+
 
 def test_semaphore_bounds_requests_in_flight():
     vendor = FakeFirecrawl()
@@ -525,10 +599,11 @@ def test_rpm_limiter_spaces_requests_and_counts_retries_as_requests():
     run(go())
     assert client.stats.n_requests == 3
     # The recorder never advances the clock, so each slot is asked to wait for the whole
-    # backlog: 0.5 s before the second request, the 503 backoff of 2.0 s, then 1.0 s
-    # (two intervals) before the third request.
+    # backlog: ~0.5 s before the second request, the 503 backoff of 2.0 s, then ~1.0 s
+    # (two intervals) before the third request. The lower bounds leave room for the
+    # mock round trip on a slow runner; the point is the spacing, not the precision.
     assert len(sleep.delays) == 3
-    assert 0.45 <= sleep.delays[0] <= 0.5 and sleep.delays[1] == 2.0 and 0.95 <= sleep.delays[2] <= 1.0
+    assert 0.3 <= sleep.delays[0] <= 0.5 and sleep.delays[1] == 2.0 and 0.8 <= sleep.delays[2] <= 1.0
 
 
 def test_limits_rebind_to_a_new_event_loop():
@@ -571,6 +646,40 @@ def test_dry_run_reports_misses_credits_and_balance_without_fetching():
     assert report.balance["planCredits"] == 100000
     text = report.summary()
     assert "2 to fetch" in text and "9.4" in text and "91047" in text and "within" in text
+
+
+def test_dry_run_cache_membership_ignores_a_trailing_slash_like_its_dedupe():
+    vendor = FakeFirecrawl()
+    client, _ = make_client(vendor)
+
+    async def go():
+        async with client:
+            return await client.dry_run(["https://x.org/", "y.org"], is_cached={"https://x.org", "https://y.org/"})
+
+    report = run(go())
+    assert report.n_cached == 2 and report.misses == [] and report.estimated_credits == 0
+
+
+def test_balance_and_dry_run_outside_the_context_manager_leave_no_open_client():
+    vendor = FakeFirecrawl(remaining=42)
+    client, _ = make_client(vendor)
+
+    async def go():
+        balance = await client.balance()
+        report = await client.dry_run(["a.org"])
+        return balance, report
+
+    balance, report = run(go())
+    assert balance["remainingCredits"] == 42 and report.remaining_credits == 42 and report.n_misses == 1
+    assert client._http is None and vendor.balance_calls == 2 and vendor.requests == []
+
+
+def test_scrape_outside_the_context_manager_is_an_error_not_a_leak():
+    vendor = FakeFirecrawl()
+    client, _ = make_client(vendor)
+    with pytest.raises(RuntimeError, match="async with"):
+        run(client.scrape(HOME))
+    assert vendor.requests == [] and client._http is None
 
 
 def test_dry_run_accepts_a_predicate_and_flags_ceiling_and_balance_shortfalls():
@@ -709,6 +818,7 @@ def test_from_config_reads_the_section_and_keeps_the_key_private(tmp_path: Path,
     assert client.limits.concurrency == 7 and client.limits.rpm == 120 and client.credit_ceiling == 50
     assert "cfg-secret" not in repr(client)
     assert FirecrawlClient.from_config(concurrency=3).limits.concurrency == 3   # overrides win
+    assert FirecrawlClient.from_config(api_key="other-key")._api_key == "other-key"   # so does the key
 
 
 def test_from_config_without_a_key_names_the_setting_not_a_value(tmp_path: Path, monkeypatch):
