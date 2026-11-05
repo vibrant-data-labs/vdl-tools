@@ -43,6 +43,23 @@ rules read), `maxAge 0`, `proxy auto`, a 60 s page timeout. `payload_overrides` 
 replaces fields for one-off runs; `client.request_profile` is what each page was sent, for
 `scrape_runs.request_profile`.
 
+Lineage the client carries but does not use, so a result is a page row without a side
+lookup and joins back to where it came from:
+
+| field | what it is | set by |
+|---|---|---|
+| `requested_url` | the caller's string byte for byte: the join key back to the source frame's website column | the caller's argument |
+| `url` | what was sent: scheme added and lowercased, whitespace stripped | `normalize_url` |
+| `final_url`, `final_host` | where Firecrawl was served from after redirects | the vendor |
+| `home_url` | the org's requested home URL, verbatim: the parent of a subpage and the cache's `cleaned_home_key`; never `final_url`, since the cache key is untouched | `scrape(..., home_url=)` |
+| `page_type` | `"index"` for the home page, `"page"` for a subpage; plain strings, D6 picks the stored literal | `scrape(..., page_type=)` |
+| `run_id` | the client's run, also on `client.stats` | `FirecrawlClient(run_id=)` |
+
+The client cannot infer the last three: subpage URLs are built on the home page's
+`final_url`, another host for 11% of orgs, and home and subpages get the same request.
+Lookup by org id (a Crunchbase uuid, an EIN, an NZI id) is D16's `org_site_keys`, not this
+module.
+
 What a page's `failure_reason` means, and who pays for it:
 
 | `failure_reason` | when | counts as an error |

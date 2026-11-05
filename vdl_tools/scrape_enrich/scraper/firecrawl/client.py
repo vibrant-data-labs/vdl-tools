@@ -36,6 +36,16 @@ Request profile (Q2, decided 2026-11-04): ``formats [markdown, links]`` and
 Firecrawl's default is ``true``, which also drops the navigation links the
 subpage rules read, so it is sent explicitly and asserted in the tests.
 
+Lineage the client carries but does not use: ``run_id`` (set once per
+client) and, per call, the org's requested ``home_url`` and the page's
+``page_type``. The caller knows them and the client cannot infer them, so a
+result names its run, its parent and its role and can become a page row
+without a side lookup. Every result also keeps ``requested_url``, the
+caller's string byte for byte, next to the normalized ``url`` it sent and
+the ``final_url`` it landed on: results merge back onto the source frame's
+website column on ``requested_url`` with an exact match, and an org's pages
+join their home page on ``home_url``, which the caller passes verbatim too.
+
 Config, ``[scraping_vendors]`` in config.ini (``FirecrawlClient.from_config``)::
 
     firecrawl_api_key = ...        required; never logged, printed or repr'd
@@ -171,9 +181,16 @@ def normalize_url(url: str | None) -> str | None:
 
 @dataclass
 class ScrapeResult:
-    """One page as Firecrawl answered it, classified."""
+    """One page as Firecrawl answered it, classified.
 
-    url: str                            # as sent (normalized)
+    Three renderings of the page's URL, for three jobs: ``requested_url`` is
+    the caller's string verbatim (the join key back to the source frame),
+    ``url`` is what was sent (scheme added and lowercased, whitespace
+    stripped), ``final_url`` is where Firecrawl was served from.
+    """
+
+    url: str                            # as sent (normalized); "" when nothing was sent
+    requested_url: str = ""             # the caller's value, byte for byte: merge results back on it
     ok: bool = False                    # Firecrawl succeeded and the target answered 2xx
     failure_reason: str | None = None   # None or one of the five reasons above
     error: str | None = None
@@ -196,6 +213,13 @@ class ScrapeResult:
     attempts: int = 0                   # API calls made for this page
     wall_seconds: float = 0.0
     fetched_at: str = ""
+    # Context the caller supplies and the client only carries, so a result names its
+    # run, its parent and its role without a side lookup. The client cannot infer
+    # them: subpage URLs are built on the home page's final_url (another host for
+    # 11% of orgs), and home and subpages get the same request (Q2).
+    run_id: str | None = None           # the client's run_id (scrape_runs)
+    home_url: str | None = None         # the org's REQUESTED home URL: the cache's cleaned_home_key, not final_url
+    page_type: str | None = None        # "index" for the home page, "page" for a subpage; D6 fixes the stored literal
 
     @property
     def counts_as_error(self) -> bool:
@@ -216,6 +240,7 @@ class ScrapeResult:
 class RunStats:
     """Bookkeeping for one client's lifetime; the source of the ``scrape_runs`` row."""
 
+    run_id: str | None = None
     started_at: str | None = None
     ended_at: str | None = None
     balance_before: dict | None = None
@@ -400,9 +425,10 @@ class FirecrawlClient:
     """``POST /v2/scrape`` under the account limits, with the error semantics above.
 
     Use as an async context manager: entering opens the HTTP client and
-    reads the balance, leaving reads it again and closes. ``transport`` and
-    ``sleep`` are for the tests (an ``httpx.MockTransport`` and a recorder
-    in place of ``asyncio.sleep``).
+    reads the balance, leaving reads it again and closes. ``run_id`` is
+    stamped on every result and on ``stats``. ``transport`` and ``sleep``
+    are for the tests (an ``httpx.MockTransport`` and a recorder in place
+    of ``asyncio.sleep``).
     """
 
     def __init__(
@@ -412,6 +438,7 @@ class FirecrawlClient:
         concurrency: int = DEFAULT_CONCURRENCY,
         rpm: float | None = DEFAULT_RPM,
         credit_ceiling: float | None = None,
+        run_id: str | None = None,
         limits: AccountLimits | None = None,
         payload_overrides: dict | None = None,
         base_url: str = BASE_URL,
@@ -425,6 +452,7 @@ class FirecrawlClient:
         self._api_key = api_key
         self.limits = limits or AccountLimits(concurrency, rpm)
         self.credit_ceiling = credit_ceiling
+        self.run_id = run_id
         self.payload_overrides = dict(payload_overrides or {})
         self.base_url = base_url.rstrip("/")
         self.max_attempts = max(1, int(max_attempts))
@@ -433,7 +461,7 @@ class FirecrawlClient:
         self._sleep = sleep
         self._http: httpx.AsyncClient | None = None
         self._stop: RunStopped | None = None
-        self.stats = RunStats()
+        self.stats = RunStats(run_id=run_id)
 
     @classmethod
     def from_config(cls, **overrides) -> "FirecrawlClient":
@@ -453,8 +481,9 @@ class FirecrawlClient:
         return cls(api_key, **settings)
 
     def __repr__(self) -> str:
-        return (f"FirecrawlClient(concurrency={self.limits.concurrency}, rpm={self.limits.rpm}, "
-                f"credit_ceiling={self.credit_ceiling}, credits_used={self.stats.credits_used:g})")
+        return (f"FirecrawlClient(run_id={self.run_id!r}, concurrency={self.limits.concurrency}, "
+                f"rpm={self.limits.rpm}, credit_ceiling={self.credit_ceiling}, "
+                f"credits_used={self.stats.credits_used:g})")
 
     @property
     def request_profile(self) -> dict:
@@ -538,27 +567,37 @@ class FirecrawlClient:
             self.stats.stop_reason = stop.reason
             logger.error("firecrawl: run stopped (%s): %s", stop.kind, stop.reason)
 
-    async def scrape(self, url: str) -> ScrapeResult:
+    async def scrape(self, url: str, *, home_url: str | None = None, page_type: str | None = None) -> ScrapeResult:
         """One page. Never raises for the page's own failure; raises ``RunStopped``
         when the run may not send another request (402, 401, the credit ceiling).
+
+        ``home_url`` (the org's requested home URL) and ``page_type`` (``"index"``
+        or ``"page"``) are carried onto the result, never sent; home and
+        subpages get the same request (Q2).
 
         A page waits for a browser slot (the semaphore, held through its
         retries and their backoff) and then for an rpm slot per attempt. In-flight
         pages may overshoot the ceiling by up to ``concurrency`` credits.
         """
         t0 = time.monotonic()
+        requested = url if isinstance(url, str) else ""
         sent = normalize_url(url)
         if sent is None:
-            result = ScrapeResult(url=url if isinstance(url, str) else "", attempts=0)
+            result = ScrapeResult(url="", attempts=0)
             _fail(result, INVALID_URL, "blank or malformed URL; not sent")
-            return self._finish(result, t0)
+            return self._finish(result, t0, requested, home_url, page_type)
         self._check_stop()
         async with self.limits.semaphore():
             self._check_stop()   # stopped while waiting for a slot: send nothing
             result = await self._scrape_with_retry(sent)
-        return self._finish(result, t0)
+        return self._finish(result, t0, requested, home_url, page_type)
 
-    def _finish(self, result: ScrapeResult, t0: float) -> ScrapeResult:
+    def _finish(self, result: ScrapeResult, t0: float, requested: str,
+                home_url: str | None, page_type: str | None) -> ScrapeResult:
+        result.requested_url = requested
+        result.run_id = self.run_id
+        result.home_url = home_url
+        result.page_type = page_type
         result.wall_seconds = round(time.monotonic() - t0, 3)
         result.fetched_at = _now()
         self.stats.record(result)
@@ -593,14 +632,17 @@ class FirecrawlClient:
         result = ScrapeResult(url=url, api_status=last.status if last else None, attempts=self.max_attempts)
         return _fail(result, VENDOR_ERROR, f"gave up after {self.max_attempts} attempts: {last}")
 
-    async def scrape_many(self, urls: Iterable[str]) -> dict[str, ScrapeResult | RunStopped]:
-        """Every URL concurrently under the limits; a page cut off by a stop maps to
-        its ``RunStopped`` instead of a result, so the caller stores nothing for it."""
+    async def scrape_many(
+        self, urls: Iterable[str], *, home_url: str | None = None, page_type: str | None = None,
+    ) -> dict[str, ScrapeResult | RunStopped]:
+        """Every URL concurrently under the limits, all with the same ``home_url`` and
+        ``page_type`` (an org's subpages); a page cut off by a stop maps to its
+        ``RunStopped`` instead of a result, so the caller stores nothing for it."""
         urls = list(urls)
 
         async def one(url):
             try:
-                return await self.scrape(url)
+                return await self.scrape(url, home_url=home_url, page_type=page_type)
             except RunStopped as exc:
                 return exc
 

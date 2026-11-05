@@ -626,6 +626,61 @@ def test_stats_summarize_the_run():
 
 
 # ---------------------------------------------------------------------------
+# Lineage: run id, parent, page type, and the join back to the caller's string
+# ---------------------------------------------------------------------------
+
+def test_context_is_stamped_on_results_and_never_sent():
+    vendor = FakeFirecrawl()
+    client, _ = make_client(vendor, run_id="run-2026-11-04-a")
+
+    async def go():
+        async with client:
+            home = await client.scrape(HOME, home_url=HOME, page_type="index")
+            subs = await client.scrape_many([HOME + "/about", HOME + "/team"], home_url=HOME, page_type="page")
+            return home, subs
+
+    home, subs = run(go())
+    assert home.run_id == "run-2026-11-04-a" and home.home_url == HOME and home.page_type == "index"
+    for sub in subs.values():
+        assert sub.run_id == "run-2026-11-04-a" and sub.home_url == HOME and sub.page_type == "page"
+    for sent in vendor.requests:
+        assert not {"home_url", "page_type", "run_id", "requested_url"} & set(sent)
+    assert client.stats.run_id == "run-2026-11-04-a" and client.stats.as_dict()["run_id"] == "run-2026-11-04-a"
+    row = home.as_dict()
+    assert row["run_id"] and row["home_url"] == HOME and row["page_type"] == "index"
+
+
+def test_requested_url_is_the_callers_string_verbatim():
+    raw = "  WWW.Example.ORG/About "          # as a website column holds it: no scheme, stray spaces, case
+    sent = "https://WWW.Example.ORG/About"
+    vendor = FakeFirecrawl().script(sent, page(url="https://www.example.org/about/", source=sent))
+    client, _ = make_client(vendor)
+
+    async def go():
+        async with client:
+            one = await client.scrape(raw, home_url=raw)
+            many = await client.scrape_many([raw, "not a url"], home_url=raw, page_type="page")
+            return one, many
+
+    one, many = run(go())
+    assert one.requested_url == raw and one.url == sent and one.final_url == "https://www.example.org/about/"
+    assert one.home_url == raw                                   # the parent is passed verbatim too
+    assert set(many) == {raw, "not a url"}                       # keyed by the caller's strings
+    assert many[raw].requested_url == raw and many[raw].ok
+    bad = many["not a url"]
+    assert bad.requested_url == "not a url" and bad.url == "" and bad.failure_reason == INVALID_URL
+    assert bad.home_url == raw and bad.page_type == "page"       # context survives the invalid path
+
+
+def test_from_config_passes_run_id_through(tmp_path: Path, monkeypatch):
+    ini = tmp_path / "config.ini"
+    ini.write_text("[scraping_vendors]\nfirecrawl_api_key = cfg-secret\n")
+    monkeypatch.setenv("VDL_GLOBAL_CONFIG_PATH", str(ini))
+    client = FirecrawlClient.from_config(run_id="r1")
+    assert client.run_id == "r1" and client.stats.run_id == "r1" and "r1" in repr(client) and "cfg-secret" not in repr(client)
+
+
+# ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
