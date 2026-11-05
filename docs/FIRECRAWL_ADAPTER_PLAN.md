@@ -446,8 +446,15 @@ reads: every step below "store" is a pure function of stored inputs and can be r
   alone produced 20 of them.
 - A credit stop (402) or auth failure (401) halts in-flight work and writes nothing for pages
   still in flight.
-- `SCRAPE_*` 500s are terminal (`dead`). Blank and malformed URLs are rejected before any
-  request as `invalid_url` with no credit spent.
+- `SCRAPE_*` codes are terminal (`dead`), whether Firecrawl sends them with a 500 or with a
+  200 and `success: false` (the pilot saw both for DNS failures); `SCRAPE_TIMEOUT` (408) is
+  the exception and is a `vendor_error`. A value that names no site is `invalid_url` before
+  any request, with no credit spent: blank, a placeholder, no dotted host, or a platform or
+  free-mail domain such as `facebook.com/org` or `gmail.com`, as `url_keys.website_domain`
+  judges it (decided 2026-11-04; the in-house path fetched those and hit a login wall, and
+  the org reaches the same fallback either way). Messy values `website_domain` can repair,
+  such as `www. example. org` or `info@example.org`, are fetched in the repaired form. A bad
+  top-level domain is left to Firecrawl's 400, which costs nothing and is also `invalid_url`.
 - The LinkedIn fallback in the enrichment pipeline keys off `failure_reason` and
   `text_quality` and skips `vendor_error`.
 - `max_age_days` on `fetched_at` defines "refresh": rows older than the cutoff are re-fetched,
