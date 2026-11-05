@@ -1,7 +1,8 @@
 # Firecrawl scraping adapter: implementation plan
 
-Status: draft v2 for team discussion, 2026-10-22. Decision pending per the VDL rule that new
-tools get discussed before adoption.
+Status: adopted. Q1 was decided on 2026-11-04 (Zein): adopt Firecrawl behind the cache, on the
+D2, D3 and D9 evidence (Linear VIB-55). This is draft v2 of 2026-10-22, revised as decisions
+landed; the Linear spec is the canonical version.
 
 v2 incorporates the data-engineer and data-scientist reviews of v1 (same day). The main
 changes: vendor-error retry semantics, a working per-org token cap, text validation before
