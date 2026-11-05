@@ -284,19 +284,19 @@ def test_408_scrape_timeout_is_a_vendor_error_without_retry():
 
 
 def test_api_400_is_invalid_url_without_retry():
-    vendor = FakeFirecrawl().script("https://weebly.c", api_error(400, code="BAD_REQUEST",
-                                                                  error="URL must have a valid top-level domain"))
-    # the client's own check rejects this one first, so force a sendable URL through the API answer instead
-    vendor.script(HOME, api_error(400, code="BAD_REQUEST", error="URL must have a valid top-level domain"))
-    result, _, _ = run(scrape_one(vendor))
+    # A bad top-level domain is Firecrawl's call, not the client's: sent once, 400, no retry, no credit.
+    url = "https://grundypreschool.weebly.c"
+    vendor = FakeFirecrawl().script(url, api_error(400, code="BAD_REQUEST",
+                                                   error="URL must have a valid top-level domain"))
+    result, _, _ = run(scrape_one(vendor, url=url))
     assert result.failure_reason == INVALID_URL and result.counts_as_error
     assert result.api_status == 400 and result.attempts == 1 and len(vendor.requests) == 1
 
 
-@pytest.mark.parametrize("bad", ["", "   ", None, "https://michigan bulls.com", "hhtp://www.uchsmotherbrown.prg",
-                                 "https://grundypreschool.weebly.c", "https://", "mailto:info@example.org",
-                                 "info@example.org", "ftp://files.example.org", "localhost", "https://192.168.0.1"])
-def test_malformed_urls_are_invalid_without_a_request(bad):
+@pytest.mark.parametrize("bad", ["", "   ", None, "https://", "localhost", "na", "not a url",
+                                 "https://www.facebook.com/someorg", "someone@gmail.com"])
+def test_values_that_name_no_site_are_invalid_without_a_request(bad):
+    # website_domain's verdict: blank, a placeholder, no dotted host, a platform or a free-mail domain.
     vendor = FakeFirecrawl()
     result, client, _ = run(scrape_one(vendor, url=bad))
     assert result.failure_reason == INVALID_URL and result.counts_as_error
@@ -309,8 +309,25 @@ def test_malformed_urls_are_invalid_without_a_request(bad):
     ("HTTPS://WWW.EXAMPLE.ORG/About", "https://WWW.EXAMPLE.ORG/About"),
     ("  http://example.org/  ", "http://example.org/"),
     ("https://sub.example.co.uk/path?q=1", "https://sub.example.co.uk/path?q=1"),
+    ("nomofoundation.wixsite.com/nomo", "https://nomofoundation.wixsite.com/nomo"),   # a real pilot URL: the path matters
+    ("example.org:8080/x", "https://example.org:8080/x"),
+    ("https://www2.example.org/x", "https://www2.example.org/x"),
+    ("https://192.168.0.1", "https://192.168.0.1"),
 ])
-def test_normalize_url_adds_and_lowercases_the_scheme_only(raw, sent):
+def test_clean_urls_are_sent_as_given_with_a_scheme(raw, sent):
+    assert normalize_url(raw) == sent
+
+
+@pytest.mark.parametrize("raw, sent", [
+    ("https://michigan bulls.com", "https://michiganbulls.com"),           # a pilot 400, now a site
+    ("www. tworiversymca. org", "https://tworiversymca.org"),              # GivingTuesday spacing
+    ("https: eoydc.org", "https://eoydc.org"),                             # broken scheme
+    ("info@example.org", "https://example.org"),                           # an email in the website field
+    ("mailto:info@example.org", "https://example.org"),
+    ("hhtp://www.uchsmotherbrown.prg", "https://uchsmotherbrown.prg"),     # Firecrawl then decides on .prg
+    ("ftp://files.example.org", "https://files.example.org"),
+])
+def test_messy_urls_are_repaired_the_way_website_domain_repairs_them(raw, sent):
     assert normalize_url(raw) == sent
 
 
@@ -536,7 +553,7 @@ def test_dry_run_reports_misses_credits_and_balance_without_fetching():
     vendor = FakeFirecrawl(remaining=91047)
     client, _ = make_client(vendor, credit_ceiling=100)
     urls = ["https://cached1.org", "cached2.org", "https://new1.org", "https://new1.org/", "new2.org",
-            "https://michigan bulls.com", ""]
+            "na", ""]
 
     async def go():
         async with client:
@@ -547,7 +564,7 @@ def test_dry_run_reports_misses_credits_and_balance_without_fetching():
     assert vendor.requests == [] and client.stats.n_requests == 0        # nothing fetched
     assert report.n_urls == 6 and report.n_cached == 2 and report.n_invalid == 2
     assert report.misses == ["https://new1.org", "https://new2.org"]   # new1.org/ is the same page
-    assert report.invalid == ["https://michigan bulls.com", ""]
+    assert report.invalid == ["na", ""]
     assert report.estimated_credits == pytest.approx(2 * 4.7)
     assert report.credit_ceiling == 100 and report.within_ceiling is True
     assert report.remaining_credits == 91047 and report.within_balance is True

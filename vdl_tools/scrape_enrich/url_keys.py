@@ -1,4 +1,5 @@
-"""The two keys a website URL is reduced to. Use these; don't write another.
+"""The two keys a website URL is reduced to, and the form it is fetched in.
+Use these; don't write another.
 
 - ``extract_website_name``: the PAGE key (keeps ``www.``, case and path).
   Keys every row of the scrape cache, so its output must never change.
@@ -7,6 +8,9 @@
   the liveness cache. Repairs messy website fields; "" for platforms, free-mail
   and placeholders. ``https://www.Example.org/about`` -> ``example.org``,
   ``info@example.org`` -> ``example.org``, ``facebook.com/x`` -> ``""``
+- ``ensure_url_scheme``: the FETCH form, a scheme added when missing and
+  lowercased, everything else as given. ``WWW.Example.org/about`` ->
+  ``https://WWW.Example.org/about``
 """
 
 import re
@@ -58,6 +62,24 @@ def extract_website_name(value: str) -> str:
     except Exception as ex:
         logger.warning(f'Error getting website name: {value}')
         return None
+
+
+def ensure_url_scheme(url: str) -> str:
+    """Ensure URL has a scheme (https:// by default).
+
+    This is necessary for urljoin to work correctly when constructing
+    internal page URLs from relative paths.
+    """
+    if not url:
+        return url
+    # Scheme check must be case-insensitive: 990-filing websites arrive as
+    # HTTPS://WWW.EXAMPLE.ORG and a case-sensitive check double-prefixes
+    # them (https://HTTPS://...). Normalize the scheme to lowercase too.
+    lowered = url.lower()
+    if not lowered.startswith(('http://', 'https://')):
+        return f'https://{url}'
+    scheme_len = lowered.index('://') + 3
+    return url[:scheme_len].lower() + url[scheme_len:]
 
 
 def website_domain(url) -> str:

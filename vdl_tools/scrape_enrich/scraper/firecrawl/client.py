@@ -14,8 +14,10 @@ Error semantics (plan section 6). A page's ``failure_reason`` is one of
                   ``SCRAPE_TIMEOUT``, at API status 500 or 200). Terminal.
     http_error    the site answered, but not 2xx (``metadata.statusCode``)
     blocked       the site refused us: 401, 403 or 429 from the target
-    invalid_url   rejected before any request (blank, whitespace, no host,
-                  no top-level domain) or by Firecrawl with a 400
+    invalid_url   names no site, so never sent (blank, a placeholder, no
+                  dotted host, a platform or free-mail domain, as
+                  ``url_keys.website_domain`` judges it), or a 400 from
+                  Firecrawl (a bad top-level domain)
     vendor_error  Firecrawl's problem: a 408 scrape timeout, a 429 or 5xx
                   that outlived the retries, a transport error, an answer
                   with no status code, or a page cut off by a stop
@@ -72,6 +74,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from vdl_tools.scrape_enrich.scraper.firecrawl.site_links import normalize_host
+from vdl_tools.scrape_enrich.url_keys import ensure_url_scheme, website_domain
 from vdl_tools.shared_tools.tools.config_utils import get_configuration
 from vdl_tools.shared_tools.tools.logger import logger
 
@@ -115,8 +118,6 @@ KEEP_METADATA = (
 
 # Firecrawl's 429 carries no Retry-After header; the body says "please retry after 17s".
 _RETRY_AFTER_IN_BODY = re.compile(r"retry after (\d+(?:\.\d+)?)\s*s", re.IGNORECASE)
-_HOST_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$", re.IGNORECASE)
-_OTHER_SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*://")
 
 
 class RunStopped(Exception):
@@ -145,38 +146,30 @@ def _now() -> str:
 
 
 def normalize_url(url: str | None) -> str | None:
-    """The URL as it is sent, or None when it cannot be sent.
+    """The URL the client sends, or None when the value names no site.
 
-    ``https://`` is added when the scheme is missing and the scheme is
-    lowercased, the same rule as the in-house ``ensure_url_scheme``.
-    None for a blank value, whitespace inside the URL, no host, a host
-    label that is not a hostname, or a top-level domain that is not two or
-    more letters: Firecrawl answers those with a 400, so no request is made.
+    Two existing rules, nothing of its own. ``website_domain`` says whether
+    there is a site to fetch (``""`` for blank, a placeholder, no dotted
+    host, a platform or a free-mail domain) and repairs what it can:
+    whitespace, a broken scheme, credentials. A value whose own host is the
+    one it found is sent as given through ``ensure_url_scheme``, path and
+    port kept (``nomofoundation.wixsite.com/nomo``); one that needed repair
+    is sent as the repaired host (``https://michigan bulls.com`` ->
+    ``https://michiganbulls.com``). A bad top-level domain is left to
+    Firecrawl, whose 400 the client records as ``invalid_url`` at no cost.
     """
     value = url.strip() if isinstance(url, str) else ""
-    if not value or any(ch.isspace() for ch in value):
+    host = website_domain(value)
+    if not host:
         return None
-    lowered = value.lower()
-    if lowered.startswith(("http://", "https://")):
-        n = lowered.index("://") + 3
-        value = value[:n].lower() + value[n:]
-    elif _OTHER_SCHEME.match(lowered):
-        return None                       # ftp://, file://, ...
-    else:
-        value = f"https://{value}"
+    sent = ensure_url_scheme(value)
     try:
-        parts = urlsplit(value)
-        host = parts.hostname or ""
-        if parts.username is not None:    # credentials in a website field: mailto:info@x.org, user@host
-            return None
+        parts = urlsplit(sent)
+        given = (parts.hostname or "").lower()
+        as_given = parts.username is None and (given == host or given.endswith("." + host))
     except ValueError:
-        return None
-    labels = host.split(".")
-    if len(labels) < 2 or not all(_HOST_LABEL.match(label) for label in labels):
-        return None
-    if not (labels[-1].isalpha() and len(labels[-1]) >= 2):
-        return None
-    return value
+        as_given = False
+    return sent if as_given else f"https://{host}"
 
 
 @dataclass

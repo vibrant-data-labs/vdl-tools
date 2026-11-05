@@ -12,7 +12,8 @@ import vdl_tools.scrape_enrich.scraper.website_processor as wp
 from vdl_tools.scrape_enrich.scraper.async_scraper import AsyncScraper
 from vdl_tools.scrape_enrich.scraper.text_quality import looks_like_bot_wall
 # Re-exported: callers import the page key from here.
-from vdl_tools.scrape_enrich.url_keys import extract_website_name  # noqa: F401
+# ensure_url_scheme lives in url_keys (it outlives this module); re-exported for its importers.
+from vdl_tools.scrape_enrich.url_keys import ensure_url_scheme, extract_website_name  # noqa: F401
 from vdl_tools.shared_tools.web_summarization.make_page_text import make_group_text
 from vdl_tools.shared_tools.tools.logger import logger
 from vdl_tools.shared_tools.database_cache.database_models.web_scraping import WebPagesScraped, WebPagesParsed
@@ -74,24 +75,6 @@ def __clean_website_path(value: str) -> str:
     except Exception as ex:
         logger.warning(f'Error cleaning website path: {value}')
         return None
-
-
-def ensure_url_scheme(url: str) -> str:
-    """Ensure URL has a scheme (https:// by default).
-
-    This is necessary for urljoin to work correctly when constructing
-    internal page URLs from relative paths.
-    """
-    if not url:
-        return url
-    # Scheme check must be case-insensitive: 990-filing websites arrive as
-    # HTTPS://WWW.EXAMPLE.ORG and a case-sensitive check double-prefixes
-    # them (https://HTTPS://...). Normalize the scheme to lowercase too.
-    lowered = url.lower()
-    if not lowered.startswith(('http://', 'https://')):
-        return f'https://{url}'
-    scheme_len = lowered.index('://') + 3
-    return url[:scheme_len].lower() + url[scheme_len:]
 
 
 def _parsed_row_is_retryable(num_errors, max_errors):

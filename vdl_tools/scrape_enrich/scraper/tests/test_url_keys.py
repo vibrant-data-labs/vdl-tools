@@ -1,4 +1,14 @@
-from vdl_tools.scrape_enrich.url_keys import extract_website_name, website_domain
+from vdl_tools.scrape_enrich.url_keys import ensure_url_scheme, extract_website_name, website_domain
+
+
+def test_fetch_form_adds_and_lowercases_the_scheme_and_nothing_else():
+    assert ensure_url_scheme("WWW.Example.org/about") == "https://WWW.Example.org/about"
+    assert ensure_url_scheme("HTTPS://WWW.EXAMPLE.ORG") == "https://WWW.EXAMPLE.ORG"   # 990 filings; no double prefix
+    assert ensure_url_scheme("http://example.org:8080/x?q=1") == "http://example.org:8080/x?q=1"
+    assert ensure_url_scheme("") == ""
+    # still importable from its old home until the in-house scraper is retired
+    from vdl_tools.scrape_enrich.scraper.scrape_websites import ensure_url_scheme as old_import
+    assert old_import is ensure_url_scheme
 
 
 def test_page_key_is_unchanged():

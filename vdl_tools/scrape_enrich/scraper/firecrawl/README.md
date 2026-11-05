@@ -49,7 +49,7 @@ lookup and joins back to where it came from:
 | field | what it is | set by |
 |---|---|---|
 | `requested_url` | the caller's string byte for byte: the join key back to the source frame's website column | the caller's argument |
-| `url` | what was sent: scheme added and lowercased, whitespace stripped | `normalize_url` |
+| `url` | what was sent: `ensure_url_scheme` of the value when its host is the one `website_domain` finds (path and port kept), else the repaired host (`https://michigan bulls.com` → `https://michiganbulls.com`, `info@x.org` → `https://x.org`) | `normalize_url`, from the two `url_keys` helpers |
 | `final_url`, `final_host` | where Firecrawl was served from after redirects | the vendor |
 | `home_url` | the org's requested home URL, verbatim: the parent of a subpage and the cache's `cleaned_home_key`; never `final_url`, since the cache key is untouched | `scrape(..., home_url=)` |
 | `page_type` | `"index"` for the home page, `"page"` for a subpage; plain strings, D6 picks the stored literal | `scrape(..., page_type=)` |
@@ -67,7 +67,7 @@ What a page's `failure_reason` means, and who pays for it:
 | `dead` | a `SCRAPE_*` code other than `SCRAPE_TIMEOUT` (DNS, SSL, every engine failed, unsupported file), at API status 500 or 200 | yes |
 | `http_error` | the target answered, but not 2xx (`metadata.statusCode`); the markdown and the credit are kept | yes |
 | `blocked` | the target answered 401, 403 or 429 | yes |
-| `invalid_url` | rejected before any request (blank, whitespace, no host, no top-level domain, credentials) or by Firecrawl with a 400 | yes |
+| `invalid_url` | names no site, so never sent: blank, a placeholder, no dotted host, a platform or free-mail domain, as `url_keys.website_domain` judges it; or a 400 from Firecrawl for a bad top-level domain | yes |
 | `vendor_error` | a 408 scrape timeout, a 429 or 5xx that outlived four attempts, a transport error, an answer with no status code | no |
 
 Only target failures increment `num_errors`. The climate caller runs with `max_errors=1`, so
