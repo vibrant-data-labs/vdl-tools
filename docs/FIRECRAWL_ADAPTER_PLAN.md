@@ -1,7 +1,9 @@
 # Firecrawl scraping adapter: implementation plan
 
-Status: draft v2 for team discussion, 2026-10-22. Decision pending per the VDL rule that new
-tools get discussed before adoption.
+Status: adopted. Q1 was decided on 2026-11-04 (Zein): adopt Firecrawl behind the cache, on the
+D2, D3 and D9 evidence (Linear VIB-55). Q2 was decided the same day: full page everywhere
+(VIB-62). This is draft v2 of 2026-10-22, revised as decisions landed; the Linear spec is the
+canonical version.
 
 v2 incorporates the data-engineer and data-scientist reviews of v1 (same day). The main
 changes: vendor-error retry semantics, a working per-org token cap, text validation before
@@ -110,7 +112,7 @@ scrape_websites_firecrawl(urls, run_config)
   |     FirecrawlClient.scrape(home)        formats [markdown, links], onlyMainContent=false
   |     status gate on metadata.statusCode  non-2xx: store row, failure_reason, no subpages
   |     same_site_paths(links, final_host)  -> filter_links (deterministic, capped)
-  |     FirecrawlClient.scrape(subpage) x N onlyMainContent=true (pending Phase 5 result)
+  |     FirecrawlClient.scrape(subpage) x N onlyMainContent=false (Q2: full page everywhere)
   |     gate markers on plain text          parked / wall / blocked-by-extension
   |     clean_markdown -> parsed_html       versioned
   |     dedupe lines across pages, cap at 8k tokens, make_group_text -> combined_text
@@ -310,7 +312,7 @@ the cause of today's empty extractions on div-only site builders; and the vendor
 comes from the rendered DOM, so it sees content our fallback never will. Raw HTML is also 164
 to 190 kB per page, about 75 GB across the cache, for nothing we would read.
 
-**Full page on the home page, main content only on subpages, pending Q2.** The simplest
+**Full page everywhere (Q2, decided 2026-11-04).** The simplest
 option, `onlyMainContent=true` everywhere, strips the navigation from the links array as well
 as from the text: on a Wix probe it returned 0 internal links against 8, and link recall
 against our own extraction fell from 0.93 to 0.31. Our subpage rules live on exactly those
@@ -320,7 +322,12 @@ subpage. Subpages do not need the links array, so main content there is pure gai
 holds. Phase 1's 60-URL main-content-only run showed about 26% less prose and 3 pages
 flipping to thin, which is why D9 measures sentence recall of the in-house text inside the
 main-content subpages before Q2 decides, rather than trusting the usable rate, which cannot
-tell a 36k-character text from a 10k one.
+tell a 36k-character text from a 10k one. D9 settled it on 199 orgs and 977 subpages fetched
+both ways the same day. Main content kept 0.961 of full page's sentence recall but turned
+2.5% of pages thin against a 2% bar. It sometimes dropped a whole page: a staff-bio page went
+from 29,814 characters to 10. It saved only about 2% of tokens after the cap, because the
+cleaner and dedupe already remove repeated navigation. Every request therefore sends
+`onlyMainContent: false`, explicitly, since Firecrawl's default is `true`.
 
 **Clean in our code, not with vendor options.** Vendor-side filtering is coarse and depends
 on each site's structure, and it would make the stored text depend on vendor behaviour we
@@ -524,10 +531,9 @@ Estimates are working days for one engineer who knows the pipeline.
   cosine, taxonomy node Jaccard per level, relevance flips, and an LLM judge plus 50 human
   spot checks, oversampling the 173 rescues and the largest length ratios. Record the
   `CLEANER_VERSION` beside the result, so a later rule change is an explicit choice to re-run
-  this test or to lean on the Phase 5 gate. One limit to state up front: the phase 2
-  artifacts hold full-page subpages, so if Phase 5 picks main-content-only subpages the
-  production text differs from what was measured here; the Phase 5 gate re-measures the same
-  LLM outcomes on the production path for that reason. This is the number the team needs to
+  this test or to lean on the Phase 5 gate. The phase 2 artifacts hold full-page subpages,
+  which Q2 kept as the production setting, so the text measured here is the text production
+  fetches; the Phase 5 gate still re-measures the same LLM outcomes on the production path. This is the number the team needs to
   decide, not the fetch rate.
 
 ### Phase 1: Firecrawl client (2.5 days)
@@ -581,8 +587,8 @@ that two ids on one site and one id on two historical sites both resolve.
 ### Phase 5: validation (3 days plus run time; about 10k credits)
 
 - About 200 orgs with main-content-only subpages (roughly 700 to 1,000 credits), scored on
-  sentence recall and duplicated-line share against the full-page run. Decide the subpage
-  setting on that.
+  sentence recall and duplicated-line share against the full-page run. Done as D9; Q2 decided
+  full page on it (2026-11-04).
 - The 2,000-org phase 2 sample through the production path. Hard gate before any refresh:
   usable at or above 85%, credits per org near 4.7, no 429s at the configured concurrency,
   and the paired LLM measures of Phase 0 within the noise floor.
@@ -696,8 +702,8 @@ Storage: section 4. Compute: no browser or extractor runs locally; orchestration
 
 - The LLM outputs may shift even when the fetch is better. Phase 0's paired test decides
   whether the shift is noise or a change in what the tracker says about an org.
-- The subpage `onlyMainContent` setting is unmeasured; Phase 5 decides it on recall, not on
-  the usable rate.
+- The subpage `onlyMainContent` setting was measured in D9 and decided full page (Q2,
+  2026-11-04).
 - First-refresh strategy (read-through versus full re-scrape with a taxonomy refresh) is a
   team decision with a comparability cost either way.
 - Page-selection churn: news and blog picks change between refreshes regardless of vendor;
