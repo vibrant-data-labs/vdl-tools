@@ -69,6 +69,15 @@ def assignment_explanations(
             if not path or not (evidence or reason):
                 continue
             entry = {"path": path, "evidence": evidence, "reason": reason, "source": source}
+            # Activity/Jev rows carry structured supporting evidence. Preserve it
+            # in the existing JSON payload so serving does not sever those links.
+            # Historical explanation payloads retain exactly their old shape.
+            for field in ("supporting_activity_ids", "activity_evidence"):
+                if isinstance(row.get(field), list):
+                    entry[field] = row[field]
+            for field in ("taxonomy_sha256", "policy_sha256"):
+                if value := _text(row.get(field)):
+                    entry[field] = value
             encoded = json.dumps(entry, ensure_ascii=False, sort_keys=True)
             key = (str(row[id_column]), tuple(path[:serving_depth]))
             by_path[key][encoded] = entry
