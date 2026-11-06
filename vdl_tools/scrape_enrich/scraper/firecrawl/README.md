@@ -11,12 +11,91 @@ issues are Linear project P-VIB-2. The vendor benchmark that chose Firecrawl sta
 |---|---|---|
 | `markdown_clean.py` | the text rules: browser chrome out, markers once per page, the cleaner, per-org dedupe and the 8k-token cap; `page_text` per page, `org_text` per org; `CLEANER_VERSION` | D2, wired in by D5 |
 | `site_links.py` | `same_site_paths`: links on the host the page was served from, ahead of `filter_links` | D2, used by D7 |
-| `validation/` | one-off measurements over the pilot artifacts that the adoption decision rests on | D2, D3 |
-| `tests/` | unit, golden and determinism tests; `fixtures/markdown/` holds real pilot pages | |
+| `client.py` | `FirecrawlClient`: `POST /v2/scrape` under the account limits, with retries, the target-versus-vendor failure split, the 402/401 stop, the credit ceiling, `dry_run` and the balance before and after a run | D4, used by D7 |
+| `validation/` | one-off measurements over the pilot artifacts that the adoption decision rests on | D2, D3, D9 |
+| `tests/` | unit, golden and determinism tests; `fixtures/markdown/` holds real pilot pages; `test_client.py` runs the client on an httpx mock transport | |
 
-Still to come here: the client (D4, `client.py`) and the per-org pipeline
-`scrape_websites_firecrawl` (D7, `pipeline.py`). The ORM models for the new tables (D6) go
-with the other models in `shared_tools/database_cache/database_models/`.
+Still to come here: the per-org pipeline `scrape_websites_firecrawl` (D7, `pipeline.py`).
+The ORM models for the new tables (D6) go with the other models in
+`shared_tools/database_cache/database_models/`.
+
+## The client (D4)
+
+One `FirecrawlClient` per process ([VIB-56](https://linear.app/vibrant-data-labs/issue/VIB-56)).
+It owns the account-wide limits, since Firecrawl counts browsers and requests per account:
+25 in flight and 500 per minute on the Standard plan, read from `[scraping_vendors]`
+(`firecrawl_api_key`, optional `firecrawl_concurrency` and `firecrawl_rpm`). The key is
+never logged, printed or part of `repr`.
+
+```python
+from vdl_tools.scrape_enrich.scraper.firecrawl.client import FirecrawlClient, RunStopped
+
+async with FirecrawlClient.from_config(credit_ceiling=10_000) as client:   # reads the balance
+    result = await client.scrape("https://example.org")     # ScrapeResult; raises RunStopped on 402/401/ceiling
+    result.ok, result.failure_reason, result.counts_as_error
+    result.status_code, result.final_url, result.final_host, result.markdown, result.links
+client.stats            # balance before and after, credits used, retries, failures, stop reason
+```
+
+Every page is sent the same profile (Q2): `formats [markdown, links]`, `onlyMainContent:
+false` (Firecrawl's default is `true`, which also drops the navigation links the subpage
+rules read), `skipTlsVerification: true` (the vendor's default flipped to verifying
+certificates after the pilot, which turned 56 of 3,000 home pages into `SCRAPE_SSL_ERROR` in
+the 2026-11-06 functional test; the pilot measured with it skipped), `maxAge 0`, `proxy auto`,
+a 60 s page timeout. `payload_overrides` adds or replaces fields for one-off runs;
+`client.request_profile` is what each page was sent, for `scrape_runs.request_profile`.
+
+Lineage the client carries but does not use, so a result is a page row without a side
+lookup and joins back to where it came from:
+
+| field | what it is | set by |
+|---|---|---|
+| `requested_url` | the caller's string byte for byte: the join key back to the source frame's website column | the caller's argument |
+| `url` | what was sent: `ensure_url_scheme` of the value when its host is the one `website_domain` finds (path and port kept), else the repaired host (`https://michigan bulls.com` → `https://michiganbulls.com`, `info@x.org` → `https://x.org`) | `normalize_url`, from the two `url_keys` helpers |
+| `final_url`, `final_host` | where Firecrawl was served from after redirects | the vendor |
+| `home_url` | the org's requested home URL, verbatim: the parent of a subpage and the cache's `cleaned_home_key`; never `final_url`, since the cache key is untouched | `scrape(..., home_url=)` |
+| `page_type` | `"index"` for the home page, `"page"` for a subpage; plain strings, D6 picks the stored literal | `scrape(..., page_type=)` |
+| `run_id` | the client's run, also on `client.stats` | `FirecrawlClient(run_id=)` |
+
+The client cannot infer the last three: subpage URLs are built on the home page's
+`final_url`, another host for 11% of orgs, and home and subpages get the same request.
+Lookup by org id (a Crunchbase uuid, an EIN, an NZI id) is D16's `org_site_keys`, not this
+module.
+
+What a page's `failure_reason` means, and who pays for it (credits as the 2026-11-06
+functional test measured them, where `credits_used` matched the balance change exactly):
+
+| `failure_reason` | when | counts as an error | bills a credit |
+|---|---|---|---|
+| `dead` | a `SCRAPE_*` code other than `SCRAPE_TIMEOUT` (DNS, SSL, every engine failed, unsupported file), at API status 500 or 200 | yes | no |
+| `http_error` | the target answered, but not 2xx (`metadata.statusCode`); the markdown is kept | yes | yes |
+| `blocked` | the target answered 401, 403 or 429 | yes | yes |
+| `invalid_url` | names no site, so never sent: blank, a placeholder, no dotted host, a platform or free-mail domain, as `url_keys.website_domain` judges it; or a 400 from Firecrawl for a bad top-level domain | yes | no |
+| `vendor_error` | a 408 scrape timeout, a 429 or 5xx that outlived four attempts, a transport error, an answer with no status code | no | no |
+
+Only target failures increment `num_errors`. The climate caller runs with `max_errors=1`, so
+a vendor-side 408 recorded as an error would skip the org for good and send it to the paid
+Coresignal fallback; the pilot saw 13 timeouts per 1,000 home pages. A 402 (out of credits)
+or 401 (bad key) raises `RunStopped` for that page and every page not yet sent; pages
+already in flight finish and are kept, and a page waiting to retry sends nothing more. The
+credit ceiling stops the run the same way, and so does a 400 whose validation details name
+anything but `url` (another field, or the body itself: an unrecognized key): that is our
+request body (a bad `payload_overrides`), identical for every page, and must not become a
+target failure on each of them. 429s and 5xx retry with `Retry-After` when the header is present, the "retry after 17s" in
+Firecrawl's 429 body when it is not, else exponential backoff; a page holds its browser slot
+through its retries.
+
+Dry run, against today's `web_pages_scraped` and spending nothing (the balance is one
+`GET /team/credit-usage`):
+
+```
+python -m vdl_tools.scrape_enrich.scraper.firecrawl.client --dry-run \
+    --urls .cache/vendor_pilot/sample_urls.parquet --limit 20 --credits-per-miss 4.7
+```
+
+It prints the cached, to-fetch and invalid counts, the estimated credits (1 per miss for a
+home page alone, 4.7 per org with its subpages in the pilot), the ceiling check and the
+balance. D7 replaces the cache lookup with the v2 tables, which also know a row's age.
 
 Tests run by path:
 
