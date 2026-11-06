@@ -77,11 +77,11 @@ Only target failures increment `num_errors`. The climate caller runs with `max_e
 a vendor-side 408 recorded as an error would skip the org for good and send it to the paid
 Coresignal fallback; the pilot saw 13 timeouts per 1,000 home pages. A 402 (out of credits)
 or 401 (bad key) raises `RunStopped` for that page and every page not yet sent; pages
-already in flight finish and are kept. The credit ceiling stops the run the same way, and
-so does a 400 whose validation details name a field other than `url`: that is our request
-body (a bad `payload_overrides`), identical for every page, and must not become a target
-failure on each of them. 429s
-and 5xx retry with `Retry-After` when the header is present, the "retry after 17s" in
+already in flight finish and are kept, and a page waiting to retry sends nothing more. The
+credit ceiling stops the run the same way, and so does a 400 whose validation details name
+anything but `url` (another field, or the body itself: an unrecognized key): that is our
+request body (a bad `payload_overrides`), identical for every page, and must not become a
+target failure on each of them. 429s and 5xx retry with `Retry-After` when the header is present, the "retry after 17s" in
 Firecrawl's 429 body when it is not, else exponential backoff; a page holds its browser slot
 through its retries.
 

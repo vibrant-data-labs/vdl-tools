@@ -269,6 +269,29 @@ def test_garbled_metadata_never_raises_out_of_scrape():
     assert a.status_code is None and a.credits_used == 0 and a.concurrency_queue_ms is None
 
 
+def test_text_fields_are_strings_whatever_the_vendor_sends():
+    # language came back as a list on 13 of 3,000 pages in the D4 functional test; a list in a str
+    # field breaks to_parquet and a String column. Odd types elsewhere must not raise either.
+    vendor = (FakeFirecrawl()
+              .script("https://a.org", page(extra_meta={"language": ["en", "English"], "url": {"href": "x"},
+                                                        "sourceURL": 7, "concurrencyLimited": "no"}))
+              .script("https://b.org", httpx.Response(200, json={"success": True, "data": {
+                  "markdown": 5, "links": "https://b.org/about", "metadata": {"statusCode": 200}}}))
+              .script("https://c.org", httpx.Response(500, json={"success": False, "code": 500, "error": "x"})))
+    client, _ = make_client(vendor, max_attempts=1)
+
+    async def go():
+        async with client:
+            return await client.scrape_many(["https://a.org", "https://b.org", "https://c.org"])
+
+    outcome = run(go())
+    a, b, c = outcome["https://a.org"], outcome["https://b.org"], outcome["https://c.org"]
+    assert a.ok and a.language == "en" and a.metadata["language"] == ["en", "English"]
+    assert a.final_url is None and a.final_host == "" and a.source_url is None and a.concurrency_limited is None
+    assert b.ok and b.markdown == "" and b.links == []
+    assert c.failure_reason == VENDOR_ERROR and c.api_code is None
+
+
 # ---------------------------------------------------------------------------
 # Terminal codes, timeouts and invalid URLs
 # ---------------------------------------------------------------------------
@@ -339,6 +362,25 @@ def test_api_400_about_our_request_body_stops_the_run_instead_of_blaming_pages()
     assert len(vendor.requests) == 1
     assert all(isinstance(v, RunStopped) and v.kind == "bad_request" for v in outcome.values())
     assert "formats.0" in client.stop_reason and client.stats.failures == {}
+
+
+def test_api_400_about_the_body_itself_stops_the_run_too():
+    # A strict schema reports an unrecognized key (a typo in payload_overrides) at the empty path.
+    body = {"success": False, "error": "Bad Request",
+            "details": [{"code": "unrecognized_keys", "keys": ["onlyMainContnet"], "path": [],
+                         "message": "Unrecognized key in body"}]}
+    vendor = FakeFirecrawl().script(HOME, httpx.Response(400, json=body))
+    client, _ = make_client(vendor, payload_overrides={"onlyMainContnet": False})
+
+    async def go():
+        async with client:
+            with pytest.raises(RunStopped) as info:
+                await client.scrape(HOME)
+            return info.value
+
+    stop = run(go())
+    assert stop.kind == "bad_request" and "body: Unrecognized key" in stop.reason
+    assert client.stats.failures == {}
 
 
 @pytest.mark.parametrize("bad", ["", "   ", None, "https://", "localhost", "na", "not a url",
@@ -424,7 +466,13 @@ def test_exhausted_retries_are_a_vendor_error_not_an_error():
     assert result.failure_reason == VENDOR_ERROR and not result.counts_as_error
     assert result.attempts == 4 and len(vendor.requests) == 4 and sleep.delays == [1.0, 1.0, 1.0]
     assert result.api_status == 429 and "gave up after 4 attempts" in result.error
-    assert client.stats.retries == {"429": 4} and client.stats.failures == {VENDOR_ERROR: 1}
+    assert client.stats.retries == {"429": 3} and client.stats.failures == {VENDOR_ERROR: 1}   # 4 attempts, 3 retries
+
+
+def test_an_undecodable_answer_is_retried_like_a_transport_error():
+    vendor = FakeFirecrawl().script(HOME, httpx.DecodingError("bad gzip"), page())
+    result, client, _ = run(scrape_one(vendor))
+    assert result.ok and result.attempts == 2 and client.stats.retries == {"transport": 1}
 
 
 def test_exhausted_transport_errors_are_a_vendor_error():
@@ -494,6 +542,31 @@ def test_401_stops_as_unauthorized():
     assert stop.kind == "unauthorized" and client.stats.stop_reason == stop.reason
 
 
+def test_a_page_waiting_to_retry_sends_nothing_after_a_stop():
+    vendor = (FakeFirecrawl()
+              .script("https://a.org", api_error(429, error="Rate limit exceeded", headers={"Retry-After": "5"}), page())
+              .script("https://b.org", api_error(402, error="Payment Required")))
+    holder = {}
+
+    async def backoff_until_stopped(_seconds):   # a's 429 backoff outlasts b's 402
+        for _ in range(1000):
+            if holder["client"].stop_reason:
+                return
+            await asyncio.sleep(0)
+
+    client = FirecrawlClient(KEY, transport=httpx.MockTransport(vendor.handler), sleep=backoff_until_stopped,
+                             concurrency=2, rpm=None)
+    holder["client"] = client
+
+    async def go():
+        async with client:
+            return await client.scrape_many(["https://a.org", "https://b.org"])
+
+    outcome = run(go())
+    assert [r["url"] for r in vendor.requests].count("https://a.org") == 1   # no retry after the stop
+    assert isinstance(outcome["https://a.org"], RunStopped) and isinstance(outcome["https://b.org"], RunStopped)
+
+
 def test_credit_ceiling_stops_before_the_next_request():
     vendor = FakeFirecrawl()
     client, _ = make_client(vendor, credit_ceiling=2)
@@ -554,6 +627,22 @@ def test_scrape_many_fetches_each_distinct_url_once():
     outcome = run(go())
     assert list(outcome) == ["https://a.org/about", "https://a.org/team"]   # first-seen order
     assert len(vendor.requests) == 2 and client.credits_used == 2 and client.stats.n_pages == 2
+
+
+def test_scrape_many_fetches_one_page_once_whatever_its_spelling_like_the_dry_run():
+    vendor = FakeFirecrawl()
+    client, _ = make_client(vendor)
+    urls = ["a.org/about", "https://a.org/about/", "HTTPS://a.org/about"]
+
+    async def go():
+        async with client:
+            report = await client.dry_run(urls)
+            return report, await client.scrape_many(urls)
+
+    report, outcome = run(go())
+    assert report.n_misses == 1 and len(vendor.requests) == 1 and client.credits_used == 1
+    assert list(outcome) == urls and all(r.ok for r in outcome.values())
+    assert [r.requested_url for r in outcome.values()] == urls   # each input keeps its own join key
 
 
 def test_semaphore_bounds_requests_in_flight():
@@ -680,7 +769,7 @@ def test_scrape_outside_the_context_manager_is_an_error_not_a_leak():
     client, _ = make_client(vendor)
     with pytest.raises(RuntimeError, match="async with"):
         run(client.scrape(HOME))
-    assert vendor.requests == [] and client._http is None
+    assert vendor.requests == [] and client._http is None and client.stats.n_requests == 0
 
 
 def test_dry_run_accepts_a_predicate_and_flags_ceiling_and_balance_shortfalls():
@@ -727,6 +816,23 @@ def test_balance_is_read_before_and_after_a_run_before_the_client_closes():
     assert client.stats.started_at and client.stats.ended_at and client.stats.ended_at >= client.stats.started_at
     assert FirecrawlClient.remaining_credits(client.stats.balance_after) == 499
     assert FirecrawlClient.remaining_credits({"error": "x"}) is None
+
+
+def test_reentering_the_client_keeps_the_runs_first_balance():
+    # Stats cover the client's lifetime, so the balance delta must cover every page it counted.
+    vendor = FakeFirecrawl(remaining=500)
+    client, _ = make_client(vendor)
+
+    async def session(remaining_after):
+        async with client:
+            await client.scrape(HOME)
+            vendor.remaining = remaining_after
+
+    run(session(499))
+    started = client.stats.started_at
+    run(session(498))
+    assert client.stats.balance_before["remainingCredits"] == 500 and client.stats.started_at == started
+    assert client.stats.balance_after["remainingCredits"] == 498 and client.credits_used == 2
 
 
 def test_stats_summarize_the_run():
