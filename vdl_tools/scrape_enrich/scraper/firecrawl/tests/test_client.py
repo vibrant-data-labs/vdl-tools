@@ -144,6 +144,7 @@ def test_request_profile_is_full_page_markdown_and_links_on_every_page():
     for sent in vendor.requests:
         assert sent["formats"] == ["markdown", "links"]
         assert "onlyMainContent" in sent and sent["onlyMainContent"] is False   # Firecrawl's default is True
+        assert sent["skipTlsVerification"] is True   # the default flipped to verify after the pilot
         assert sent["maxAge"] == 0 and sent["proxy"] == "auto" and sent["timeout"] == 60000
         assert "rawHtml" not in sent["formats"]
     assert vendor.requests[1]["url"] == HOME + "/about"
@@ -833,5 +834,6 @@ def test_from_config_without_a_key_names_the_setting_not_a_value(tmp_path: Path,
 
 def test_module_constants_pin_the_decisions():
     assert fc.REQUEST_PROFILE["onlyMainContent"] is False and fc.REQUEST_PROFILE["formats"] == ["markdown", "links"]
+    assert fc.REQUEST_PROFILE["skipTlsVerification"] is True
     assert fc.DEFAULT_CONCURRENCY == 25 and fc.DEFAULT_RPM == 500
     assert fc.TARGET_FAILURES == {DEAD, HTTP_ERROR, BLOCKED, INVALID_URL} and VENDOR_ERROR not in fc.TARGET_FAILURES

@@ -39,9 +39,11 @@ client.stats            # balance before and after, credits used, retries, failu
 
 Every page is sent the same profile (Q2): `formats [markdown, links]`, `onlyMainContent:
 false` (Firecrawl's default is `true`, which also drops the navigation links the subpage
-rules read), `maxAge 0`, `proxy auto`, a 60 s page timeout. `payload_overrides` adds or
-replaces fields for one-off runs; `client.request_profile` is what each page was sent, for
-`scrape_runs.request_profile`.
+rules read), `skipTlsVerification: true` (the vendor's default flipped to verifying
+certificates after the pilot, which turned 56 of 3,000 home pages into `SCRAPE_SSL_ERROR` in
+the 2026-11-06 functional test; the pilot measured with it skipped), `maxAge 0`, `proxy auto`,
+a 60 s page timeout. `payload_overrides` adds or replaces fields for one-off runs;
+`client.request_profile` is what each page was sent, for `scrape_runs.request_profile`.
 
 Lineage the client carries but does not use, so a result is a page row without a side
 lookup and joins back to where it came from:
@@ -60,15 +62,16 @@ The client cannot infer the last three: subpage URLs are built on the home page'
 Lookup by org id (a Crunchbase uuid, an EIN, an NZI id) is D16's `org_site_keys`, not this
 module.
 
-What a page's `failure_reason` means, and who pays for it:
+What a page's `failure_reason` means, and who pays for it (credits as the 2026-11-06
+functional test measured them, where `credits_used` matched the balance change exactly):
 
-| `failure_reason` | when | counts as an error |
-|---|---|---|
-| `dead` | a `SCRAPE_*` code other than `SCRAPE_TIMEOUT` (DNS, SSL, every engine failed, unsupported file), at API status 500 or 200 | yes |
-| `http_error` | the target answered, but not 2xx (`metadata.statusCode`); the markdown and the credit are kept | yes |
-| `blocked` | the target answered 401, 403 or 429 | yes |
-| `invalid_url` | names no site, so never sent: blank, a placeholder, no dotted host, a platform or free-mail domain, as `url_keys.website_domain` judges it; or a 400 from Firecrawl for a bad top-level domain | yes |
-| `vendor_error` | a 408 scrape timeout, a 429 or 5xx that outlived four attempts, a transport error, an answer with no status code | no |
+| `failure_reason` | when | counts as an error | bills a credit |
+|---|---|---|---|
+| `dead` | a `SCRAPE_*` code other than `SCRAPE_TIMEOUT` (DNS, SSL, every engine failed, unsupported file), at API status 500 or 200 | yes | no |
+| `http_error` | the target answered, but not 2xx (`metadata.statusCode`); the markdown is kept | yes | yes |
+| `blocked` | the target answered 401, 403 or 429 | yes | yes |
+| `invalid_url` | names no site, so never sent: blank, a placeholder, no dotted host, a platform or free-mail domain, as `url_keys.website_domain` judges it; or a 400 from Firecrawl for a bad top-level domain | yes | no |
+| `vendor_error` | a 408 scrape timeout, a 429 or 5xx that outlived four attempts, a transport error, an answer with no status code | no | no |
 
 Only target failures increment `num_errors`. The climate caller runs with `max_errors=1`, so
 a vendor-side 408 recorded as an error would skip the org for good and send it to the paid

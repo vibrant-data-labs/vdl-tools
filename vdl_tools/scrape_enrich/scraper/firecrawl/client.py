@@ -39,7 +39,9 @@ every page, and must not be written as a target failure.
 Request profile (Q2, decided 2026-11-04): ``formats [markdown, links]`` and
 ``onlyMainContent: false`` on every page, home and subpages alike.
 Firecrawl's default is ``true``, which also drops the navigation links the
-subpage rules read, so it is sent explicitly and asserted in the tests.
+subpage rules read, so it is sent explicitly and asserted in the tests. So
+is ``skipTlsVerification: true``: the vendor's default changed to verify
+the target's certificate after the pilot, which the pilot had skipped.
 
 Lineage the client carries but does not use: ``run_id`` (set once per
 client) and, per call, the org's requested ``home_url`` and the page's
@@ -89,12 +91,20 @@ REQUEST_TIMEOUT_MS = 60_000     # Firecrawl's per-page cap; its queue time count
 HTTP_TIMEOUT_SECONDS = 150.0    # our socket timeout: the vendor's 60 s plus queueing
 MAX_ATTEMPTS = 4                # API-level attempts per page (429, 5xx, transport)
 MAX_RETRY_DELAY = 120.0
-CREDITS_PER_PAGE = 1.0          # one credit per fetched page; failures bill nothing
+CREDITS_PER_PAGE = 1.0          # one credit per page the site answered, 2xx or not (http_error and
+                                # blocked bill it too); dead, vendor_error and invalid_url bill nothing
 
-# What every page is asked for. ``onlyMainContent`` must stay False (Q2).
+# What every page is asked for. ``onlyMainContent`` must stay False (Q2), and
+# ``skipTlsVerification`` True: Firecrawl's default flipped to verifying the
+# target site's certificate between the pilot (October 2026) and the D4
+# functional test (2026-11-06), which turned 56 of 3,000 home pages into
+# SCRAPE_SSL_ERROR; the pilot measured with verification skipped, so it is
+# pinned explicitly (approved by Zein, 2026-11-06). Our own call to the API
+# stays verified; this only concerns the vendor's browser and the target.
 REQUEST_PROFILE = {
     "formats": ["markdown", "links"],
     "onlyMainContent": False,
+    "skipTlsVerification": True,
     "maxAge": 0,            # never the vendor's cache
     "proxy": "auto",        # retries a blocked fetch through the stealth pool
     "timeout": REQUEST_TIMEOUT_MS,

@@ -107,7 +107,8 @@ scrape_websites_firecrawl(urls, run_config)
   |     skip when parsed row is ok and fetched_at within max_age_days
   |
   |-- per org, bounded by one account-wide semaphore (25 Standard / 50 Growth) and rpm:
-  |     FirecrawlClient.scrape(home)        formats [markdown, links], onlyMainContent=false
+  |     FirecrawlClient.scrape(home)        formats [markdown, links], onlyMainContent=false,
+  |                                         skipTlsVerification=true (the vendor default flipped after the pilot)
   |     status gate on metadata.statusCode  non-2xx: store row, failure_reason, no subpages
   |     same_site_paths(links, final_host)  -> filter_links (deterministic, capped)
   |     FirecrawlClient.scrape(subpage) x N onlyMainContent=true (pending Phase 5 result)
