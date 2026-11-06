@@ -111,7 +111,7 @@ scrape_websites_firecrawl(urls, run_config)
   |                                         skipTlsVerification=true (the vendor default flipped after the pilot)
   |     status gate on metadata.statusCode  non-2xx: store row, failure_reason, no subpages
   |     same_site_paths(links, final_host)  -> filter_links (deterministic, capped)
-  |     FirecrawlClient.scrape(subpage) x N onlyMainContent=true (pending Phase 5 result)
+  |     FirecrawlClient.scrape(subpage) x N same profile: onlyMainContent=false (Q2, decided 2026-11-04)
   |     gate markers on plain text          parked / wall / blocked-by-extension
   |     clean_markdown -> parsed_html       versioned
   |     dedupe lines across pages, cap at 8k tokens, make_group_text -> combined_text

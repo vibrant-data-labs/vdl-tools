@@ -30,11 +30,13 @@ it. The pilot saw 13 timeouts per 1,000 home pages.
 
 A 402 (out of credits) or 401 (bad key) from the API stops the run:
 ``scrape`` raises ``RunStopped`` for that page and for every page not yet
-sent; pages already in flight finish and are kept. Reaching the credit
-ceiling stops the run the same way, after the in-flight pages land. So
-does a 400 whose validation details point at a field other than ``url``:
-that is our request body (a bad ``payload_overrides``), the same for
-every page, and must not be written as a target failure.
+sent; pages already in flight finish and are kept, and a page waiting to
+retry sends nothing more. Reaching the credit ceiling stops the run the
+same way, after the in-flight pages land. So does a 400 whose validation
+details point at anything but ``url`` (another field, or the body itself:
+an unrecognized key): that is our request body (a bad
+``payload_overrides``), the same for every page, and must not be written
+as a target failure.
 
 Request profile (Q2, decided 2026-11-04): ``formats [markdown, links]`` and
 ``onlyMainContent: false`` on every page, home and subpages alike.
@@ -72,7 +74,7 @@ import re
 import time
 from collections import Counter
 from collections.abc import Callable, Collection, Iterable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
@@ -175,14 +177,25 @@ def _as_float(value, default: float = 0.0) -> float:
         return default
 
 
+def _as_str(value) -> str | None:
+    """A vendor text field, None when absent, empty or not text; never raises.
+    A list gives its first string: ``metadata.language`` is sometimes
+    ``['en', 'English']`` (13 of 3,000 pages in the D4 functional test)."""
+    if isinstance(value, list):
+        value = next((v for v in value if isinstance(v, str) and v), None)
+    return value if isinstance(value, str) and value else None
+
+
 def _request_fault(body: dict | None) -> str | None:
-    """For a 400: the first validation detail about a field other than ``url``,
-    which means the request body is wrong, not the page. Firecrawl's 400 for a
-    bad URL carries no such detail (or one whose path is ``url``)."""
+    """For a 400: the first validation detail about anything but ``url``, which
+    means the request body is wrong, not the page: another field, or the body
+    itself (an empty path: an unrecognized key, a rule across fields).
+    Firecrawl's 400 for a bad URL carries no such detail (or one whose path is ``url``)."""
     for detail in (body or {}).get("details") or []:
         path = detail.get("path") if isinstance(detail, dict) else None
-        if isinstance(path, list) and path and str(path[0]) != "url":
-            return f"{'.'.join(str(p) for p in path)}: {detail.get('message') or detail.get('code') or 'invalid'}"
+        if isinstance(path, list) and (not path or str(path[0]) != "url"):
+            where = ".".join(str(p) for p in path) or "body"
+            return f"{where}: {detail.get('message') or detail.get('code') or 'invalid'}"
     return None
 
 
@@ -281,7 +294,7 @@ class RunStats:
     balance_before: dict | None = None
     balance_after: dict | None = None
     credits_used: float = 0.0
-    n_pages: int = 0                    # results returned to the caller
+    n_pages: int = 0                    # results produced (scrape_many inputs naming one page share one)
     n_ok: int = 0
     n_requests: int = 0                 # API calls sent, retries included
     retries: Counter = field(default_factory=Counter)    # by API status, "transport" for socket errors
@@ -364,7 +377,7 @@ def parse_response(url: str, response: httpx.Response, attempt: int = 1) -> Scra
         body = None
     if not isinstance(body, dict):
         body = None
-    code = (body or {}).get("code") or None
+    code = _as_str((body or {}).get("code"))
     data = (body or {}).get("data")
     data = data if isinstance(data, dict) else {}
     meta = data.get("metadata")
@@ -375,18 +388,21 @@ def parse_response(url: str, response: httpx.Response, attempt: int = 1) -> Scra
     result = ScrapeResult(url=url, api_status=status, api_code=code)
     result.metadata = {k: meta[k] for k in KEEP_METADATA if k in meta}
     result.status_code = _as_int(meta.get("statusCode"))
-    result.source_url = meta.get("sourceURL") or None
-    result.final_url = meta.get("url") or None
+    # Typed as the dataclass says, whatever the vendor sent; result.metadata keeps the raw values.
+    result.source_url = _as_str(meta.get("sourceURL"))
+    result.final_url = _as_str(meta.get("url"))
     result.final_host = normalize_host(result.final_url) if result.final_url else ""
     result.credits_used = _as_float(meta.get("creditsUsed"))
-    result.proxy_used = meta.get("proxyUsed")
-    result.content_type = meta.get("contentType")
-    result.language = meta.get("language")
-    result.scrape_id = meta.get("scrapeId")
-    result.concurrency_limited = meta.get("concurrencyLimited")
+    result.proxy_used = _as_str(meta.get("proxyUsed"))
+    result.content_type = _as_str(meta.get("contentType"))
+    result.language = _as_str(meta.get("language"))
+    result.scrape_id = _as_str(meta.get("scrapeId"))
+    limited = meta.get("concurrencyLimited")
+    result.concurrency_limited = limited if isinstance(limited, bool) else None
     result.concurrency_queue_ms = _as_int(meta.get("concurrencyQueueDurationMs"))
-    result.markdown = data.get("markdown") or ""
-    result.links = [x for x in (data.get("links") or []) if isinstance(x, str)]
+    result.markdown = _as_str(data.get("markdown")) or ""
+    links = data.get("links")
+    result.links = [x for x in links if isinstance(x, str)] if isinstance(links, list) else []
 
     if status in STOP_API_STATUSES:
         raise RunStopped(STOP_API_STATUSES[status],
@@ -557,8 +573,9 @@ class FirecrawlClient:
     async def __aenter__(self) -> "FirecrawlClient":
         if self._http is None:
             self._http = self._make_http()
-        self.stats.started_at = _now()
-        self.stats.balance_before = await self.balance()
+        if self.stats.started_at is None:   # stats cover the client's lifetime: a re-entry keeps the first balance
+            self.stats.started_at = _now()
+            self.stats.balance_before = await self.balance()
         return self
 
     async def __aexit__(self, *exc_info) -> None:
@@ -626,7 +643,8 @@ class FirecrawlClient:
         subpages get the same request (Q2).
 
         A page waits for a browser slot (the semaphore, held through its
-        retries and their backoff) and then for an rpm slot per attempt. In-flight
+        retries and their backoff) and then for an rpm slot per attempt; once
+        the run has stopped it sends nothing more, retries included. In-flight
         pages may overshoot the ceiling by up to ``concurrency`` credits.
         """
         t0 = time.monotonic()
@@ -638,7 +656,6 @@ class FirecrawlClient:
             return self._finish(result, t0, requested, home_url, page_type)
         self._check_stop()
         async with self.limits.semaphore():
-            self._check_stop()   # stopped while waiting for a slot: send nothing
             result = await self._scrape_with_retry(sent)
         return self._finish(result, t0, requested, home_url, page_type)
 
@@ -654,14 +671,16 @@ class FirecrawlClient:
         return result
 
     async def _scrape_with_retry(self, url: str) -> ScrapeResult:
+        http = self._client()   # before any bookkeeping: outside the context nothing is counted
         payload = {"url": url, **self.request_profile}
         last: _Retry | None = None
         for attempt in range(1, self.max_attempts + 1):
             await self.limits.wait_for_slot(self._sleep)
+            self._check_stop()   # stopped while waiting for a slot or a backoff: send nothing
             self.stats.n_requests += 1
             try:
-                response = await self._client().post("/scrape", json=payload)
-            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                response = await http.post("/scrape", json=payload)
+            except httpx.RequestError as exc:   # transport, timeout, or a body httpx cannot decode
                 last = _Retry(None, min(30.0, 2.0 ** attempt), f"{type(exc).__name__}: {_excerpt(str(exc), 200)}")
             else:
                 try:
@@ -674,9 +693,9 @@ class FirecrawlClient:
                 else:
                     result.attempts = attempt
                     return result
-            self.stats.retries[str(last.status or "transport")] += 1
             if attempt == self.max_attempts:
                 break
+            self.stats.retries[str(last.status or "transport")] += 1
             logger.warning("firecrawl: %s: %s; retry %s/%s in %.0fs", url, last, attempt, self.max_attempts, last.delay)
             await self._sleep(last.delay)
         result = ScrapeResult(url=url, api_status=last.status if last else None, attempts=self.max_attempts)
@@ -685,11 +704,18 @@ class FirecrawlClient:
     async def scrape_many(
         self, urls: Iterable[str], *, home_url: str | None = None, page_type: str | None = None,
     ) -> dict[str, ScrapeResult | RunStopped]:
-        """Every distinct URL once, concurrently under the limits, all with the same
+        """Every page once, concurrently under the limits, all with the same
         ``home_url`` and ``page_type`` (an org's subpages); a page cut off by a stop
         maps to its ``RunStopped`` instead of a result, so the caller stores nothing
-        for it. Repeated strings are fetched and billed once."""
+        for it. Inputs that send the same page (up to a trailing slash, as
+        ``dry_run`` counts them) are fetched and billed once, and each keeps its
+        own ``requested_url``."""
         urls = list(dict.fromkeys(urls))
+        page, lead = {}, {}   # input -> page; page -> the first input naming it
+        for u in urls:
+            sent = normalize_url(u)
+            page[u] = sent.rstrip("/") if sent else ("unsent", u)   # an unsent value is its own page
+            lead.setdefault(page[u], u)
 
         async def one(url):
             try:
@@ -697,8 +723,12 @@ class FirecrawlClient:
             except RunStopped as exc:
                 return exc
 
-        results = await asyncio.gather(*(one(u) for u in urls))
-        return dict(zip(urls, results))
+        fetched = dict(zip(lead, await asyncio.gather(*(one(u) for u in lead.values()))))
+        out = {}
+        for u in urls:
+            res = fetched[page[u]]
+            out[u] = res if lead[page[u]] is u or isinstance(res, RunStopped) else replace(res, requested_url=u)
+        return out
 
     # -- dry run -------------------------------------------------------------
 
@@ -759,8 +789,10 @@ class FirecrawlClient:
 # ---------------------------------------------------------------------------
 
 def _cached_in_web_pages_scraped(urls: list[str]) -> set[str]:
-    """The URLs whose home page is in today's ``web_pages_scraped`` (any index row).
-    D7 replaces this with the v2 lookup, which also knows the row's age."""
+    """The sent form of each value whose home page is in today's ``web_pages_scraped``
+    (any index row), keyed on the raw value as the in-house scraper keyed it, so a
+    repaired value (``www. tworiversymca. org``) still finds its row. D7 replaces this
+    with the v2 lookup, which also knows the row's age."""
     from vdl_tools.scrape_enrich.url_keys import extract_website_name
     from vdl_tools.shared_tools.database_cache.database_models.web_scraping import WebPagesScraped
     from vdl_tools.shared_tools.database_cache.database_utils import get_session
@@ -772,7 +804,7 @@ def _cached_in_web_pages_scraped(urls: list[str]) -> set[str]:
             WebPagesScraped.page_type == "PageType.INDEX",
         ).all()
     present = {row.cleaned_key for row in rows}
-    return {url for url, key in keys.items() if key in present}
+    return {sent for url, key in keys.items() if key in present and (sent := normalize_url(url))}
 
 
 def _read_urls(path: str, column: str) -> list[str]:
@@ -800,14 +832,10 @@ def main(argv=None) -> int:
     urls = _read_urls(args.urls, args.column)
     if args.limit:
         urls = urls[: args.limit]
-    sendable = [u for u in (normalize_url(x) for x in urls) if u]
-    cached = set() if args.assume_uncached else _cached_in_web_pages_scraped(sendable)
-
-    async def go():
-        async with FirecrawlClient.from_config(credit_ceiling=args.credit_ceiling) as client:
-            return await client.dry_run(urls, is_cached=cached, credits_per_miss=args.credits_per_miss)
-
-    report = asyncio.run(go())
+    cached = set() if args.assume_uncached else _cached_in_web_pages_scraped(urls)
+    # No context manager: dry_run reads the balance once with a client of its own.
+    client = FirecrawlClient.from_config(credit_ceiling=args.credit_ceiling)
+    report = asyncio.run(client.dry_run(urls, is_cached=cached, credits_per_miss=args.credits_per_miss))
     print(report.summary())
     for url in report.misses[:20]:
         print("  miss:", url)
