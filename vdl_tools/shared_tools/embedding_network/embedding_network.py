@@ -18,6 +18,8 @@ paths = pc.get_paths()
 # %%
 
 DEFAULT_MODEL = "gpt-4.1-mini"
+# Polishes the one-sentence cluster names; replaced o3-mini, retired by OpenAI.
+DEFAULT_IMPROVE_MODEL = "gpt-5.4-nano"
 
 # %%
 
@@ -484,7 +486,7 @@ def improve_one_sentences(nodesdf,
                           clusattr='Cluster',
                           clusname=None,  # Use this for short sentence column name
                           subject="education",
-                          model="o3-mini",
+                          model=DEFAULT_IMPROVE_MODEL,
                           short_col=None,
                           long_col=None):
     """
@@ -553,7 +555,7 @@ def get_cluster_sentences_from_text(
     n_entities=None,
     sample_texts=None,
     improve = False,
-    improve_model="o3-mini",# Model for improving one-sentence summaries
+    improve_model=DEFAULT_IMPROVE_MODEL,  # Model for improving one-sentence summaries
     centrality_col = "ClusterCentrality"
 ):
     
@@ -641,7 +643,7 @@ def get_cluster_kwdnames_from_text(
         model=DEFAULT_MODEL,
         sample_texts=None,
         improve=False,
-        improve_model='o3-mini'
+        improve_model=DEFAULT_IMPROVE_MODEL
 
 ):
     """
@@ -758,7 +760,7 @@ def build_embedding_network(
     n_entities=50,
     naming_strategy="keywords",
     improve = False,
-    improve_model="o3-mini"  # Model for improving one-sentence summaries
+    improve_model=DEFAULT_IMPROVE_MODEL  # Model for improving one-sentence summaries
 ):
     emb_file = pl.Path("embeddings.npy")
 
