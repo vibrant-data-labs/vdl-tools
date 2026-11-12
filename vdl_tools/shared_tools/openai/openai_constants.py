@@ -60,13 +60,6 @@ MODEL_DATA = {
         "input_cost_per_token": 0.20 / 1_000_000,
         "output_cost_per_token": 1.25 / 1_000_000,
     },
-    "o3-mini":{
-        "model_name": "o3-mini",
-        "max_context_window": 1_047_576,
-        "max_output_tokens": 32_768,
-        "input_cost_per_token": 1.1 / 1_000_000,
-        "output_cost_per_token": 4.4 / 1_000_000,
-    },
     "gpt-4.1-mini":{
         "model_name": "gpt-4.1-mini",
         "max_context_window": 1_047_576,
