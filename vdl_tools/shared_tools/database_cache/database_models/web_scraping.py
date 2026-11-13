@@ -107,6 +107,7 @@ class WebPagesScrapedV2(BaseMixin):
     last_attempt_result = Column(String, nullable=True)  # ok, gone, unknown, invalid_url
     attempts_since_fetch = Column(Integer, nullable=False, default=0, server_default='0')
     superseded_at = Column(DateTime, nullable=True)      # a newer home fetch no longer picks this page
+    refetch_requested_at = Column(DateTime, nullable=True)   # home rows: delete_cached_urls asked for a fresh fetch; cleared by the next attempt that reaches the site
 
 
 @generic_repr

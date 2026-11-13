@@ -85,6 +85,7 @@ def upgrade() -> None:
         sa.Column('last_attempt_result', sa.String(), nullable=True),
         sa.Column('attempts_since_fetch', sa.Integer(), server_default='0', nullable=False),
         sa.Column('superseded_at', sa.DateTime(), nullable=True),
+        sa.Column('refetch_requested_at', sa.DateTime(), nullable=True),
         *_audit_columns(),
         sa.PrimaryKeyConstraint('cleaned_key'),
     )
