@@ -46,6 +46,9 @@ def delete_cached_urls(urls: list, session=None, dry_run: bool = False, backend:
     two caches are independent, so deleting from one leaves the other.
     web_pages_history_v2 and org_site_keys are never touched: the history row
     is the only other copy of a page's text, and the id-to-site link stays true.
+    A history row exists only for a page whose text was already replaced once,
+    so for every other page this delete removes the only stored copy: unlike a
+    re-fetch, it does not keep the last known good text.
 
     Matches via extract_website_name(url) - the key scrape_websites_psql
     itself writes - not home_url, which has inconsistent trailing slashes
