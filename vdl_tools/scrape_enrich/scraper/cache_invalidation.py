@@ -11,7 +11,9 @@ from sqlalchemy import or_
 from vdl_tools.scrape_enrich.scraper.scrape_websites import extract_website_name
 from vdl_tools.shared_tools.database_cache.database_models.web_scraping import (
     WebPagesParsed,
+    WebPagesParsedV2,
     WebPagesScraped,
+    WebPagesScrapedV2,
 )
 from vdl_tools.shared_tools.database_cache.database_utils import get_session
 from vdl_tools.shared_tools.tools.logger import logger
@@ -26,10 +28,24 @@ def _escape_like(value: str, escape_char: str = "\\") -> str:
     )
 
 
-def delete_cached_urls(urls: list, session=None, dry_run: bool = False) -> dict:
-    """Delete every cached WebPagesParsed/WebPagesScraped row for the given
-    URLs' hosts (index page + subpages), so scrape_websites_psql(...,
-    skip_existing=True) re-scrapes them.
+# backend -> (parsed model, scraped model). "inhouse" is the httpx/Playwright
+# scraper's pair; "firecrawl" is the v2 pair scrape_websites_firecrawl writes.
+BACKEND_TABLES = {
+    "inhouse": (WebPagesParsed, WebPagesScraped),
+    "firecrawl": (WebPagesParsedV2, WebPagesScrapedV2),
+}
+
+
+def delete_cached_urls(urls: list, session=None, dry_run: bool = False, backend: str = "inhouse") -> dict:
+    """Delete every cached parsed/scraped row for the given URLs' hosts
+    (index page + subpages) in one backend's table pair, so the next scrape
+    with skip_existing=True fetches them again.
+
+    backend="inhouse" (default) is web_pages_parsed / web_pages_scraped;
+    backend="firecrawl" is web_pages_parsed_v2 / web_pages_scraped_v2. The
+    two caches are independent, so deleting from one leaves the other.
+    web_pages_history_v2 and org_site_keys are never touched: the history row
+    is the only other copy of a page's text, and the id-to-site link stays true.
 
     Matches via extract_website_name(url) - the key scrape_websites_psql
     itself writes - not home_url, which has inconsistent trailing slashes
@@ -38,31 +54,36 @@ def delete_cached_urls(urls: list, session=None, dry_run: bool = False) -> dict:
 
     dry_run=True only counts/logs. Returns {"parsed_deleted", "scraped_deleted", "dry_run"}.
     """
+    if backend not in BACKEND_TABLES:
+        raise ValueError(f"backend must be one of {sorted(BACKEND_TABLES)}, got {backend!r}")
+    parsed_model, scraped_model = BACKEND_TABLES[backend]
     home_keys = {extract_website_name(u) for u in urls if u}
     home_keys.discard(None)
 
     with get_session(session=session) as session:
-        parsed_q = session.query(WebPagesParsed).filter(
-            WebPagesParsed.cleaned_home_key.in_(home_keys)
+        parsed_q = session.query(parsed_model).filter(
+            parsed_model.cleaned_home_key.in_(home_keys)
         )
 
         scraped_filter = or_(
-            WebPagesScraped.cleaned_key.in_(home_keys),
+            scraped_model.cleaned_key.in_(home_keys),
             *[
-                WebPagesScraped.cleaned_key.like(f"{_escape_like(key)}/%", escape="\\")
+                scraped_model.cleaned_key.like(f"{_escape_like(key)}/%", escape="\\")
                 for key in home_keys
             ],
         )
-        scraped_q = session.query(WebPagesScraped).filter(scraped_filter)
+        scraped_q = session.query(scraped_model).filter(scraped_filter)
 
         parsed_count = parsed_q.count()
         scraped_count = scraped_q.count()
 
         logger.info(
-            "%s %d WebPagesParsed row(s) and %d WebPagesScraped row(s) for %d url(s)",
+            "%s %d %s row(s) and %d %s row(s) for %d url(s)",
             "Would delete" if dry_run else "Deleting",
             parsed_count,
+            parsed_model.__tablename__,
             scraped_count,
+            scraped_model.__tablename__,
             len(urls),
         )
 
