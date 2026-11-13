@@ -175,9 +175,9 @@ stored text is the last known good).
 
 `web_pages_history_v2` (added 2026-10-22 at Zein's request): `cleaned_key`, `fetched_at`,
 `run_id`, `extractor`, `markdown`, `parsed_html`, `text_quality`. Written only when a newer
-good fetch replaces a page's text; one previous version kept per page, older ones removed
-under the #150 TTL policy. It is what makes a re-scrape safe: the old text is never the only
-copy.
+good fetch replaces a page's text; one previous version kept per page, replaced on write and
+removed with its page row (retention, section 6). It is what makes a re-scrape safe: the old
+text is never the only copy.
 
 `org_site_keys` (added 2026-10-22 at Zein's request): the link from a source org id to the
 site fetched for it, so a Crunchbase uuid, an EIN or an NZI id finds the cached site and text
@@ -503,8 +503,20 @@ reads: every step below "store" is a pure function of stored inputs and can be r
   rejected on 2026-10-23 as more machinery than the saving is worth.
 - A successful re-combine sets `num_errors = 0` (#228); the same one-line fix goes into the
   old path.
-- Retention: old `scrape_runs` and superseded page rows follow the TTL policy that the RDS
-  runbook (#150) requires.
+- Retention (decided 2026-11-13, VIB-52):
+  - `scrape_runs` rows are never deleted. Each is under 1 kB, and every page row's `run_id`
+    points at one; expiring them would save kilobytes and break the trace from a page to its
+    run, git sha and credits.
+  - `web_pages_history_v2` holds one previous version per page. The pipeline replaces it on
+    write, and it is removed when its page row is removed. It has no time limit.
+  - A page row whose `superseded_at` is more than 180 days old is deleted, with its history
+    row. 180 days is two retry windows, so the page has stayed unlinked through every refresh
+    in that time. If the site links it again, it is fetched again for one credit.
+  - Nothing else expires. Rows that are `gone` or `unknown` keep their last good text,
+    because the retry schedule still reads them.
+  - Enforcement is `prune_scrape_cache(superseded_days=180, dry_run=True)`, run by hand after
+    a refresh; it reports row counts before deleting. There is no scheduler. Built in D17
+    (VIB-183), after D10 measures how many rows are superseded and confirms the 180 days.
 
 ## 7. Work plan
 
@@ -512,9 +524,11 @@ Estimates are working days for one engineer who knows the pipeline.
 
 ### Phase 0: prerequisites, text rules and zero-credit validation (4 days plus waiting)
 
-- RDS per the runbook agreed on #150: `AllocatedStorage` to 250 (max 300), gp2 to gp3, and
-  a TTL policy. The volume was 182 of 200 GB in July; the sizes in section 4 do not fit
-  without it.
+- RDS headroom (#150, VIB-52). The volume was 182 of 200 GB in July with no autoscale.
+  Measured 2026-11-13: 300 GB allocated, about 59 GB free, and `MaxAllocatedStorage` raised
+  to 330 so the volume can no longer fill silently. The sizes in section 4 fit. The #150
+  pruning runbook is superseded by the plan to move the Giving Tuesday database to its own
+  server; gp2 to gp3 is optional. The retention policy is in section 6.
 - Firecrawl plan: Standard billed monthly ($99, 100k credits, 25 browsers, 500 rpm) is the
   resting plan and is active. Refresh months move to Growth or a top-up.
 - Merge PR #237 so the benchmark, the adapter notes and the `vendor_pilot` scripts are on

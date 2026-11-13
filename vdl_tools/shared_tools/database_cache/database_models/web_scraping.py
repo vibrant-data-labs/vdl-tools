@@ -45,8 +45,8 @@ class WebPagesScraped(BaseMixin):
 # New tables rather than new columns on the 17 GB web_pages_scraped. Keys are
 # the same as the old pair, so make_group_text and the cache lookups read them
 # unchanged. All timestamps are naive UTC, like date_added on BaseMixin.
-# run_id is lineage, not a foreign key: scrape_runs rows expire under the TTL
-# policy before the page rows they produced. The counters (num_errors,
+# run_id is lineage and is not an enforced foreign key. scrape_runs rows are
+# never deleted, so a run_id always resolves. The counters (num_errors,
 # attempts_since_fetch) are NOT NULL with a default of 0: NULL + 1 is NULL in
 # SQL, so a nullable counter never reaches max_errors and a dead site is
 # refetched, and billed, on every run.
