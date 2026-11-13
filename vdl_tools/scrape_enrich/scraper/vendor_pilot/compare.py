@@ -55,7 +55,7 @@ from vdl_tools.scrape_enrich.scraper.vendor_pilot._common import (
 )
 
 MAX_PER_SUBPATH = 6  # scrape_websites_psql default
-VERDICTS = ("ok", "thin", "blocked", "parked", "garbled", "empty", "dead")
+VERDICTS = ("ok", "thin", "blocked", "parked", "not_found", "garbled", "empty", "dead")
 
 _MD_IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")

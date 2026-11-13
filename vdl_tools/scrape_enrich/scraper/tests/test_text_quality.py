@@ -3,6 +3,7 @@ from vdl_tools.scrape_enrich.scraper.text_quality import (
     looks_like_bot_wall,
     looks_like_garbled_text,
 )
+from vdl_tools.shared_tools.web_summarization.make_page_text import JOIN_CHARS
 
 LONG = "Real org text about climate work. " * 20
 
@@ -83,6 +84,42 @@ def test_short_real_page_with_cookie_notice_is_not_a_wall():
     assert len(page) < 1000
     assert not looks_like_bot_wall(page)
     assert classify_text_quality(page) == "ok"
+
+
+def test_soft_404_pages_are_not_found():
+    # HTTP 200 bodies from the scrape cache (profiled 2026-10-30). The fetcher stores
+    # no text for a real 4xx answer, so these are the only not-found screens it sees.
+    squarespace = (
+        "We couldn't find the page you were looking for. This is either because: You can "
+        "return to our homepage by clicking here, or you can try searching for the content "
+        "you are seeking by clicking here. Woodside High School, 199 Churchill Avenue"
+    )
+    wordpress = (
+        "Oops! That page can't be found. It looks like nothing was found at this location. "
+        "Maybe try a search? 2025 Delta Gamma. All rights reserved."
+    )
+    apache = (
+        "The requested URL was not found on this server. Additionally, a 404 Not Found error "
+        "was encountered while trying to use an ErrorDocument to handle the request."
+    )
+    for page in (squarespace, wordpress, apache, "Page not found."):
+        assert classify_text_quality(page) == "not_found"
+    # a real page that merely says it runs past WALL_MAX_CHARS: a blog widget with no posts
+    assert classify_text_quality(LONG * 2 + "No Results Found. The page you requested could not be found.") == "ok"
+
+
+def test_not_found_is_judged_on_the_first_page_of_combined_text():
+    home = "URL: https://example.org/\nTEXT: Example Watershed Alliance restores creeks and wetlands with volunteer crews."
+    missing = (
+        "URL: https://example.org/apps\nTEXT: The page you are looking for might have been "
+        "removed, had its name changed, or is temporarily unavailable."
+    )
+    # a brief real home page followed by a not-found subpage is the org's page
+    assert classify_text_quality(home + JOIN_CHARS + missing) == "ok"
+    # a not-found home page followed by another not-found page is still nothing
+    assert classify_text_quality(missing + JOIN_CHARS + missing.replace("/apps", "/news")) == "not_found"
+    # a not-found home page with real subpages behind it is a site with content
+    assert classify_text_quality(missing + JOIN_CHARS + "URL: https://example.org/about\nTEXT: " + LONG * 2) == "ok"
 
 
 def test_verdict_precedence_garbled_beats_parked_beats_blocked():
