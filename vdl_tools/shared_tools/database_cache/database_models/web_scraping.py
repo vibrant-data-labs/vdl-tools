@@ -46,7 +46,10 @@ class WebPagesScraped(BaseMixin):
 # the same as the old pair, so make_group_text and the cache lookups read them
 # unchanged. All timestamps are naive UTC, like date_added on BaseMixin.
 # run_id is lineage, not a foreign key: scrape_runs rows expire under the TTL
-# policy before the page rows they produced.
+# policy before the page rows they produced. The counters (num_errors,
+# attempts_since_fetch) are NOT NULL with a default of 0: NULL + 1 is NULL in
+# SQL, so a nullable counter never reaches max_errors and a dead site is
+# refetched, and billed, on every run.
 # ---------------------------------------------------------------------------
 
 _JSON = JSON().with_variant(JSONB, "postgresql")
@@ -98,11 +101,11 @@ class WebPagesScrapedV2(BaseMixin):
     content_type = Column(String, nullable=True)
     language = Column(String, nullable=True)
     scrape_id = Column(String, nullable=True)
-    num_errors = Column(Integer, nullable=True)          # target failures only; a vendor error leaves it alone
+    num_errors = Column(Integer, nullable=False, default=0, server_default='0')   # target failures only; a vendor error leaves it alone
     fetched_at = Column(DateTime, nullable=True, index=True)        # date of the stored text
     last_attempt_at = Column(DateTime, nullable=True)
     last_attempt_result = Column(String, nullable=True)  # ok, gone, unknown, invalid_url
-    attempts_since_fetch = Column(Integer, nullable=True)
+    attempts_since_fetch = Column(Integer, nullable=False, default=0, server_default='0')
     superseded_at = Column(DateTime, nullable=True)      # a newer home fetch no longer picks this page
 
 
@@ -119,7 +122,7 @@ class WebPagesParsedV2(BaseMixin):
     extractor = Column(String, nullable=True)
     prompt_token_budget = Column(Integer, nullable=True)
     text_quality = Column(String, nullable=True)
-    num_errors = Column(Integer, nullable=True)
+    num_errors = Column(Integer, nullable=False, default=0, server_default='0')
     combined_at = Column(DateTime, nullable=True)
     last_attempt_at = Column(DateTime, nullable=True)
     last_attempt_result = Column(String, nullable=True)
