@@ -11,6 +11,10 @@ Use these; don't write another.
 - ``ensure_url_scheme``: the FETCH form, a scheme added when missing and
   lowercased, everything else as given. ``WWW.Example.org/about`` ->
   ``https://WWW.Example.org/about``
+- ``clean_website_path``: a SUBPAGE's part of its page key, appended to the
+  home page's key with a slash. ``/pages/contact/`` -> ``pages_contact``, so
+  the row is ``www.Example.org/pages_contact``. ``check_is_single_page_websites``
+  says which hosts (medium.com, linkedin.com, ...) get no subpages at all.
 """
 
 import re
@@ -98,3 +102,51 @@ def website_domain(url) -> str:
     if "." not in host or host in PLATFORM_DOMAINS or host in FREE_MAIL:
         return ""
     return host
+
+
+# if the page from one of these websites is to be scraped
+# then the scraper should only take the first page
+SINGLE_PAGE_WEBSITES = [
+    'medium.com',
+    'facebook.com',
+    'linkedin.com',
+    'linktr.ee',
+    'about.me',
+    'wikipedia.org',
+    'github.com',
+    'scholar.google.com/',
+    'meetup.com',
+]
+
+
+BAD_URL_PATH_CHARS = '/?=&#@'
+
+
+def check_is_single_page_websites(url: str, single_page_websites: list = []):
+    return len([x for x in [*SINGLE_PAGE_WEBSITES, *single_page_websites] if x in url.lower()]) > 0
+
+
+def clean_website_path(value: str) -> str:
+    '''
+    Clean the website subpath: the part of a page's cache key after the home key
+
+    /pages/contact -> pages_contact
+    /pages/contact/ -> pages_contact
+    /about-us -> about-us
+    /page?page_title=about-us -> page_page_title_about-us
+    '''
+    if 'www' in value:
+        logger.warning(f"Invalid value because path contains 'www': {value}")
+        return None
+    try:
+        path = value.split(
+            '/', maxsplit=1)[1] if value.startswith('/') else value
+        path = path[:-1] if path.endswith('/') else path
+
+        for c in BAD_URL_PATH_CHARS:
+            path = path.replace(c, '_')
+
+        return path
+    except Exception as ex:
+        logger.warning(f'Error cleaning website path: {value}')
+        return None

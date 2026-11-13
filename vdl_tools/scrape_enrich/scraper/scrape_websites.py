@@ -12,8 +12,15 @@ import vdl_tools.scrape_enrich.scraper.website_processor as wp
 from vdl_tools.scrape_enrich.scraper.async_scraper import AsyncScraper
 from vdl_tools.scrape_enrich.scraper.text_quality import looks_like_bot_wall
 # Re-exported: callers import the page key from here.
-# ensure_url_scheme lives in url_keys (it outlives this module); re-exported for its importers.
-from vdl_tools.scrape_enrich.url_keys import ensure_url_scheme, extract_website_name  # noqa: F401
+# The URL and page-key helpers live in url_keys (they outlive this module); re-exported for their importers.
+from vdl_tools.scrape_enrich.url_keys import (  # noqa: F401
+    BAD_URL_PATH_CHARS,
+    SINGLE_PAGE_WEBSITES,
+    check_is_single_page_websites,
+    clean_website_path as __clean_website_path,
+    ensure_url_scheme,
+    extract_website_name,
+)
 from vdl_tools.shared_tools.web_summarization.make_page_text import make_group_text
 from vdl_tools.shared_tools.tools.logger import logger
 from vdl_tools.shared_tools.database_cache.database_models.web_scraping import WebPagesScraped, WebPagesParsed
@@ -27,54 +34,6 @@ class PageType(Enum):
 
 
 MAX_ERRORS = 5
-
-
-# if the page from one of these websites is to be scraped
-# then the scraper should only take the first page
-SINGLE_PAGE_WEBSITES = [
-    'medium.com',
-    'facebook.com',
-    'linkedin.com',
-    'linktr.ee',
-    'about.me',
-    'wikipedia.org',
-    'github.com',
-    'scholar.google.com/',
-    'meetup.com',
-]
-
-
-BAD_URL_PATH_CHARS = '/?=&#@'
-
-
-def check_is_single_page_websites(url: str, single_page_websites: list = []):
-    return len([x for x in [*SINGLE_PAGE_WEBSITES, *single_page_websites] if x in url.lower()]) > 0
-
-
-def __clean_website_path(value: str) -> str:
-    '''
-    Clean the website subpath
-
-    /pages/contact -> pages_contact
-    /pages/contact/ -> pages_contact
-    /about-us -> about-us
-    /page?page_title=about-us -> page_page_title_about-us
-    '''
-    if 'www' in value:
-        logger.warning(f"Invalid value because path contains 'www': {value}")
-        return None
-    try:
-        path = value.split(
-            '/', maxsplit=1)[1] if value.startswith('/') else value
-        path = path[:-1] if path.endswith('/') else path
-
-        for c in BAD_URL_PATH_CHARS:
-            path = path.replace(c, '_')
-
-        return path
-    except Exception as ex:
-        logger.warning(f'Error cleaning website path: {value}')
-        return None
 
 
 def _parsed_row_is_retryable(num_errors, max_errors):
@@ -594,10 +553,13 @@ def scrape_websites_psql(
                                 num_errors=parsed_key_to_num_errors.get(index_key, 0) + 1,
                             )
                         else:
+                            # num_errors=0, not unset: merge leaves an unset column alone,
+                            # so a row that failed before kept its count after succeeding (#228).
                             combined_obj = WebPagesParsed(
                                 cleaned_home_key=index_key,
                                 home_url=source,
                                 combined_text=combined_text,
+                                num_errors=0,
                             )
                         session.merge(combined_obj)
                         combined_data.append(combined_obj.to_dict())
