@@ -18,6 +18,10 @@ would otherwise read Firecrawl text as its own cache.
 What "due" means (``is_due``), decided on the home page's row:
 
 - never fetched: due;
+- a re-fetch was asked for (``refetch_requested_at``, set by
+  ``delete_cached_urls(backend="firecrawl")``): due, whatever the rules below
+  say. The next attempt that reaches the site clears it, so a blocked
+  re-fetch keeps the stored text and goes back to the retry schedule;
 - the last attempt was good: due only when ``max_age_days`` is given and the
   stored text is older than that;
 - the last attempt was a vendor error: due (the next run retries it);
@@ -160,7 +164,7 @@ def has_good_text(row) -> bool:
 def is_due(row, now: dt.datetime, max_age_days: float | None, retry_failed_after_days: float,
            max_errors: int) -> bool:
     """Whether a page should be fetched now; the module docstring lists the cases."""
-    if row is None:
+    if row is None or row.refetch_requested_at is not None:
         return True
     if row.last_attempt_result == OK:
         if max_age_days is None:
@@ -298,6 +302,8 @@ def _write_page(session, existing: WebPagesScrapedV2 | None, *, key: str, home_u
         row.num_errors = 0
     elif result.failure_reason != VENDOR_ERROR:
         row.num_errors = (row.num_errors or 0) + 1
+    if result.failure_reason != VENDOR_ERROR:
+        row.refetch_requested_at = None    # answered; a vendor error leaves the request standing
     row.superseded_at = None
     return row, replaces
 
@@ -407,7 +413,7 @@ _HOME_COLUMNS = (
     WebPagesScrapedV2.cleaned_key, WebPagesScrapedV2.last_attempt_result, WebPagesScrapedV2.last_attempt_at,
     WebPagesScrapedV2.fetched_at, WebPagesScrapedV2.failure_reason, WebPagesScrapedV2.text_quality,
     WebPagesScrapedV2.num_errors, WebPagesScrapedV2.source_url, WebPagesScrapedV2.final_host,
-    WebPagesScrapedV2.home_url, WebPagesScrapedV2.run_id,
+    WebPagesScrapedV2.home_url, WebPagesScrapedV2.run_id, WebPagesScrapedV2.refetch_requested_at,
 )
 
 

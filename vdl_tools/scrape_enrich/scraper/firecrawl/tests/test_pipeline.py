@@ -307,6 +307,34 @@ def test_a_blocked_refetch_keeps_the_previous_text_and_records_the_attempt(db):
     assert HOME in requested(back) and db.page(KEY_HOME).last_attempt_result == "ok"
 
 
+def test_a_requested_refetch_is_due_at_any_age_and_a_blocked_one_keeps_the_text(db):
+    """delete_cached_urls on the Firecrawl tables asks for a re-fetch instead of deleting."""
+    from vdl_tools.scrape_enrich.scraper.cache_invalidation import delete_cached_urls
+
+    scrape(db, standard_site(FakeFirecrawl()))
+    before = db.org().combined_text
+    assert delete_cached_urls([HOME], session=db.Session(), backend="firecrawl")["refetch_marked"] == 1
+    assert db.page(KEY_HOME).refetch_requested_at is not None
+
+    # A vendor error does not answer the request: it stands for the next run.
+    vendor = FakeFirecrawl().script(HOME, api_error(408, code="SCRAPE_TIMEOUT"))
+    scrape(db, vendor, now=T0 + dt.timedelta(days=1))
+    assert requested(vendor) == [HOME] and db.page(KEY_HOME).refetch_requested_at is not None
+
+    # One day old and no max_age_days, so only the request makes it due. The site blocks us.
+    vendor = FakeFirecrawl().script(HOME, page(403, markdown="Access denied"))
+    frame = scrape(db, vendor, now=T0 + dt.timedelta(days=2))
+    assert requested(vendor) == [HOME]
+    home = db.page(KEY_HOME)
+    assert (home.markdown, home.fetched_at, home.last_attempt_result) == (md("home"), T0, "unknown")
+    assert home.refetch_requested_at is None
+    assert db.org().combined_text == before and frame.loc[0, "combined_text"] == before
+
+    quiet = FakeFirecrawl()
+    scrape(db, quiet, now=T0 + dt.timedelta(days=3))
+    assert quiet.requests == []
+
+
 def test_a_gone_home_page_keeps_the_text_and_marks_it_stale(db):
     scrape(db, standard_site(FakeFirecrawl()))
     before = db.org().combined_text
@@ -491,6 +519,7 @@ def _row(**kw):
     (None, 0, None, True),
     (_row(), 400, None, False),                                              # good, no age limit
     (_row(), 80, 90, False),
+    (_row(refetch_requested_at=T0), 0, None, True),                          # a re-fetch was asked for
     (_row(), 91, 90, True),
     (_row(last_attempt_result="unknown", failure_reason="vendor_error"), 0, None, True),
     (_row(last_attempt_result="invalid_url", failure_reason="invalid_url", fetched_at=None, text_quality=None,
