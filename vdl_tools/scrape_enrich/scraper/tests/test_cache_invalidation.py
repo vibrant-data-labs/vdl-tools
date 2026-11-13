@@ -5,8 +5,10 @@ query builder, since the function's entire job is the DB side-effect. Uses
 StaticPool so the schema/data created by one session survives across the
 sessions delete_cached_urls opens and closes internally.
 
-Every test runs twice: against the in-house pair (web_pages_parsed,
-web_pages_scraped) and the Firecrawl pair (the _v2 tables).
+Every delete test runs twice: against the in-house pair (web_pages_parsed,
+web_pages_scraped) and the Firecrawl pair (the _v2 tables) with purge=True.
+The Firecrawl default, marking the home row for a re-fetch, has its own tests
+at the end.
 """
 
 from functools import partial
@@ -23,10 +25,10 @@ from vdl_tools.shared_tools.database_cache.database_models.web_scraping import W
 
 @pytest.fixture(params=sorted(BACKEND_TABLES))
 def tables(request):
-    """One backend's models and delete_cached_urls bound to that backend."""
+    """One backend's models and delete_cached_urls bound to that backend, deleting rows."""
     parsed, scraped = BACKEND_TABLES[request.param]
     return SimpleNamespace(backend=request.param, parsed=parsed, scraped=scraped,
-                           delete=partial(delete_cached_urls, backend=request.param))
+                           delete=partial(delete_cached_urls, backend=request.param, purge=True))
 
 
 @pytest.fixture
@@ -247,3 +249,58 @@ def test_delete_cached_urls_defaults_to_the_in_house_tables(make_session):
 def test_delete_cached_urls_rejects_an_unknown_backend(make_session):
     with pytest.raises(ValueError, match="backend must be one of"):
         delete_cached_urls(["example.org"], session=make_session(), backend="olostep")
+
+
+# ---------------------------------------------------------------------------
+# The Firecrawl default: mark for a re-fetch, delete nothing
+# ---------------------------------------------------------------------------
+
+def _firecrawl_tables():
+    parsed, scraped = BACKEND_TABLES["firecrawl"]
+    return SimpleNamespace(parsed=parsed, scraped=scraped)
+
+
+def test_firecrawl_default_marks_the_home_row_and_deletes_nothing(make_session):
+    tables = _firecrawl_tables()
+    session = make_session()
+    _seed_host(session, tables, "example.org")
+    _seed_host(session, tables, "other.org")
+    session.commit()
+    session.close()
+
+    result = delete_cached_urls(["https://example.org/"], session=make_session(), backend="firecrawl")
+
+    assert result == {"parsed_deleted": 0, "scraped_deleted": 0, "refetch_marked": 1, "dry_run": False}
+    check = make_session()
+    assert check.query(tables.parsed).count() == 2
+    assert check.query(tables.scraped).count() == 4
+    marked = {r.cleaned_key for r in check.query(tables.scraped).filter(
+        tables.scraped.refetch_requested_at.isnot(None))}
+    assert marked == {"example.org"}                       # the home row only, and only this host
+    assert check.get(tables.scraped, "example.org").parsed_html == "garbled text"   # the text is still there
+
+
+def test_firecrawl_default_dry_run_marks_nothing(make_session):
+    tables = _firecrawl_tables()
+    session = make_session()
+    _seed_host(session, tables, "example.org")
+    session.commit()
+    session.close()
+
+    result = delete_cached_urls(["example.org"], session=make_session(), backend="firecrawl", dry_run=True)
+
+    assert result == {"parsed_deleted": 0, "scraped_deleted": 0, "refetch_marked": 0, "dry_run": True}
+    assert make_session().query(tables.scraped).filter(
+        tables.scraped.refetch_requested_at.isnot(None)).count() == 0
+
+
+def test_purge_is_ignored_on_the_in_house_tables(make_session):
+    """Deleting is the only way to refresh the in-house cache, so purge=False still deletes."""
+    parsed, scraped = BACKEND_TABLES["inhouse"]
+    session = make_session()
+    _seed_host(session, SimpleNamespace(parsed=parsed, scraped=scraped), "example.org")
+    session.commit()
+    session.close()
+
+    assert delete_cached_urls(["example.org"], session=make_session(), purge=False) == {
+        "parsed_deleted": 1, "scraped_deleted": 2, "dry_run": False}
