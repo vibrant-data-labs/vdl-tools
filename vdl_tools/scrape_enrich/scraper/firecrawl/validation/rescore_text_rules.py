@@ -55,17 +55,13 @@ ORGS_PER_REFRESH = 30_000   # the CFT org count the plan's cost figures use
 INPUT_PRICE_PER_TOKEN = MODEL_DATA[MODEL]["input_cost_per_token"]
 
 
-def _is_2xx(status) -> bool:
-    return status is not None and status == status and 200 <= int(status) < 300
-
-
 # ---------------------------------------------------------------------------
 # Phase 2: pages and orgs
 # ---------------------------------------------------------------------------
 
 def rescore_pages(pages: pd.DataFrame) -> pd.DataFrame:
     """Every 2xx Firecrawl page through ``page_text``."""
-    ok = pages[pages["success"] & pages["http_status"].map(_is_2xx)].copy()
+    ok = pages[pages["success"] & pages["http_status"].map(mc.is_2xx)].copy()
     results = [mc.page_text(t) for t in ok["text"]]
     ok["pilot_verdict"] = ok["verdict"]
     ok["verdict"] = [r.verdict for r in results]
@@ -113,7 +109,7 @@ def _raw_combined(source: str, rows: pd.DataFrame, text_col: str) -> str:
 def rescore_orgs(fc_orgs: pd.DataFrame, fc_pages: pd.DataFrame, ih_pages: pd.DataFrame,
                  comparison: pd.DataFrame) -> pd.DataFrame:
     by_org = {k: g for k, g in fc_pages.groupby("cleaned_home_key")}
-    ih_ok = ih_pages[ih_pages["success"] & ih_pages["http_status"].map(_is_2xx)]
+    ih_ok = ih_pages[ih_pages["success"] & ih_pages["http_status"].map(mc.is_2xx)]
     ih_by_org = {k: g for k, g in ih_ok.groupby("cleaned_home_key")}
     cmp = comparison.set_index("cleaned_home_key")
     rows = []
@@ -177,7 +173,7 @@ def _jaccard(a: set, b: set) -> float | None:
 def rescore_picks(phase1: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for r in phase1.itertuples(index=False):
-        if not (r.success and _is_2xx(r.http_status)):
+        if not (r.success and mc.is_2xx(r.http_status)):
             continue
         links = json.loads(r.links) if isinstance(r.links, str) else list(r.links or [])
         final_url = r.final_url if isinstance(r.final_url, str) and r.final_url else r.url
@@ -216,7 +212,7 @@ def _dist(s: pd.Series) -> str:
 def summarize(pages: pd.DataFrame, orgs: pd.DataFrame, picks: pd.DataFrame,
               ih_pages: pd.DataFrame) -> str:
     n = len(orgs)
-    ih_ok = ih_pages[ih_pages["success"] & ih_pages["http_status"].map(_is_2xx)]
+    ih_ok = ih_pages[ih_pages["success"] & ih_pages["http_status"].map(mc.is_2xx)]
     paired = pd.crosstab(orgs["usable"], orgs["inhouse_usable"])
     both = int(paired.loc[True, True]) if True in paired.index and True in paired.columns else 0
     vendor_only = int(((orgs["usable"]) & (~orgs["inhouse_usable"])).sum())

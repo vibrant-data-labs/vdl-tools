@@ -38,6 +38,11 @@ Per org, ``org_text(source, pages)``:
    otherwise the length check on the combined text. The markers already ran
    on every page, so they are not run again on the combined text.
 
+From stored rows, ``combine_org(source, pages)`` is the one entry point: it
+applies the status gate, runs ``page_text`` on each 2xx page and ``org_text``
+on the result, and returns both the per-page rows to store and the combined
+text. The pipeline and any backfill call it, never the steps by hand.
+
 Every function is pure and orders its output without iterating a set, so the
 same pages give byte-identical text on every run and machine. That is what
 lets the hash-keyed LLM cache hit. Any change to a rule's output bumps
@@ -415,3 +420,56 @@ def org_text(
         tokens=count_tokens(combined),
         tokens_before_cap=tokens_before,
     )
+
+
+# ---------------------------------------------------------------------------
+# From stored rows: the combine helper
+# ---------------------------------------------------------------------------
+
+HOME_PAGE_TYPE = "index"
+
+
+def is_2xx(status) -> bool:
+    """The status gate: the target's own status code is 2xx. None and NaN are not."""
+    return status is not None and status == status and 200 <= int(status) < 300
+
+
+@dataclass(frozen=True)
+class StoredPage:
+    """One page row as stored, before any text rule: the ``web_pages_scraped_v2``
+    columns the text is derived from."""
+
+    subpath: str
+    page_type: str               # HOME_PAGE_TYPE for the home page
+    status_code: int | None      # response_status_code: the target's own answer
+    markdown: str | None
+
+
+@dataclass(frozen=True)
+class CombinedOrg:
+    """What ``combine_org`` derives from an org's stored pages."""
+
+    org: OrgText                 # combined_text, text_quality, source_keys, extractor
+    pages: list                  # one OrgPage per 2xx page, in input order: parsed_html and text_quality
+
+
+def combine_org(
+    source: str,
+    pages: Iterable[StoredPage],
+    prompt_str: str = COUNTING_PROMPT,
+    max_tokens: int = ORG_TOKEN_CAP,
+) -> CombinedOrg:
+    """An org's stored pages to its combined text, in the order of plan section 5.4.
+
+    A page that fails the status gate gets no text and no verdict and is left
+    out of ``pages``; its row keeps an empty ``parsed_html``. Everything is
+    re-derived from ``markdown``, so the result never mixes cleaner versions
+    and is tagged ``EXTRACTOR`` as a whole.
+    """
+    org_pages = []
+    for page in pages:
+        if not is_2xx(page.status_code):
+            continue
+        result = page_text(page.markdown)
+        org_pages.append(OrgPage(page.subpath, page.page_type == HOME_PAGE_TYPE, result.verdict, result.text))
+    return CombinedOrg(org_text(source, org_pages, prompt_str, max_tokens), org_pages)

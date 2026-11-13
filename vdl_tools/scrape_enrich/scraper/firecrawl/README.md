@@ -182,6 +182,32 @@ frame, a reCAPTCHA form, a real wall and one four-page org for dedupe and the ca
 change that alters any output fails them until `CLEANER_VERSION` is bumped and the files are
 regenerated.
 
+## D5 combine helper: from stored rows to combined text (checked 2026-11-12)
+
+D5 of the adapter project ([VIB-57](https://linear.app/vibrant-data-labs/issue/VIB-57)).
+`markdown_clean.combine_org(source, pages)` is the one entry point from stored page rows
+(`subpath`, `page_type`, `response_status_code`, `markdown`) to text: status gate, `page_text`
+per 2xx page, `org_text` over the result. It returns the per-page rows to store
+(`parsed_html`, `text_quality`) and the org's combined text, verdict and `source_keys`, all
+tagged `firecrawl-md-v1`. The pipeline (D7) and any backfill call it instead of chaining the
+steps.
+
+Checked on the 2,000 phase 2 orgs against `rescore_orgs.parquet`, the text D3 was measured
+on:
+
+- Under the rules as they were when the artifact was written (2026-10-30): 2,000 of 2,000
+  orgs identical in combined text bytes, verdict and page list.
+- Under today's rules: 1,982 identical. The other 18 are the for-sale landers #251 added to
+  `text_quality` on 2026-11-03; each one's home page goes from `ok` to `parked`, which makes
+  the org `parked` and takes the home page out of its text. Usable orgs 85.3% to 84.4%.
+- Two runs under different `PYTHONHASHSEED` values give the same digest over all 2,000 texts.
+
+No `CLEANER_VERSION` bump: no rule in this module changed, and the 18 orgs whose text
+changed are `parked`, which never reaches the summarizer, so no cached LLM response is keyed
+on their text. `test_combine_org_matches_the_phase_0_rescore_on_the_phase_2_sample` repeats
+the check wherever the pilot artifacts are (`VENDOR_PILOT_DIR`, default
+`.cache/vendor_pilot`) and is skipped elsewhere.
+
 ## D3 paired LLM test: what the new text does downstream (run 2026-10-30)
 
 D3 of the adapter project ([VIB-54](https://linear.app/vibrant-data-labs/issue/VIB-54)), the
