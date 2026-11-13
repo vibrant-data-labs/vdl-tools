@@ -198,30 +198,31 @@ def get_scraped_df(
             axis=1,
         )
 
-        # Now scrape them based on the websites we just got
+        # Now scrape them based on the websites we just got. Nothing to scrape when
+        # no org sent to Coresignal came back with a website: df_web_linkedin_success
+        # used to be assigned only in that case and concatenated in every case, which
+        # raised NameError after the scraping above had already been paid for.
         df_web_for_scraping = df[df[linkedin_url_column].isin(linkedin_urls) & df[canonical_website_column].notnull()]
-        with get_session() as session:
-            df_web_linkedin = scrape_websites_psql(
-                # filter out null websites,
-                urls=df_web_for_scraping[canonical_website_column],
-                session=session,
-                skip_existing=skip_existing,
-                subpage_type="about",
-                n_per_commit=n_per_commit,
-                max_errors=max_errors,
-                summary_prompt=summary_prompt,
-                return_combined_res=return_combined_res,
-                max_workers=max_workers,
-            )
-
         if df_web_for_scraping.shape[0] > 0:
+            with get_session() as session:
+                df_web_linkedin = scrape_websites_psql(
+                    # filter out null websites,
+                    urls=df_web_for_scraping[canonical_website_column],
+                    session=session,
+                    skip_existing=skip_existing,
+                    subpage_type="about",
+                    n_per_commit=n_per_commit,
+                    max_errors=max_errors,
+                    summary_prompt=summary_prompt,
+                    return_combined_res=return_combined_res,
+                    max_workers=max_workers,
+                )
+
             if return_combined_res:
                 web_success_mask = df_web_linkedin['combined_text'].notnull()
             else:
                 web_success_mask = df_web_linkedin['response_status_code'] == 200
-            df_web_linkedin_success = df_web_linkedin[web_success_mask]
-
-        df_web_success = pd.concat([df_web_success, df_web_linkedin_success])
+            df_web_success = pd.concat([df_web_success, df_web_linkedin[web_success_mask]])
 
     return df_web_success, df
 
