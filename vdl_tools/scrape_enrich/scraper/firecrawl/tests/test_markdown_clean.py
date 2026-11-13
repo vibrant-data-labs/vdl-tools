@@ -317,6 +317,115 @@ def test_no_usable_pages_gives_empty():
     assert (org.text, org.verdict, org.subpaths, org.tokens) == ("", "empty", [], 0)
 
 
+# ---------------------------------------------------------------------------
+# combine_org: from stored rows
+# ---------------------------------------------------------------------------
+
+HOME_MD = "# Wetlands Trust\n\n[Home](https://example.org) | [About](https://example.org/about)\n\n" + LONG
+ABOUT_MD = "# About\n\n" + "We were founded in 1990 by river guides and farmers. " * 10
+
+
+def _stored():
+    return [
+        mc.StoredPage("/", "index", 200, HOME_MD),
+        mc.StoredPage("about", "page", 200, ABOUT_MD),
+        mc.StoredPage("gone", "page", 404, "# Not found\n\n" + LONG),
+        mc.StoredPage("blog", "page", None, LONG),
+    ]
+
+
+@pytest.mark.parametrize("status,expected", [
+    (200, True), (204, True), (299, True), (200.0, True),
+    (199, False), (301, False), (404, False), (500, False), (None, False), (float("nan"), False),
+])
+def test_status_gate(status, expected):
+    assert mc.is_2xx(status) is expected
+
+
+def test_combine_org_gates_on_status_then_runs_the_rules_in_order():
+    combined = mc.combine_org("https://example.org", _stored())
+    # The status gate: a 404 body and a row with no status never reach the text.
+    assert [p.subpath for p in combined.pages] == ["/", "about"]
+    assert "Not found" not in combined.org.text
+    # Per page it is page_text; per org it is org_text over those pages.
+    assert combined.pages[0] == mc.OrgPage("/", True, *_page(HOME_MD))
+    assert combined.pages[1] == mc.OrgPage("about", False, *_page(ABOUT_MD))
+    assert combined.org == mc.org_text("https://example.org", combined.pages)
+    assert combined.org.subpaths == ["/", "about"]
+    assert combined.org.extractor == mc.EXTRACTOR == f"firecrawl-md-v{mc.CLEANER_VERSION}"
+    # The menu line went in the cleaner, the heading repeated on no page.
+    assert "example.org/about)" not in combined.org.text
+
+
+def _page(markdown):
+    page = mc.page_text(markdown)
+    return page.verdict, page.text
+
+
+def test_combine_org_is_identical_on_a_second_run_and_in_any_row_order():
+    reference = mc.combine_org("https://example.org", _stored())
+    assert mc.combine_org("https://example.org", _stored()).org.text.encode() == reference.org.text.encode()
+    for seed in range(5):
+        shuffled = _stored()
+        random.Random(seed).shuffle(shuffled)
+        assert mc.combine_org("https://example.org", shuffled).org == reference.org
+
+
+def test_combine_org_with_a_failed_home_page_has_no_home_text():
+    pages = [mc.StoredPage("/", "index", 503, HOME_MD), mc.StoredPage("about", "page", 200, ABOUT_MD)]
+    combined = mc.combine_org("https://example.org", pages)
+    assert [p.subpath for p in combined.pages] == ["about"]
+    assert "Wetlands Trust" not in combined.org.text
+
+
+def test_combine_org_with_no_2xx_page_is_empty():
+    combined = mc.combine_org("https://example.org", [mc.StoredPage("/", "index", 404, HOME_MD)])
+    assert (combined.org.text, combined.org.verdict, combined.pages) == ("", "empty", [])
+
+
+def _pilot_dir() -> Path:
+    return Path(os.environ.get("VENDOR_PILOT_DIR", ".cache/vendor_pilot"))
+
+
+@pytest.mark.skipif(not (_pilot_dir() / "rescore_orgs.parquet").exists(),
+                    reason="pilot artifacts not on this machine; set VENDOR_PILOT_DIR")
+def test_combine_org_matches_the_phase_0_rescore_on_the_phase_2_sample():
+    """The 2,000 phase 2 orgs, from their stored Firecrawl pages, against the
+    combined text D2's rescore wrote on 2026-10-30 (the text D3 was measured on).
+
+    The artifact predates the for-sale lander rule (#251, 2026-11-03). That
+    rule turns 18 home pages from ok to parked, which takes them out of their
+    org's text; every other org must match byte for byte.
+    """
+    import pandas as pd
+
+    d = _pilot_dir()
+    pages = pd.read_parquet(d / "firecrawl_e2e_pages.parquet",
+                            columns=["cleaned_home_key", "subpath", "page_type", "success", "http_status", "text"])
+    rescored = pd.read_parquet(d / "rescore_orgs.parquet",
+                               columns=["cleaned_home_key", "home_url", "combined_text", "verdict", "subpaths"])
+    by_org = {k: g for k, g in pages.groupby("cleaned_home_key")}
+    different, parked_since = [], []
+    for org in rescored.itertuples(index=False):
+        rows = by_org.get(org.cleaned_home_key)
+        stored = [] if rows is None else [
+            mc.StoredPage(r.subpath, r.page_type, r.http_status if r.success else None, r.text)
+            for r in rows.itertuples(index=False)]
+        combined = mc.combine_org(org.home_url, stored)
+        result = combined.org
+        if (result.text.encode(), result.verdict, result.subpaths) == (
+                org.combined_text.encode(), org.verdict, json.loads(org.subpaths)):
+            continue
+        home = next((p for p in combined.pages if p.is_home), None)
+        if org.verdict == "ok" and home is not None and home.verdict == "parked":
+            parked_since.append(org.cleaned_home_key)
+        else:
+            different.append(org.cleaned_home_key)
+    assert len(rescored) == 2000
+    assert not different, f"{len(different)} of {len(rescored)} orgs differ, first: {different[:5]}"
+    assert len(parked_since) == 18
+
+
 _DETERMINISM_SCRIPT = """
 import hashlib, json, sys
 from pathlib import Path
@@ -324,11 +433,9 @@ from vdl_tools.scrape_enrich.scraper.firecrawl import markdown_clean as mc
 fixtures = Path(sys.argv[1])
 cases = json.loads((fixtures / "cases.json").read_text())
 case = cases["orgs"][0]
-pages = []
-for p in case["pages"]:
-    page = mc.page_text((fixtures / (p["file"] + ".md")).read_text())
-    pages.append(mc.OrgPage(p["subpath"], p["is_home"], page.verdict, page.text))
-print(hashlib.sha256(mc.org_text(case["source"], pages).text.encode()).hexdigest())
+pages = [mc.StoredPage(p["subpath"], "index" if p["is_home"] else "page", 200,
+                       (fixtures / (p["file"] + ".md")).read_text()) for p in case["pages"]]
+print(hashlib.sha256(mc.combine_org(case["source"], pages).org.text.encode()).hexdigest())
 """
 
 
@@ -351,6 +458,12 @@ def _cases() -> dict:
     return json.loads((FIXTURES / "cases.json").read_text())
 
 
+def _stored_pages(case: dict) -> list:
+    """An org case's fixture pages as the rows the pipeline stores, all 200."""
+    return [mc.StoredPage(p["subpath"], mc.HOME_PAGE_TYPE if p["is_home"] else "page", 200,
+                          (FIXTURES / f"{p['file']}.md").read_text()) for p in case["pages"]]
+
+
 def _golden_outputs(cases: dict) -> dict[str, tuple[str, str]]:
     """name -> (verdict, text) for every page case and org case."""
     out = {}
@@ -358,11 +471,7 @@ def _golden_outputs(cases: dict) -> dict[str, tuple[str, str]]:
         page = mc.page_text((FIXTURES / f"{case['name']}.md").read_text())
         out[case["name"]] = (page.verdict, page.text)
     for case in cases["orgs"]:
-        pages = []
-        for p in case["pages"]:
-            page = mc.page_text((FIXTURES / f"{p['file']}.md").read_text())
-            pages.append(mc.OrgPage(p["subpath"], p["is_home"], page.verdict, page.text))
-        org = mc.org_text(case["source"], pages)
+        org = mc.combine_org(case["source"], _stored_pages(case)).org
         out[f"org_{case['name']}"] = (org.verdict, org.text)
     return out
 
