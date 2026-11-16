@@ -79,6 +79,7 @@ import subprocess
 import uuid
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from urllib.parse import urljoin
 
 import pandas as pd
@@ -133,8 +134,10 @@ def _utcnow() -> dt.datetime:
 
 
 def _git_sha() -> str | None:
+    """The vdl-tools commit that is running, whatever directory the caller started in."""
     try:
-        return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL).strip()
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL,
+                                       cwd=Path(__file__).resolve().parent).strip()
     except Exception:  # noqa: BLE001 - lineage only
         return None
 
@@ -265,7 +268,9 @@ def _write_page(session, existing: WebPagesScrapedV2 | None, *, key: str, home_u
                 page_type: str, result: ScrapeResult, now: dt.datetime) -> tuple[WebPagesScrapedV2, bool]:
     """Apply one attempt to a page row. Returns the row and whether its text
     columns now hold this attempt."""
-    page = mc.page_text(result.markdown) if result.ok else None
+    # Postgres text columns reject NUL; the in-house scraper replaces it the same way.
+    markdown = (result.markdown or "").replace("\x00", "\uFFFD")
+    page = mc.page_text(markdown) if result.ok else None
     outcome = attempt_result(result, page.verdict if page else None)
     old_good = has_good_text(existing)
     row = existing
@@ -275,14 +280,14 @@ def _write_page(session, existing: WebPagesScrapedV2 | None, *, key: str, home_u
         session.add(row)
     replaces = outcome == OK or not old_good
     if replaces:
-        if old_good and existing.markdown != result.markdown:
+        if old_good and existing.markdown != markdown:
             _keep_history(session, existing)
         row.run_id = result.run_id
         row.source_url = result.source_url
         row.final_url = result.final_url
         row.final_host = result.final_host or None
         row.response_status_code = result.status_code
-        row.markdown = result.markdown or None
+        row.markdown = markdown or None
         row.parsed_html = page.text if page else ""
         row.extractor = mc.EXTRACTOR if page else None
         row.text_quality = page.verdict if page else None
@@ -325,7 +330,12 @@ def _write_org(session, fetched: _OrgFetch, parsed: WebPagesParsedV2 | None, hom
     parsed.last_attempt_at = now
     parsed.last_attempt_result = home.last_attempt_result
 
-    if not (result.ok and home_replaced):
+    # An org can hold good text although its home page never did (a splash page
+    # carried by its subpages). A 2xx home page that is a wall, parked or garbled
+    # must not rebuild that text from itself.
+    junk_over_text = (result.ok and home.text_quality in mc.JUNK_VERDICTS and bool(parsed.combined_text)
+                      and parsed.text_quality in mc.COMBINABLE_VERDICTS)
+    if not (result.ok and home_replaced) or junk_over_text:
         # The home page gave nothing new to build on. Text the org already has stays.
         if result.failure_reason != VENDOR_ERROR:
             parsed.num_errors = (parsed.num_errors or 0) + 1
@@ -357,7 +367,7 @@ def _write_org(session, fetched: _OrgFetch, parsed: WebPagesParsedV2 | None, hom
     )
     # Every row in the text carries the cleaner version the text was built with,
     # including rows kept from an earlier run.
-    for row, page in zip(in_text, combined.pages):
+    for row, page in zip(in_text, combined.pages, strict=True):
         row.parsed_html, row.text_quality, row.extractor = page.text, page.verdict, combined.org.extractor
 
     previous_keys = set(parsed.source_keys or [])
@@ -509,7 +519,9 @@ async def scrape_websites_firecrawl_async(
         had_good_home = {key for key, home in homes.items() if has_good_text(home)}
 
         if due:
-            run_id = (client.run_id if client is not None else None) or f"fc-{start:%Y%m%dT%H%M%S}-{uuid.uuid4().hex[:8]}"
+            run_id = client.run_id if client is not None else None
+            if not run_id or session.get(ScrapeRun, run_id) is not None:   # a client used for a second run
+                run_id = f"fc-{start:%Y%m%dT%H%M%S}-{uuid.uuid4().hex[:8]}"
             if client is None:
                 client = FirecrawlClient.from_config(credit_ceiling=credit_ceiling, run_id=run_id)
             else:
@@ -525,6 +537,9 @@ async def scrape_websites_firecrawl_async(
                 await _run(session, client, due, frame, sites, had_good_home, n_per_commit=n_per_commit, clock=clock,
                            prompt_str=prompt_str, max_tokens=max_tokens, max_per_subpath=max_per_subpath,
                            single_page_websites=single_page_websites)
+            except Exception:
+                session.rollback()   # or the run row below cannot be read, and its error hides this one
+                raise
             finally:
                 run = session.get(ScrapeRun, run_id)
                 run.ended_at = clock()
@@ -564,22 +579,27 @@ async def _run(session, client: FirecrawlClient, due: list[_Org], frame: dict, s
 
     async with client:
         written = 0
-        for next_done in asyncio.as_completed([asyncio.ensure_future(one(o)) for o in due]):
-            fetched = await next_done
-            if not isinstance(fetched, _OrgFetch):
-                continue   # cut off by a stop, or failed: nothing is written and the org stays due
-            org = fetched.org
-            parsed, home = _write_org(session, fetched, session.get(WebPagesParsedV2, org.key),
-                                      session.get(WebPagesScrapedV2, org.key), now=clock(),
-                                      prompt_str=prompt_str, max_tokens=max_tokens)
-            frame[org.key] = _frame_row(org, parsed.to_dict(), home.failure_reason)
-            sites[org.key] = _site(home)
-            written += 1
-            if written % n_per_commit == 0:
-                session.commit()
-                session.expunge_all()
-        session.commit()
-        session.expunge_all()
+        tasks = [asyncio.ensure_future(one(o)) for o in due]
+        try:
+            for next_done in asyncio.as_completed(tasks):
+                fetched = await next_done
+                if not isinstance(fetched, _OrgFetch):
+                    continue   # cut off by a stop, or failed: nothing is written and the org stays due
+                org = fetched.org
+                parsed, home = _write_org(session, fetched, session.get(WebPagesParsedV2, org.key),
+                                          session.get(WebPagesScrapedV2, org.key), now=clock(),
+                                          prompt_str=prompt_str, max_tokens=max_tokens)
+                frame[org.key] = _frame_row(org, parsed.to_dict(), home.failure_reason)
+                sites[org.key] = _site(home)
+                written += 1
+                if written % n_per_commit == 0:
+                    session.commit()
+                    session.expunge_all()
+            session.commit()
+            session.expunge_all()
+        finally:
+            for task in tasks:
+                task.cancel()   # a write error must not leave fetches spending credits
 
 
 def scrape_websites_firecrawl(urls: Iterable[str], **kwargs) -> pd.DataFrame | DryRunReport:

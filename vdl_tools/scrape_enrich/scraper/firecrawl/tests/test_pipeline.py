@@ -544,3 +544,63 @@ def test_sync_wrapper_and_async_form_agree(db):
     frame = run(pl.scrape_websites_firecrawl_async([HOME], session=db.Session(), client=client,
                                                    clock=lambda: T0, credit_ceiling=10))
     assert frame.loc[0, "text_quality"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Review fixes (PR 259)
+# ---------------------------------------------------------------------------
+
+WALL = "Checking the site connection security. Verify you are human."
+
+
+def test_a_walled_home_page_does_not_overwrite_text_carried_by_the_subpages(db):
+    """The home page never had good text (a splash page); the org's text is its subpages'."""
+    vendor = standard_site(FakeFirecrawl()).script(HOME, page(markdown="", links=LINKS, url=HOME + "/", source=HOME))
+    scrape(db, vendor)
+    before = db.org()
+    assert db.page(KEY_HOME).text_quality == "empty" and before.text_quality == "ok"
+
+    wall = FakeFirecrawl().script(HOME, page(markdown=WALL, links=LINKS))
+    frame = refresh(db, wall)
+    assert requested(wall) == [HOME]
+    org = db.org()
+    assert (org.combined_text, org.text_quality, org.source_keys) == (
+        before.combined_text, "ok", before.source_keys)
+    assert org.last_attempt_result == "unknown" and frame.loc[0, "combined_text"] == before.combined_text
+    assert db.page(f"{KEY_HOME}/about").superseded_at is None
+
+
+def test_nul_characters_are_replaced_before_the_write(db):
+    scrape(db, site(FakeFirecrawl(), about=md("about") + " bad\x00byte"))
+    stored = db.page(f"{KEY_HOME}/about").markdown
+    assert "\x00" not in stored and "bad�byte" in stored
+    assert "\x00" not in db.org().combined_text
+
+
+def test_git_sha_is_this_package_s_commit_whatever_the_working_directory(tmp_path, monkeypatch):
+    import subprocess
+    from pathlib import Path
+
+    here = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, cwd=Path(pl.__file__).parent).strip()
+    monkeypatch.chdir(tmp_path)
+    assert pl._git_sha() == here
+
+
+def test_a_write_error_surfaces_as_itself_and_the_run_row_is_closed(db, monkeypatch):
+    def boom(*args, **kwargs):
+        raise RuntimeError("write failed")
+
+    monkeypatch.setattr(pl, "_write_org", boom)
+    with pytest.raises(RuntimeError, match="write failed"):
+        scrape(db, standard_site(FakeFirecrawl()))
+    (run_row,) = db.all(ScrapeRun)
+    assert run_row.ended_at == T0 and db.all(WebPagesParsedV2) == []
+
+
+def test_a_client_used_for_a_second_run_gets_a_new_run_id(db):
+    vendor = site(site(FakeFirecrawl(), home="https://a.example.org", links=()), home="https://b.example.org", links=())
+    client = FirecrawlClient(KEY, transport=httpx.MockTransport(vendor.handler), sleep=SleepRecorder(),
+                             concurrency=5, rpm=None, run_id="fixed")
+    for url in ("https://a.example.org", "https://b.example.org"):
+        pl.scrape_websites_firecrawl([url], session=db.Session(), client=client, clock=lambda: T0, credit_ceiling=100)
+    assert len({r.run_id for r in db.all(ScrapeRun)}) == 2
