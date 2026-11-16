@@ -604,3 +604,20 @@ def test_a_client_used_for_a_second_run_gets_a_new_run_id(db):
     for url in ("https://a.example.org", "https://b.example.org"):
         pl.scrape_websites_firecrawl([url], session=db.Session(), client=client, clock=lambda: T0, credit_ceiling=100)
     assert len({r.run_id for r in db.all(ScrapeRun)}) == 2
+
+
+def test_a_subpage_vendor_error_is_retried_once_in_the_same_run(db):
+    """The org is due by its home page alone, so a timed-out pick is retried now or not at all."""
+    timeout = api_error(408, code="SCRAPE_TIMEOUT")
+    about, team = f"{HOME}/about", f"{HOME}/team"
+    vendor = site(FakeFirecrawl(), mission=md("mission"))
+    vendor.script(about, timeout, page(markdown=md("about"), url=about, source=about, links=()))
+    vendor.script(team, timeout, timeout)
+    scrape(db, vendor)
+
+    # Only the two failed picks are sent again, once each.
+    assert requested(vendor) == sorted([HOME, about, about, team, team, f"{HOME}/mission"])
+    text = db.org().combined_text
+    assert "about sentence" in text and "team sentence" not in text
+    assert db.page(f"{KEY_HOME}/about").last_attempt_result == "ok"
+    assert db.page(f"{KEY_HOME}/team").failure_reason == "vendor_error"

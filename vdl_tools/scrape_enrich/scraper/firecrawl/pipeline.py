@@ -54,7 +54,9 @@ Subpages follow the home page. The combined text is built from the home page
 and the subpages this run picked, never from every row under the home key. A
 picked page that is ``gone`` leaves the text; one that is ``unknown`` keeps
 its last good text in it; a page in the previous ``source_keys`` that is no
-longer picked gets ``superseded_at``. When the home page itself is not good
+longer picked gets ``superseded_at``. A pick that ends in a vendor error is
+fetched once more in the same run; if that fails too, the text is built
+without it (or with its last good text) until the org is next due. When the home page itself is not good
 and the org already has text, the org's text is left alone: ``gone`` marks
 it ``stale_reason = home_gone``, ``unknown`` changes nothing but the attempt
 columns.
@@ -242,6 +244,13 @@ async def _fetch_org(client: FirecrawlClient, org: _Org, *, had_good_home: bool,
         return fetched
     picks = pick_subpages(home, max_per_subpath)
     results = await client.scrape_many([url for _, url in picks], home_url=org.home_url, page_type=PAGE)
+    # One more try, in this run, for picks that ended in a vendor error (mostly
+    # scrape timeouts, which the client does not retry). The org is due by its
+    # home page alone, so a pick that fails here is otherwise not revisited
+    # until the org's next refresh.
+    again = [url for _, url in picks if getattr(results[url], "failure_reason", None) == VENDOR_ERROR]
+    if again:
+        results.update(await client.scrape_many(again, home_url=org.home_url, page_type=PAGE))
     for subpath, url in picks:
         result = results[url]
         if isinstance(result, RunStopped):
