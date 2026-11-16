@@ -166,6 +166,7 @@ because `_format_scraped_sites` and the enrichment pipeline read `response_statu
 | `num_errors`, `fetched_at` | ours; see section 6 for what increments `num_errors`; `fetched_at` is the date of the stored text | |
 | `last_attempt_at`, `last_attempt_result`, `attempts_since_fetch` | the newest attempt, kept apart from the stored text; result is `ok`, `gone` (404, 410, dead host), `unknown` (blocked, 429, 5xx, vendor error) or `invalid_url` (section 6) | |
 | `superseded_at` | set when a newer home fetch no longer picks this page (section 6, subpages follow the home page) | |
+| `refetch_requested_at` | home rows: set by `delete_cached_urls(backend="firecrawl")` to ask for a fresh fetch at any age; cleared by the next attempt that reaches the site, so a blocked re-fetch keeps the text. `purge=True` deletes instead, for text that is itself wrong | |
 
 `web_pages_parsed_v2`: `cleaned_home_key` (PK), `home_url`, `run_id`, `combined_text`,
 `source_keys` (the page rows it was built from), `extractor`, `prompt_token_budget`,
@@ -582,7 +583,8 @@ or defers to the Phase 5 gate; the PR says which.
 ORM models for `scrape_runs`, `WebPagesScrapedV2`, `WebPagesParsedV2`, `OrgSiteKey` and
 `WebPagesHistoryV2` (section 4); Alembic migration with the `drop_table` lines for `microapp_configs`, `microapp_domains` and
 `grantor_recipient_labeled_set` stripped; `delete_cached_urls(backend=...)` reaching the new
-tables with the existing tests run against both.
+tables with the existing tests run against both; on the Firecrawl tables it marks the home row
+for a re-fetch and deletes only with `purge=True`.
 
 ### Phase 4: per-org pipeline and id lookup (5 to 6 days)
 
