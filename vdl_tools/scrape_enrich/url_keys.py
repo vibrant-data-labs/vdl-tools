@@ -123,24 +123,52 @@ BAD_URL_PATH_CHARS = '/?=&#@'
 
 
 def check_is_single_page_websites(url: str, single_page_websites: list = []):
+    """Whether a URL is on a host that gets no subpages.
+
+    Parameters
+    ----------
+    url : str
+        The URL to check.
+    single_page_websites : list of str, default []
+        Hosts to treat this way on top of ``SINGLE_PAGE_WEBSITES``.
+
+    Returns
+    -------
+    bool
+        True when any of the hosts appears in the lowercased URL.
+    """
     return len([x for x in [*SINGLE_PAGE_WEBSITES, *single_page_websites] if x in url.lower()]) > 0
 
 
 def clean_website_path(value: str) -> str:
-    '''
-    Clean the website subpath: the part of a page's cache key after the home key
+    """Clean a website subpath into the part of a page's cache key after the home key.
 
-    /pages/contact -> pages_contact
-    /pages/contact/ -> pages_contact
-    /about-us -> about-us
-    /page?page_title=about-us -> page_page_title_about-us
-    '''
+    Parameters
+    ----------
+    value : str
+        The subpath, with or without a leading or trailing slash.
+
+    Returns
+    -------
+    str or None
+        The cleaned path, or None when the value contains ``www`` or cannot
+        be cleaned.
+
+    Examples
+    --------
+    ``/pages/contact`` -> ``pages_contact``
+
+    ``/pages/contact/`` -> ``pages_contact``
+
+    ``/about-us`` -> ``about-us``
+
+    ``/page?page_title=about-us`` -> ``page_page_title_about-us``
+    """
     if 'www' in value:
         logger.warning(f"Invalid value because path contains 'www': {value}")
         return None
     try:
-        path = value.split(
-            '/', maxsplit=1)[1] if value.startswith('/') else value
+        path = value.split('/', maxsplit=1)[1] if value.startswith('/') else value
         path = path[:-1] if path.endswith('/') else path
 
         for c in BAD_URL_PATH_CHARS:

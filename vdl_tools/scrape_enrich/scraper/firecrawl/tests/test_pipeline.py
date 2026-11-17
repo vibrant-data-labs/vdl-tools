@@ -36,13 +36,20 @@ from vdl_tools.shared_tools.database_cache.database_models.web_scraping import (
 HOME = "https://www.example.org"
 KEY_HOME = "www.example.org"
 T0 = dt.datetime(2026, 11, 1, 12, 0, 0)
-LINKS = (f"{HOME}/about", f"{HOME}/team", f"{HOME}/mission", f"{HOME}/privacy", "https://elsewhere.com/about")
+LINKS = (
+    f"{HOME}/about",
+    f"{HOME}/team",
+    f"{HOME}/mission",
+    f"{HOME}/privacy",
+    "https://elsewhere.com/about",
+)
 
 
 def md(topic: str) -> str:
     """A page long enough to be ``ok``, with text no other topic shares."""
     return f"# {topic}\n\n" + " ".join(
-        f"{topic} sentence {i} about restoring the {topic} river basin wetlands." for i in range(12))
+        f"{topic} sentence {i} about restoring the {topic} river basin wetlands." for i in range(12)
+    )
 
 
 def site(vendor: FakeFirecrawl, home=HOME, links=LINKS, **pages) -> FakeFirecrawl:
@@ -50,7 +57,12 @@ def site(vendor: FakeFirecrawl, home=HOME, links=LINKS, **pages) -> FakeFirecraw
     vendor.script(home, page(markdown=md("home"), links=links, url=home + "/", source=home))
     for name, answer in pages.items():
         url = f"{home}/{name}"
-        vendor.script(url, answer if not isinstance(answer, str) else page(markdown=answer, url=url, source=url, links=()))
+        vendor.script(
+            url,
+            answer
+            if not isinstance(answer, str)
+            else page(markdown=answer, url=url, source=url, links=()),
+        )
     return vendor
 
 
@@ -60,8 +72,18 @@ def standard_site(vendor: FakeFirecrawl) -> FakeFirecrawl:
 
 class Db:
     def __init__(self):
-        engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-        for model in (ScrapeRun, WebPagesScrapedV2, WebPagesParsedV2, WebPagesHistoryV2, OrgSiteKey):
+        engine = create_engine(
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        for model in (
+            ScrapeRun,
+            WebPagesScrapedV2,
+            WebPagesParsedV2,
+            WebPagesHistoryV2,
+            OrgSiteKey,
+        ):
             model.__table__.create(engine)
         self.Session = sessionmaker(bind=engine)
 
@@ -81,10 +103,21 @@ def db():
 
 
 def scrape(db, vendor, urls=(HOME,), *, now=T0, credit_ceiling=1000, **kw):
-    client = FirecrawlClient(KEY, transport=httpx.MockTransport(vendor.handler), sleep=SleepRecorder(),
-                             concurrency=5, rpm=None)
-    return pl.scrape_websites_firecrawl(list(urls), session=db.Session(), client=client, clock=lambda: now,
-                                        credit_ceiling=credit_ceiling, **kw)
+    client = FirecrawlClient(
+        KEY,
+        transport=httpx.MockTransport(vendor.handler),
+        sleep=SleepRecorder(),
+        concurrency=5,
+        rpm=None,
+    )
+    return pl.scrape_websites_firecrawl(
+        list(urls),
+        session=db.Session(),
+        client=client,
+        clock=lambda: now,
+        credit_ceiling=credit_ceiling,
+        **kw,
+    )
 
 
 def requested(vendor) -> list[str]:
@@ -94,6 +127,7 @@ def requested(vendor) -> list[str]:
 # ---------------------------------------------------------------------------
 # A first run
 # ---------------------------------------------------------------------------
+
 
 def test_first_run_fetches_home_and_picks_and_writes_every_table(db):
     vendor = standard_site(FakeFirecrawl())
@@ -115,29 +149,47 @@ def test_first_run_fetches_home_and_picks_and_writes_every_table(db):
     assert org.text_quality == "ok" and org.num_errors == 0 and org.combined_at == T0
     assert org.extractor == mc.EXTRACTOR and org.prompt_token_budget == mc.ORG_TOKEN_CAP
     assert org.source_keys[0] == KEY_HOME
-    assert sorted(org.source_keys[1:]) == [f"{KEY_HOME}/about", f"{KEY_HOME}/mission", f"{KEY_HOME}/team"]
+    assert sorted(org.source_keys[1:]) == [
+        f"{KEY_HOME}/about",
+        f"{KEY_HOME}/mission",
+        f"{KEY_HOME}/team",
+    ]
     assert org.combined_text.startswith(f"URL: {HOME}/\nTEXT: ")
     for topic in ("home", "about", "team", "mission"):
         assert f"{topic} sentence 3" in org.combined_text
 
     (run_row,) = db.all(ScrapeRun)
     assert run_row.run_id == home.run_id == org.run_id
-    assert run_row.credits_used == 4 and run_row.credit_ceiling == 1000 and run_row.stop_reason is None
+    assert (
+        run_row.credits_used == 4 and run_row.credit_ceiling == 1000 and run_row.stop_reason is None
+    )
     assert run_row.request_profile["onlyMainContent"] is False
-    assert (run_row.started_at, run_row.extractor_version, run_row.credits_before) == (T0, mc.EXTRACTOR, 1000)
+    assert (run_row.started_at, run_row.extractor_version, run_row.credits_before) == (
+        T0,
+        mc.EXTRACTOR,
+        1000,
+    )
 
     # The frame scrape_websites_psql(return_combined_res=True) returns.
     assert len(frame) == 1
     assert frame.loc[0, "home_url"] == HOME and frame.loc[0, "combined_text"] == org.combined_text
-    assert {"cleaned_home_key", "num_errors", "text_quality", "last_attempt_result", "failure_reason"} <= set(frame.columns)
+    assert {
+        "cleaned_home_key",
+        "num_errors",
+        "text_quality",
+        "last_attempt_result",
+        "failure_reason",
+    } <= set(frame.columns)
 
 
 def test_combined_text_is_what_combine_org_gives_for_the_stored_rows(db):
     scrape(db, standard_site(FakeFirecrawl()))
     org = db.org()
     rows = [db.page(k) for k in org.source_keys]
-    expected = mc.combine_org(HOME, [mc.StoredPage(r.subpath, r.page_type, r.response_status_code, r.markdown)
-                                     for r in rows]).org
+    expected = mc.combine_org(
+        HOME,
+        [mc.StoredPage(r.subpath, r.page_type, r.response_status_code, r.markdown) for r in rows],
+    ).org
     assert org.combined_text.encode() == expected.text.encode()
 
 
@@ -153,12 +205,19 @@ def test_second_run_is_served_from_the_cache_without_a_request_or_a_run_row(db):
 def test_picks_are_built_on_the_host_the_home_page_was_served_from(db):
     new = "https://www.newname.org"
     vendor = FakeFirecrawl()
-    vendor.script(HOME, page(markdown=md("home"), url=new + "/", source=HOME,
-                             links=(f"{new}/about", f"{HOME}/team")))
+    vendor.script(
+        HOME,
+        page(
+            markdown=md("home"),
+            url=new + "/",
+            source=HOME,
+            links=(f"{new}/about", f"{HOME}/team"),
+        ),
+    )
     vendor.script(f"{new}/about", page(markdown=md("about"), url=f"{new}/about", links=()))
     scrape(db, vendor)
     assert requested(vendor) == [HOME, f"{new}/about"]
-    about = db.page(f"{KEY_HOME}/about")          # keyed under the home we asked for
+    about = db.page(f"{KEY_HOME}/about")  # keyed under the home we asked for
     assert about.home_url == HOME and about.final_host == "newname.org"
     assert db.page(KEY_HOME).final_host == "newname.org"
 
@@ -183,16 +242,34 @@ def test_urls_are_keyed_like_the_in_house_cache_and_blanks_are_dropped(db):
 # Failures
 # ---------------------------------------------------------------------------
 
+
 def test_home_failure_fetches_no_subpages_and_returns_no_text(db):
-    vendor = FakeFirecrawl().script(HOME, page(404, markdown="# Not found\n\n" + md("lost"), links=LINKS))
+    vendor = FakeFirecrawl().script(
+        HOME,
+        page(404, markdown="# Not found\n\n" + md("lost"), links=LINKS),
+    )
     frame = scrape(db, vendor)
     assert requested(vendor) == [HOME]
     home = db.page(KEY_HOME)
-    assert (home.response_status_code, home.failure_reason, home.last_attempt_result) == (404, "http_error", "gone")
-    assert (home.num_errors, home.fetched_at, home.parsed_html, home.text_quality) == (1, None, "", None)
-    assert home.markdown.startswith("# Not found")        # kept on non-2xx rows too
+    assert (home.response_status_code, home.failure_reason, home.last_attempt_result) == (
+        404,
+        "http_error",
+        "gone",
+    )
+    assert (home.num_errors, home.fetched_at, home.parsed_html, home.text_quality) == (
+        1,
+        None,
+        "",
+        None,
+    )
+    assert home.markdown.startswith("# Not found")  # kept on non-2xx rows too
     org = db.org()
-    assert (org.combined_text, org.text_quality, org.num_errors, org.last_attempt_result) == (None, "dead", 1, "gone")
+    assert (org.combined_text, org.text_quality, org.num_errors, org.last_attempt_result) == (
+        None,
+        "dead",
+        1,
+        "gone",
+    )
     assert frame.loc[0, "combined_text"] is None and frame.loc[0, "failure_reason"] == "http_error"
 
 
@@ -200,9 +277,15 @@ def test_vendor_error_leaves_num_errors_at_zero_and_is_retried_next_run(db):
     vendor = FakeFirecrawl().script(HOME, api_error(408, code="SCRAPE_TIMEOUT"))
     frame = scrape(db, vendor, max_errors=1)
     home, org = db.page(KEY_HOME), db.org()
-    assert (home.failure_reason, home.num_errors, home.last_attempt_result) == ("vendor_error", 0, "unknown")
+    assert (home.failure_reason, home.num_errors, home.last_attempt_result) == (
+        "vendor_error",
+        0,
+        "unknown",
+    )
     assert (org.num_errors, org.combined_text) == (0, None)
-    assert frame.loc[0, "failure_reason"] == "vendor_error" and frame.loc[0, "combined_text"] is None
+    assert (
+        frame.loc[0, "failure_reason"] == "vendor_error" and frame.loc[0, "combined_text"] is None,
+    )
 
     # Even under the climate caller's max_errors=1, the next run tries again.
     retry = standard_site(FakeFirecrawl())
@@ -212,7 +295,10 @@ def test_vendor_error_leaves_num_errors_at_zero_and_is_retried_next_run(db):
 
 def test_a_target_failure_under_max_errors_one_is_not_retried_until_the_window_passes(db):
     scrape(db, FakeFirecrawl().script(HOME, page(403, markdown="Forbidden")), max_errors=1)
-    assert (db.page(KEY_HOME).failure_reason, db.page(KEY_HOME).last_attempt_result) == ("blocked", "unknown")
+    assert (db.page(KEY_HOME).failure_reason, db.page(KEY_HOME).last_attempt_result) == (
+        "blocked",
+        "unknown",
+    )
 
     soon = standard_site(FakeFirecrawl())
     scrape(db, soon, max_errors=1, now=T0 + dt.timedelta(days=30))
@@ -221,7 +307,11 @@ def test_a_target_failure_under_max_errors_one_is_not_retried_until_the_window_p
     later = standard_site(FakeFirecrawl())
     scrape(db, later, max_errors=1, now=T0 + dt.timedelta(days=91))
     assert HOME in requested(later)
-    assert (db.org().text_quality, db.org().num_errors, db.page(KEY_HOME).num_errors) == ("ok", 0, 0)
+    assert (db.org().text_quality, db.org().num_errors, db.page(KEY_HOME).num_errors) == (
+        "ok",
+        0,
+        0,
+    )
 
 
 def test_a_target_failure_is_retried_each_run_until_max_errors(db):
@@ -240,7 +330,10 @@ def test_an_invalid_url_costs_nothing_and_is_never_retried(db):
     frame = scrape(db, vendor, urls=["facebook.com/some-org"])
     assert vendor.requests == []
     key = "facebook.com_some-org"
-    assert (db.page(key).failure_reason, db.page(key).last_attempt_result) == ("invalid_url", "invalid_url")
+    assert (db.page(key).failure_reason, db.page(key).last_attempt_result) == (
+        "invalid_url",
+        "invalid_url",
+    )
     assert frame.loc[0, "combined_text"] is None
     scrape(db, vendor, urls=["facebook.com/some-org"], now=T0 + dt.timedelta(days=400))
     assert vendor.requests == []
@@ -250,9 +343,15 @@ def test_an_invalid_url_costs_nothing_and_is_never_retried(db):
 # Verdicts
 # ---------------------------------------------------------------------------
 
+
 def test_a_parked_home_page_makes_the_org_parked_and_buys_no_subpages(db):
-    vendor = FakeFirecrawl().script(HOME, page(markdown="# example.org\n\nThis domain is for sale. Buy this domain today.",
-                                               links=LINKS))
+    vendor = FakeFirecrawl().script(
+        HOME,
+        page(
+            markdown="# example.org\n\nThis domain is for sale. Buy this domain today.",
+            links=LINKS,
+        ),
+    )
     frame = scrape(db, vendor)
     assert requested(vendor) == [HOME]
     home, org = db.page(KEY_HOME), db.org()
@@ -262,9 +361,12 @@ def test_a_parked_home_page_makes_the_org_parked_and_buys_no_subpages(db):
 
 
 def test_page_and_org_verdicts_are_stored_and_a_junk_subpage_stays_out_of_the_text(db):
-    vendor = site(FakeFirecrawl(), about=md("about"),
-                  team="Checking the site connection security. Verify you are human.",
-                  mission="Our mission is clean rivers for every town in the basin, and we work on it every day.")
+    vendor = site(
+        FakeFirecrawl(),
+        about=md("about"),
+        team="Checking the site connection security. Verify you are human.",
+        mission="Our mission is clean rivers for every town in the basin, and we work on it every day.",
+    )
     scrape(db, vendor)
     assert db.page(f"{KEY_HOME}/team").text_quality == "blocked"
     assert db.page(f"{KEY_HOME}/mission").text_quality == "thin"
@@ -278,6 +380,7 @@ def test_page_and_org_verdicts_are_stored_and_a_junk_subpage_stays_out_of_the_te
 # Refresh: last known good, subpages follow the home page
 # ---------------------------------------------------------------------------
 
+
 def refresh(db, vendor, days=100, **kw):
     return scrape(db, vendor, now=T0 + dt.timedelta(days=days), max_age_days=90, **kw)
 
@@ -290,10 +393,24 @@ def test_a_blocked_refetch_keeps_the_previous_text_and_records_the_attempt(db):
     frame = refresh(db, vendor)
     assert requested(vendor) == [HOME]
     home, org = db.page(KEY_HOME), db.org()
-    assert (home.markdown, home.response_status_code, home.text_quality, home.fetched_at) == (md("home"), 200, "ok", T0)
-    assert (home.last_attempt_result, home.failure_reason, home.attempts_since_fetch) == ("unknown", "blocked", 1)
+    assert (home.markdown, home.response_status_code, home.text_quality, home.fetched_at) == (
+        md("home"),
+        200,
+        "ok",
+        T0,
+    )
+    assert (home.last_attempt_result, home.failure_reason, home.attempts_since_fetch) == (
+        "unknown",
+        "blocked",
+        1,
+    )
     assert home.last_attempt_at == T0 + dt.timedelta(days=100) and home.num_errors == 1
-    assert (org.combined_text, org.text_quality, org.stale_reason, org.combined_at) == (before, "ok", None, T0)
+    assert (org.combined_text, org.text_quality, org.stale_reason, org.combined_at) == (
+        before,
+        "ok",
+        None,
+        T0,
+    )
     assert org.last_attempt_result == "unknown"
     assert frame.loc[0, "combined_text"] == before
     assert db.all(WebPagesHistoryV2) == []
@@ -313,7 +430,10 @@ def test_a_requested_refetch_is_due_at_any_age_and_a_blocked_one_keeps_the_text(
 
     scrape(db, standard_site(FakeFirecrawl()))
     before = db.org().combined_text
-    assert delete_cached_urls([HOME], session=db.Session(), backend="firecrawl")["refetch_marked"] == 1
+    assert (
+        delete_cached_urls([HOME], session=db.Session(), backend="firecrawl")["refetch_marked"]
+        == 1,
+    )
     assert db.page(KEY_HOME).refetch_requested_at is not None
 
     # A vendor error does not answer the request: it stands for the next run.
@@ -340,27 +460,41 @@ def test_a_gone_home_page_keeps_the_text_and_marks_it_stale(db):
     before = db.org().combined_text
     frame = refresh(db, FakeFirecrawl().script(HOME, page(404, markdown="Not found")))
     org = db.org()
-    assert (org.combined_text, org.stale_reason, org.last_attempt_result) == (before, "home_gone", "gone")
-    assert frame.loc[0, "combined_text"] == before      # the same text, so the summary cache still hits
+    assert (org.combined_text, org.stale_reason, org.last_attempt_result) == (
+        before,
+        "home_gone",
+        "gone",
+    )
+    assert frame.loc[0, "combined_text"] == before  # the same text, so the summary cache still hits
 
 
 def test_vanished_and_404_subpages_leave_the_text_and_a_blocked_one_stays(db):
     scrape(db, standard_site(FakeFirecrawl()))
 
     # Now: /mission is no longer linked, /about answers 404, /team is blocked.
-    vendor = site(FakeFirecrawl(), links=(f"{HOME}/about", f"{HOME}/team"),
-                  about=page(404, markdown="Not found"), team=page(403, markdown="Access denied"))
+    vendor = site(
+        FakeFirecrawl(),
+        links=(f"{HOME}/about", f"{HOME}/team"),
+        about=page(404, markdown="Not found"),
+        team=page(403, markdown="Access denied"),
+    )
     refresh(db, vendor)
     assert requested(vendor) == [HOME, f"{HOME}/about", f"{HOME}/team"]
 
     org = db.org()
     assert org.source_keys == [KEY_HOME, f"{KEY_HOME}/team"]
     assert "team sentence 3" in org.combined_text
-    assert "about sentence 3" not in org.combined_text and "mission sentence 3" not in org.combined_text
+    assert (
+        "about sentence 3" not in org.combined_text
+        and "mission sentence 3" not in org.combined_text
+    )
     assert org.text_quality == "ok" and org.stale_reason is None
 
     about, team, mission = (db.page(f"{KEY_HOME}/{p}") for p in ("about", "team", "mission"))
-    assert (about.last_attempt_result, about.markdown) == ("gone", md("about"))       # last good text kept
+    assert (about.last_attempt_result, about.markdown) == (
+        "gone",
+        md("about"),
+    )  # last good text kept
     assert (team.last_attempt_result, team.markdown, team.fetched_at) == ("unknown", md("team"), T0)
     assert mission.superseded_at == T0 + dt.timedelta(days=100)
     assert about.superseded_at is None and team.superseded_at is None
@@ -369,7 +503,12 @@ def test_vanished_and_404_subpages_leave_the_text_and_a_blocked_one_stays(db):
 def test_max_age_days_refetches_only_the_older_rows(db):
     old, young = "https://old.example.org", "https://young.example.org"
     scrape(db, site(FakeFirecrawl(), home=old, links=()), urls=[old], now=T0)
-    scrape(db, site(FakeFirecrawl(), home=young, links=()), urls=[young], now=T0 + dt.timedelta(days=60))
+    scrape(
+        db,
+        site(FakeFirecrawl(), home=young, links=()),
+        urls=[young],
+        now=T0 + dt.timedelta(days=60),
+    )
 
     vendor = site(site(FakeFirecrawl(), home=old, links=()), home=young, links=())
     scrape(db, vendor, urls=[old, young], now=T0 + dt.timedelta(days=100), max_age_days=90)
@@ -396,7 +535,12 @@ def test_a_replaced_text_goes_to_the_history_first_one_version_per_page(db):
     changed.script(HOME, page(markdown=md("renewed"), links=LINKS))
     refresh(db, changed)
     (kept,) = db.all(WebPagesHistoryV2)
-    assert (kept.cleaned_key, kept.fetched_at, kept.markdown, kept.run_id) == (KEY_HOME, T0, md("home"), first_run)
+    assert (kept.cleaned_key, kept.fetched_at, kept.markdown, kept.run_id) == (
+        KEY_HOME,
+        T0,
+        md("home"),
+        first_run,
+    )
     assert kept.text_quality == "ok" and "home sentence 3" in kept.parsed_html
     assert "renewed sentence 3" in db.org().combined_text
 
@@ -418,6 +562,7 @@ def test_a_successful_recombine_resets_num_errors(db):
 # Credits, stops, dry run
 # ---------------------------------------------------------------------------
 
+
 def test_a_run_refuses_to_start_without_a_credit_ceiling(db):
     vendor = standard_site(FakeFirecrawl())
     for ceiling in (None, 0):
@@ -429,8 +574,13 @@ def test_a_run_refuses_to_start_without_a_credit_ceiling(db):
 def test_dry_run_reports_what_is_due_and_fetches_and_writes_nothing(db):
     scrape(db, standard_site(FakeFirecrawl()))
     vendor = FakeFirecrawl(remaining=500)
-    report = scrape(db, vendor, urls=[HOME, "https://new-one.org", "https://new-two.org"], dry_run=True,
-                    credit_ceiling=None)
+    report = scrape(
+        db,
+        vendor,
+        urls=[HOME, "https://new-one.org", "https://new-two.org"],
+        dry_run=True,
+        credit_ceiling=None,
+    )
     assert vendor.requests == [] and vendor.balance_calls == 1
     assert (report.n_urls, report.n_cached, report.n_misses) == (3, 1, 2)
     assert report.estimated_credits == pytest.approx(2 * pl.CREDITS_PER_ORG)
@@ -439,13 +589,17 @@ def test_dry_run_reports_what_is_due_and_fetches_and_writes_nothing(db):
 
 
 def test_a_402_mid_org_writes_nothing_for_it_and_the_run_row_says_why(db):
-    vendor = site(FakeFirecrawl(), about=md("about"), team=api_error(402, error="Insufficient credits"),
-                  mission=md("mission"))
+    vendor = site(
+        FakeFirecrawl(),
+        about=md("about"),
+        team=api_error(402, error="Insufficient credits"),
+        mission=md("mission"),
+    )
     frame = scrape(db, vendor)
     assert db.all(WebPagesScrapedV2) == [] and db.all(WebPagesParsedV2) == []
     (run_row,) = db.all(ScrapeRun)
     assert "Insufficient credits" in run_row.stop_reason and run_row.ended_at == T0
-    assert run_row.credits_used >= 1                      # from client.stats, though no row was written
+    assert run_row.credits_used >= 1  # from client.stats, though no row was written
     assert frame.loc[0, "home_url"] == HOME and frame.loc[0, "combined_text"] is None
 
     # The org is due again on the next run.
@@ -459,10 +613,20 @@ def test_the_credit_ceiling_stops_the_run_and_finished_orgs_are_kept(db):
     vendor = FakeFirecrawl()
     for home in homes:
         site(vendor, home=home, links=())
-    client = FirecrawlClient(KEY, transport=httpx.MockTransport(vendor.handler), sleep=SleepRecorder(),
-                             concurrency=1, rpm=None)
-    frame = pl.scrape_websites_firecrawl(homes, session=db.Session(), client=client, clock=lambda: T0,
-                                         credit_ceiling=3)
+    client = FirecrawlClient(
+        KEY,
+        transport=httpx.MockTransport(vendor.handler),
+        sleep=SleepRecorder(),
+        concurrency=1,
+        rpm=None,
+    )
+    frame = pl.scrape_websites_firecrawl(
+        homes,
+        session=db.Session(),
+        client=client,
+        clock=lambda: T0,
+        credit_ceiling=3,
+    )
     assert len(vendor.requests) == 3 and len(db.all(WebPagesParsedV2)) == 3
     (run_row,) = db.all(ScrapeRun)
     assert "credit ceiling" in run_row.stop_reason and run_row.credits_used == 3
@@ -489,17 +653,30 @@ def test_one_org_failing_unexpectedly_does_not_end_the_run(db, monkeypatch):
 # org_site_keys
 # ---------------------------------------------------------------------------
 
+
 def test_org_ids_are_linked_to_the_site_fetched_for_them(db):
-    ids = {HOME: [("crunchbase", "8a1b"), ("ein", "941234567")], "https://never-scraped.org": [("nzi", "77")]}
+    ids = {
+        HOME: [("crunchbase", "8a1b"), ("ein", "941234567")],
+        "https://never-scraped.org": [("nzi", "77")],
+    }
     scrape(db, standard_site(FakeFirecrawl()), org_ids=ids)
     rows = {(r.id_type, r.id_value): r for r in db.all(OrgSiteKey)}
     assert set(rows) == {("crunchbase", "8a1b"), ("ein", "941234567")}
     link = rows[("ein", "941234567")]
-    assert (link.cleaned_home_key, link.final_host, link.source_url) == (KEY_HOME, "example.org", HOME)
+    assert (link.cleaned_home_key, link.final_host, link.source_url) == (
+        KEY_HOME,
+        "example.org",
+        HOME,
+    )
     assert link.first_seen == link.last_seen == T0 and link.run_id == db.org().run_id
 
     # Served from the cache later: last_seen moves, first_seen and the run that fetched it stay.
-    scrape(db, FakeFirecrawl(), org_ids={HOME: [("ein", "941234567")]}, now=T0 + dt.timedelta(days=5))
+    scrape(
+        db,
+        FakeFirecrawl(),
+        org_ids={HOME: [("ein", "941234567")]},
+        now=T0 + dt.timedelta(days=5),
+    )
     link = {(r.id_type, r.id_value): r for r in db.all(OrgSiteKey)}[("ein", "941234567")]
     assert (link.first_seen, link.last_seen) == (T0, T0 + dt.timedelta(days=5))
     assert link.run_id == db.org().run_id
@@ -509,30 +686,85 @@ def test_org_ids_are_linked_to_the_site_fetched_for_them(db):
 # is_due
 # ---------------------------------------------------------------------------
 
+
 def _row(**kw):
-    defaults = dict(last_attempt_result="ok", fetched_at=T0, last_attempt_at=T0, failure_reason=None,
-                    text_quality="ok", num_errors=0)
+    defaults = dict(
+        last_attempt_result="ok",
+        fetched_at=T0,
+        last_attempt_at=T0,
+        failure_reason=None,
+        text_quality="ok",
+        num_errors=0,
+    )
     return WebPagesScrapedV2(**{**defaults, **kw})
 
 
-@pytest.mark.parametrize("row,days,max_age,expected", [
-    (None, 0, None, True),
-    (_row(), 400, None, False),                                              # good, no age limit
-    (_row(), 80, 90, False),
-    (_row(refetch_requested_at=T0), 0, None, True),                          # a re-fetch was asked for
-    (_row(), 91, 90, True),
-    (_row(last_attempt_result="unknown", failure_reason="vendor_error"), 0, None, True),
-    (_row(last_attempt_result="invalid_url", failure_reason="invalid_url", fetched_at=None, text_quality=None,
-          num_errors=1), 400, 0, False),
-    (_row(last_attempt_result="gone", failure_reason="dead", fetched_at=None, text_quality=None, num_errors=1),
-     1, None, True),                                                         # no text, under max_errors
-    (_row(last_attempt_result="gone", failure_reason="dead", fetched_at=None, text_quality=None, num_errors=3),
-     1, None, False),                                                        # gave up, inside the window
-    (_row(last_attempt_result="gone", failure_reason="dead", fetched_at=None, text_quality=None, num_errors=3),
-     91, None, True),                                                        # the window passed
-    (_row(last_attempt_result="unknown", failure_reason="blocked", num_errors=1), 30, 0, False),   # has good text
-    (_row(last_attempt_result="unknown", failure_reason="blocked", num_errors=1), 91, 0, True),
-])
+@pytest.mark.parametrize(
+    "row,days,max_age,expected",
+    [
+        (None, 0, None, True),
+        (_row(), 400, None, False),  # good, no age limit
+        (_row(), 80, 90, False),
+        (_row(refetch_requested_at=T0), 0, None, True),  # a re-fetch was asked for
+        (_row(), 91, 90, True),
+        (_row(last_attempt_result="unknown", failure_reason="vendor_error"), 0, None, True),
+        (
+            _row(
+                last_attempt_result="invalid_url",
+                failure_reason="invalid_url",
+                fetched_at=None,
+                text_quality=None,
+                num_errors=1,
+            ),
+            400,
+            0,
+            False,
+        ),
+        (
+            _row(
+                last_attempt_result="gone",
+                failure_reason="dead",
+                fetched_at=None,
+                text_quality=None,
+                num_errors=1,
+            ),
+            1,
+            None,
+            True,
+        ),  # no text, under max_errors
+        (
+            _row(
+                last_attempt_result="gone",
+                failure_reason="dead",
+                fetched_at=None,
+                text_quality=None,
+                num_errors=3,
+            ),
+            1,
+            None,
+            False,
+        ),  # gave up, inside the window
+        (
+            _row(
+                last_attempt_result="gone",
+                failure_reason="dead",
+                fetched_at=None,
+                text_quality=None,
+                num_errors=3,
+            ),
+            91,
+            None,
+            True,
+        ),  # the window passed
+        (
+            _row(last_attempt_result="unknown", failure_reason="blocked", num_errors=1),
+            30,
+            0,
+            False,
+        ),  # has good text
+        (_row(last_attempt_result="unknown", failure_reason="blocked", num_errors=1), 91, 0, True),
+    ],
+)
 def test_is_due(row, days, max_age, expected):
     now = T0 + dt.timedelta(days=days)
     assert pl.is_due(row, now, max_age, retry_failed_after_days=90, max_errors=3) is expected
@@ -540,9 +772,21 @@ def test_is_due(row, days, max_age, expected):
 
 def test_sync_wrapper_and_async_form_agree(db):
     vendor = standard_site(FakeFirecrawl())
-    client = FirecrawlClient(KEY, transport=httpx.MockTransport(vendor.handler), sleep=SleepRecorder(), rpm=None)
-    frame = run(pl.scrape_websites_firecrawl_async([HOME], session=db.Session(), client=client,
-                                                   clock=lambda: T0, credit_ceiling=10))
+    client = FirecrawlClient(
+        KEY,
+        transport=httpx.MockTransport(vendor.handler),
+        sleep=SleepRecorder(),
+        rpm=None,
+    )
+    frame = run(
+        pl.scrape_websites_firecrawl_async(
+            [HOME],
+            session=db.Session(),
+            client=client,
+            clock=lambda: T0,
+            credit_ceiling=10,
+        )
+    )
     assert frame.loc[0, "text_quality"] == "ok"
 
 
@@ -555,7 +799,10 @@ WALL = "Checking the site connection security. Verify you are human."
 
 def test_a_walled_home_page_does_not_overwrite_text_carried_by_the_subpages(db):
     """The home page never had good text (a splash page); the org's text is its subpages'."""
-    vendor = standard_site(FakeFirecrawl()).script(HOME, page(markdown="", links=LINKS, url=HOME + "/", source=HOME))
+    vendor = standard_site(FakeFirecrawl()).script(
+        HOME,
+        page(markdown="", links=LINKS, url=HOME + "/", source=HOME),
+    )
     scrape(db, vendor)
     before = db.org()
     assert db.page(KEY_HOME).text_quality == "empty" and before.text_quality == "ok"
@@ -565,8 +812,14 @@ def test_a_walled_home_page_does_not_overwrite_text_carried_by_the_subpages(db):
     assert requested(wall) == [HOME]
     org = db.org()
     assert (org.combined_text, org.text_quality, org.source_keys) == (
-        before.combined_text, "ok", before.source_keys)
-    assert org.last_attempt_result == "unknown" and frame.loc[0, "combined_text"] == before.combined_text
+        before.combined_text,
+        "ok",
+        before.source_keys,
+    )
+    assert (
+        org.last_attempt_result == "unknown"
+        and frame.loc[0, "combined_text"] == before.combined_text
+    )
     assert db.page(f"{KEY_HOME}/about").superseded_at is None
 
 
@@ -581,7 +834,11 @@ def test_git_sha_is_this_package_s_commit_whatever_the_working_directory(tmp_pat
     import subprocess
     from pathlib import Path
 
-    here = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, cwd=Path(pl.__file__).parent).strip()
+    here = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"],
+        text=True,
+        cwd=Path(pl.__file__).parent,
+    ).strip()
     monkeypatch.chdir(tmp_path)
     assert pl._git_sha() == here
 
@@ -598,11 +855,27 @@ def test_a_write_error_surfaces_as_itself_and_the_run_row_is_closed(db, monkeypa
 
 
 def test_a_client_used_for_a_second_run_gets_a_new_run_id(db):
-    vendor = site(site(FakeFirecrawl(), home="https://a.example.org", links=()), home="https://b.example.org", links=())
-    client = FirecrawlClient(KEY, transport=httpx.MockTransport(vendor.handler), sleep=SleepRecorder(),
-                             concurrency=5, rpm=None, run_id="fixed")
+    vendor = site(
+        site(FakeFirecrawl(), home="https://a.example.org", links=()),
+        home="https://b.example.org",
+        links=(),
+    )
+    client = FirecrawlClient(
+        KEY,
+        transport=httpx.MockTransport(vendor.handler),
+        sleep=SleepRecorder(),
+        concurrency=5,
+        rpm=None,
+        run_id="fixed",
+    )
     for url in ("https://a.example.org", "https://b.example.org"):
-        pl.scrape_websites_firecrawl([url], session=db.Session(), client=client, clock=lambda: T0, credit_ceiling=100)
+        pl.scrape_websites_firecrawl(
+            [url],
+            session=db.Session(),
+            client=client,
+            clock=lambda: T0,
+            credit_ceiling=100,
+        )
     assert len({r.run_id for r in db.all(ScrapeRun)}) == 2
 
 

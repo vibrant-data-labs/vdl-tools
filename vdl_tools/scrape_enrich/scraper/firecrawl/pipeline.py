@@ -117,11 +117,11 @@ from vdl_tools.shared_tools.tools.logger import logger
 from vdl_tools.shared_tools.web_summarization.page_choice.choose_pages import filter_links
 from vdl_tools.shared_tools.web_summarization.page_choice.constants import PATHS_TO_KEEP
 
-CREDITS_PER_ORG = 4.67            # phase 2 of the pilot: 9,348 credits for 2,000 orgs
-MAX_ERRORS = 5                    # scrape_websites_psql's default
-MAX_PER_SUBPATH = 6               # scrape_websites_psql's default
-RETRY_FAILED_AFTER_DAYS = 90      # the window website_quality trusts a liveness answer for
-N_PER_COMMIT = 25                 # orgs per commit
+CREDITS_PER_ORG = 4.67  # phase 2 of the pilot: 9,348 credits for 2,000 orgs
+MAX_ERRORS = 5  # scrape_websites_psql's default
+MAX_PER_SUBPATH = 6  # scrape_websites_psql's default
+RETRY_FAILED_AFTER_DAYS = 90  # the window website_quality trusts a liveness answer for
+N_PER_COMMIT = 25  # orgs per commit
 LOOKUP_CHUNK = 1000
 
 PAGE = "page"
@@ -131,15 +131,34 @@ HOME_GONE = "home_gone"
 
 
 def _utcnow() -> dt.datetime:
-    """Naive UTC, like every timestamp in the cache tables."""
+    """Return the current time as naive UTC, like every timestamp in the cache tables.
+
+    Returns
+    -------
+    datetime.datetime
+        The current UTC time with no ``tzinfo``.
+    """
     return dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
 
 
 def _git_sha() -> str | None:
-    """The vdl-tools commit that is running, whatever directory the caller started in."""
+    """Return the vdl-tools commit that is running.
+
+    Git runs in this package's directory, so the answer does not depend on
+    the directory the caller started in.
+
+    Returns
+    -------
+    str or None
+        The commit hash, or None when it cannot be read (not a checkout).
+    """
     try:
-        return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL,
-                                       cwd=Path(__file__).resolve().parent).strip()
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            cwd=Path(__file__).resolve().parent,
+        ).strip()
     except Exception:  # noqa: BLE001 - lineage only
         return None
 
@@ -148,8 +167,23 @@ def _git_sha() -> str | None:
 # Rules
 # ---------------------------------------------------------------------------
 
+
 def attempt_result(result: ScrapeResult, verdict: str | None) -> str:
-    """ok, gone, unknown or invalid_url for one attempt; ``verdict`` is the page's when it answered 2xx."""
+    """Classify one fetch attempt for ``last_attempt_result``.
+
+    Parameters
+    ----------
+    result : ScrapeResult
+        The attempt, as the client returned it.
+    verdict : str or None
+        The page's text verdict when it answered 2xx, else None.
+
+    Returns
+    -------
+    str
+        ``ok``, ``gone``, ``unknown`` or ``invalid_url``; the module
+        docstring says what each means.
+    """
     if result.ok:
         if verdict in mc.COMBINABLE_VERDICTS:
             return OK
@@ -162,13 +196,56 @@ def attempt_result(result: ScrapeResult, verdict: str | None) -> str:
 
 
 def has_good_text(row) -> bool:
-    """The row's text columns hold a fetch that passed the status gate and the text gate."""
-    return row is not None and row.fetched_at is not None and row.text_quality in mc.COMBINABLE_VERDICTS
+    """Whether a row's text columns hold a good fetch.
+
+    Parameters
+    ----------
+    row : WebPagesScrapedV2 or None
+        A page row, or the home columns read for the cache lookup.
+
+    Returns
+    -------
+    bool
+        True when the row holds a fetch that passed the status gate (2xx)
+        and the text gate (verdict ``ok`` or ``thin``).
+    """
+    return (
+        row is not None
+        and row.fetched_at is not None
+        and row.text_quality in mc.COMBINABLE_VERDICTS
+    )
 
 
-def is_due(row, now: dt.datetime, max_age_days: float | None, retry_failed_after_days: float,
-           max_errors: int) -> bool:
-    """Whether a page should be fetched now; the module docstring lists the cases."""
+def is_due(
+    row,
+    now: dt.datetime,
+    max_age_days: float | None,
+    retry_failed_after_days: float,
+    max_errors: int,
+) -> bool:
+    """Whether a page should be fetched now.
+
+    The module docstring lists the cases.
+
+    Parameters
+    ----------
+    row : WebPagesScrapedV2 or None
+        The page's row; None when it was never fetched.
+    now : datetime.datetime
+        The run's start, naive UTC.
+    max_age_days : float or None
+        Re-fetch good text older than this; None never re-fetches good text.
+    retry_failed_after_days : float
+        Days to wait before retrying a failed attempt.
+    max_errors : int
+        A row with no good text is retried each run while its
+        ``num_errors`` is under this.
+
+    Returns
+    -------
+    bool
+        True when the page is due.
+    """
     if row is None or row.refetch_requested_at is not None:
         return True
     if row.last_attempt_result == OK:
@@ -181,15 +258,33 @@ def is_due(row, now: dt.datetime, max_age_days: float | None, retry_failed_after
         return False
     if not has_good_text(row) and (row.num_errors or 0) < max_errors:
         return True
-    return row.last_attempt_at is None or row.last_attempt_at < now - dt.timedelta(days=retry_failed_after_days)
+    return row.last_attempt_at is None or row.last_attempt_at < now - dt.timedelta(
+        days=retry_failed_after_days
+    )
 
 
-def pick_subpages(home: ScrapeResult, max_per_subpath: int = MAX_PER_SUBPATH) -> list[tuple[str, str]]:
-    """(subpath, url) for each subpage of a fetched home page, in ``filter_links``'s order.
+def pick_subpages(
+    home: ScrapeResult,
+    max_per_subpath: int = MAX_PER_SUBPATH,
+) -> list[tuple[str, str]]:
+    """Pick the subpages to fetch for a fetched home page.
 
     Candidates are the links on the host the page was served from, so an org
     whose home page redirects to another host still gets its subpages, and
     the URLs are built on that host too.
+
+    Parameters
+    ----------
+    home : ScrapeResult
+        The fetched home page, with the links Firecrawl returned.
+    max_per_subpath : int, default MAX_PER_SUBPATH
+        The most pages kept under one path prefix, as in ``filter_links``.
+
+    Returns
+    -------
+    list of tuple of (str, str)
+        ``(subpath, url)`` for each pick, in ``filter_links``'s order, one
+        per page key.
     """
     base = home.final_url or home.url
     candidates = same_site_paths(home.links, base)
@@ -207,6 +302,20 @@ def pick_subpages(home: ScrapeResult, max_per_subpath: int = MAX_PER_SUBPATH) ->
 
 
 def page_key(home_key: str, subpath: str) -> str:
+    """Build a subpage's cache key.
+
+    Parameters
+    ----------
+    home_key : str
+        The home page's key (``extract_website_name``).
+    subpath : str
+        The subpage's path, with or without slashes.
+
+    Returns
+    -------
+    str
+        ``home_key/cleaned_subpath``, the key the in-house cache uses.
+    """
     return f"{home_key}/{clean_website_path(subpath)}"
 
 
@@ -214,23 +323,79 @@ def page_key(home_key: str, subpath: str) -> str:
 # Fetch: no database
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class _Org:
-    home_url: str     # ensure_url_scheme(the caller's value)
-    key: str          # extract_website_name: cleaned_home_key
+    """One org's website, as this call names it.
+
+    Attributes
+    ----------
+    home_url : str
+        ``ensure_url_scheme`` of the caller's value.
+    key : str
+        ``extract_website_name`` of it: the ``cleaned_home_key``.
+    """
+
+    home_url: str
+    key: str
 
 
 @dataclass
 class _OrgFetch:
+    """What one run fetched for an org.
+
+    Attributes
+    ----------
+    org : _Org
+        The org.
+    home : ScrapeResult
+        The home page attempt.
+    subpages : list of tuple of (str, ScrapeResult)
+        ``(subpath, result)`` for each pick, in pick order.
+    """
+
     org: _Org
     home: ScrapeResult
-    subpages: list = field(default_factory=list)   # (subpath, ScrapeResult), in pick order
+    subpages: list = field(default_factory=list)
 
 
-async def _fetch_org(client: FirecrawlClient, org: _Org, *, had_good_home: bool, max_per_subpath: int,
-                     single_page_websites: Iterable[str]) -> _OrgFetch:
-    """The home page and, when it is worth it, its picks. Raises ``RunStopped``
-    when any of the org's pages was cut off, so a half-fetched org is never written."""
+async def _fetch_org(
+    client: FirecrawlClient,
+    org: _Org,
+    *,
+    had_good_home: bool,
+    max_per_subpath: int,
+    single_page_websites: Iterable[str],
+) -> _OrgFetch:
+    """Fetch an org's home page and, when it is worth it, its picks.
+
+    A pick that ends in a vendor error is fetched once more before returning.
+
+    Parameters
+    ----------
+    client : FirecrawlClient
+        The run's client.
+    org : _Org
+        The org to fetch.
+    had_good_home : bool
+        Whether the org's stored home page already holds good text; an
+        empty new home page then buys no subpages.
+    max_per_subpath : int
+        Passed to ``pick_subpages``.
+    single_page_websites : iterable of str
+        Hosts that get no subpages, on top of ``SINGLE_PAGE_WEBSITES``.
+
+    Returns
+    -------
+    _OrgFetch
+        The home page attempt and one attempt per pick.
+
+    Raises
+    ------
+    RunStopped
+        When any of the org's pages was cut off by a stop, so a half-fetched
+        org is never written.
+    """
     home = await client.scrape(org.home_url, home_url=org.home_url, page_type=mc.HOME_PAGE_TYPE)
     fetched = _OrgFetch(org, home)
     if not home.ok or check_is_single_page_websites(org.home_url, list(single_page_websites)):
@@ -243,12 +408,18 @@ async def _fetch_org(client: FirecrawlClient, org: _Org, *, had_good_home: bool,
     if not (verdict in mc.COMBINABLE_VERDICTS or (verdict == "empty" and not had_good_home)):
         return fetched
     picks = pick_subpages(home, max_per_subpath)
-    results = await client.scrape_many([url for _, url in picks], home_url=org.home_url, page_type=PAGE)
+    results = await client.scrape_many(
+        [url for _, url in picks],
+        home_url=org.home_url,
+        page_type=PAGE,
+    )
     # One more try, in this run, for picks that ended in a vendor error (mostly
     # scrape timeouts, which the client does not retry). The org is due by its
     # home page alone, so a pick that fails here is otherwise not revisited
     # until the org's next refresh.
-    again = [url for _, url in picks if getattr(results[url], "failure_reason", None) == VENDOR_ERROR]
+    again = [
+        url for _, url in picks if getattr(results[url], "failure_reason", None) == VENDOR_ERROR
+    ]
     if again:
         results.update(await client.scrape_many(again, home_url=org.home_url, page_type=PAGE))
     for subpath, url in picks:
@@ -263,29 +434,89 @@ async def _fetch_org(client: FirecrawlClient, org: _Org, *, had_good_home: bool,
 # Write: the last-known-good policy
 # ---------------------------------------------------------------------------
 
+
 def _keep_history(session, row: WebPagesScrapedV2) -> None:
-    """Copy the row's current good text to the history table, one version per page."""
-    session.query(WebPagesHistoryV2).filter(WebPagesHistoryV2.cleaned_key == row.cleaned_key).delete(
-        synchronize_session=False)
-    session.add(WebPagesHistoryV2(
-        cleaned_key=row.cleaned_key, fetched_at=row.fetched_at, run_id=row.run_id, extractor=row.extractor,
-        markdown=row.markdown, parsed_html=row.parsed_html, text_quality=row.text_quality,
-    ))
+    """Copy a row's current good text to the history table.
+
+    The history holds one version per page: an older version is replaced.
+
+    Parameters
+    ----------
+    session : sqlalchemy.orm.Session
+        The run's session.
+    row : WebPagesScrapedV2
+        The page row whose text is about to be replaced.
+    """
+    session.query(WebPagesHistoryV2).filter(
+        WebPagesHistoryV2.cleaned_key == row.cleaned_key
+    ).delete(synchronize_session=False)
+    session.add(
+        WebPagesHistoryV2(
+            cleaned_key=row.cleaned_key,
+            fetched_at=row.fetched_at,
+            run_id=row.run_id,
+            extractor=row.extractor,
+            markdown=row.markdown,
+            parsed_html=row.parsed_html,
+            text_quality=row.text_quality,
+        )
+    )
 
 
-def _write_page(session, existing: WebPagesScrapedV2 | None, *, key: str, home_url: str, subpath: str,
-                page_type: str, result: ScrapeResult, now: dt.datetime) -> tuple[WebPagesScrapedV2, bool]:
-    """Apply one attempt to a page row. Returns the row and whether its text
-    columns now hold this attempt."""
+def _write_page(
+    session,
+    existing: WebPagesScrapedV2 | None,
+    *,
+    key: str,
+    home_url: str,
+    subpath: str,
+    page_type: str,
+    result: ScrapeResult,
+    now: dt.datetime,
+) -> tuple[WebPagesScrapedV2, bool]:
+    """Apply one attempt to a page row under the last-known-good policy.
+
+    Parameters
+    ----------
+    session : sqlalchemy.orm.Session
+        The run's session.
+    existing : WebPagesScrapedV2 or None
+        The page's stored row; None creates one.
+    key : str
+        The page's cache key.
+    home_url : str
+        The org's home URL.
+    subpath : str
+        The page's path; ``/`` for the home page.
+    page_type : str
+        ``markdown_clean.HOME_PAGE_TYPE`` or ``PAGE``.
+    result : ScrapeResult
+        The attempt.
+    now : datetime.datetime
+        The attempt's time, naive UTC.
+
+    Returns
+    -------
+    row : WebPagesScrapedV2
+        The page row, added to the session when new.
+    replaced : bool
+        Whether the row's text columns now hold this attempt.
+    """
     # Postgres text columns reject NUL; the in-house scraper replaces it the same way.
-    markdown = (result.markdown or "").replace("\x00", "\uFFFD")
+    markdown = (result.markdown or "").replace("\x00", "\ufffd")
     page = mc.page_text(markdown) if result.ok else None
     outcome = attempt_result(result, page.verdict if page else None)
     old_good = has_good_text(existing)
     row = existing
     if row is None:
-        row = WebPagesScrapedV2(cleaned_key=key, home_url=home_url, subpath=subpath, page_type=page_type,
-                                num_errors=0, attempts_since_fetch=0)
+        row = WebPagesScrapedV2(
+            cleaned_key=key,
+            home_url=home_url,
+            subpath=subpath,
+            page_type=page_type,
+            num_errors=0,
+            attempts_since_fetch=0,
+        )
         session.add(row)
     replaces = outcome == OK or not old_good
     if replaces:
@@ -317,22 +548,78 @@ def _write_page(session, existing: WebPagesScrapedV2 | None, *, key: str, home_u
     elif result.failure_reason != VENDOR_ERROR:
         row.num_errors = (row.num_errors or 0) + 1
     if result.failure_reason != VENDOR_ERROR:
-        row.refetch_requested_at = None    # answered; a vendor error leaves the request standing
+        row.refetch_requested_at = None  # answered; a vendor error leaves the request standing
     row.superseded_at = None
     return row, replaces
 
 
 def _in_text(row: WebPagesScrapedV2) -> bool:
-    """A picked subpage whose stored text belongs in the combined text: not gone, and holding a 2xx fetch."""
-    return row.last_attempt_result != GONE and row.fetched_at is not None and mc.is_2xx(row.response_status_code)
+    """Whether a picked subpage's stored text belongs in the combined text.
+
+    Parameters
+    ----------
+    row : WebPagesScrapedV2
+        The subpage's row, after this run's attempt was applied.
+
+    Returns
+    -------
+    bool
+        True when the page is not gone and the row holds a 2xx fetch.
+    """
+    return (
+        row.last_attempt_result != GONE
+        and row.fetched_at is not None
+        and mc.is_2xx(row.response_status_code)
+    )
 
 
-def _write_org(session, fetched: _OrgFetch, parsed: WebPagesParsedV2 | None, home_row: WebPagesScrapedV2 | None,
-               *, now: dt.datetime, prompt_str: str, max_tokens: int) -> tuple[WebPagesParsedV2, WebPagesScrapedV2]:
-    """One fetched org into the page rows and the org row. Returns the org row and the home page row."""
+def _write_org(
+    session,
+    fetched: _OrgFetch,
+    parsed: WebPagesParsedV2 | None,
+    home_row: WebPagesScrapedV2 | None,
+    *,
+    now: dt.datetime,
+    prompt_str: str,
+    max_tokens: int,
+) -> tuple[WebPagesParsedV2, WebPagesScrapedV2]:
+    """Write one fetched org into its page rows and its org row.
+
+    Parameters
+    ----------
+    session : sqlalchemy.orm.Session
+        The run's session.
+    fetched : _OrgFetch
+        What this run fetched for the org.
+    parsed : WebPagesParsedV2 or None
+        The org's stored row; None creates one.
+    home_row : WebPagesScrapedV2 or None
+        The home page's stored row; None creates one.
+    now : datetime.datetime
+        The write's time, naive UTC.
+    prompt_str : str
+        The summary prompt the token budget is counted against.
+    max_tokens : int
+        The combined text's token budget.
+
+    Returns
+    -------
+    parsed : WebPagesParsedV2
+        The org row.
+    home : WebPagesScrapedV2
+        The home page row.
+    """
     org, result = fetched.org, fetched.home
-    home, home_replaced = _write_page(session, home_row, key=org.key, home_url=org.home_url, subpath="/",
-                                      page_type=mc.HOME_PAGE_TYPE, result=result, now=now)
+    home, home_replaced = _write_page(
+        session,
+        home_row,
+        key=org.key,
+        home_url=org.home_url,
+        subpath="/",
+        page_type=mc.HOME_PAGE_TYPE,
+        result=result,
+        now=now,
+    )
     if parsed is None:
         parsed = WebPagesParsedV2(cleaned_home_key=org.key, home_url=org.home_url, num_errors=0)
         session.add(parsed)
@@ -342,8 +629,12 @@ def _write_org(session, fetched: _OrgFetch, parsed: WebPagesParsedV2 | None, hom
     # An org can hold good text although its home page never did (a splash page
     # carried by its subpages). A 2xx home page that is a wall, parked or garbled
     # must not rebuild that text from itself.
-    junk_over_text = (result.ok and home.text_quality in mc.JUNK_VERDICTS and bool(parsed.combined_text)
-                      and parsed.text_quality in mc.COMBINABLE_VERDICTS)
+    junk_over_text = (
+        result.ok
+        and home.text_quality in mc.JUNK_VERDICTS
+        and bool(parsed.combined_text)
+        and parsed.text_quality in mc.COMBINABLE_VERDICTS
+    )
     if not (result.ok and home_replaced) or junk_over_text:
         # The home page gave nothing new to build on. Text the org already has stays.
         if result.failure_reason != VENDOR_ERROR:
@@ -358,12 +649,24 @@ def _write_org(session, fetched: _OrgFetch, parsed: WebPagesParsedV2 | None, hom
     keys = {subpath: page_key(org.key, subpath) for subpath, _ in fetched.subpages}
     existing = {}
     if keys:
-        existing = {r.cleaned_key: r for r in session.query(WebPagesScrapedV2).filter(
-            WebPagesScrapedV2.cleaned_key.in_(list(keys.values())))}
+        existing = {
+            r.cleaned_key: r
+            for r in session.query(WebPagesScrapedV2).filter(
+                WebPagesScrapedV2.cleaned_key.in_(list(keys.values()))
+            )
+        }
     rows = [home]
     for subpath, sub_result in fetched.subpages:
-        row, _ = _write_page(session, existing.get(keys[subpath]), key=keys[subpath], home_url=org.home_url,
-                             subpath=subpath, page_type=PAGE, result=sub_result, now=now)
+        row, _ = _write_page(
+            session,
+            existing.get(keys[subpath]),
+            key=keys[subpath],
+            home_url=org.home_url,
+            subpath=subpath,
+            page_type=PAGE,
+            result=sub_result,
+            now=now,
+        )
         rows.append(row)
 
     # The home page is this run's 2xx fetch whatever its verdict: a parked or walled
@@ -371,13 +674,21 @@ def _write_org(session, fetched: _OrgFetch, parsed: WebPagesParsedV2 | None, hom
     in_text = [home] + [r for r in rows[1:] if _in_text(r)]
     combined = mc.combine_org(
         org.home_url,
-        [mc.StoredPage(r.subpath, r.page_type, r.response_status_code, r.markdown) for r in in_text],
-        prompt_str, max_tokens,
+        [
+            mc.StoredPage(r.subpath, r.page_type, r.response_status_code, r.markdown)
+            for r in in_text
+        ],
+        prompt_str,
+        max_tokens,
     )
     # Every row in the text carries the cleaner version the text was built with,
     # including rows kept from an earlier run.
     for row, page in zip(in_text, combined.pages, strict=True):
-        row.parsed_html, row.text_quality, row.extractor = page.text, page.verdict, combined.org.extractor
+        row.parsed_html, row.text_quality, row.extractor = (
+            page.text,
+            page.verdict,
+            combined.org.extractor,
+        )
 
     previous_keys = set(parsed.source_keys or [])
     parsed.home_url = org.home_url
@@ -389,19 +700,42 @@ def _write_org(session, fetched: _OrgFetch, parsed: WebPagesParsedV2 | None, hom
     parsed.text_quality = combined.org.verdict
     parsed.combined_at = now
     parsed.stale_reason = None
-    parsed.num_errors = 0 if combined.org.verdict in mc.COMBINABLE_VERDICTS else (parsed.num_errors or 0) + 1
+    parsed.num_errors = (
+        0 if combined.org.verdict in mc.COMBINABLE_VERDICTS else (parsed.num_errors or 0) + 1
+    )
 
     dropped = previous_keys - set(keys.values()) - {org.key}
     if dropped:
-        session.query(WebPagesScrapedV2).filter(WebPagesScrapedV2.cleaned_key.in_(sorted(dropped))).update(
-            {WebPagesScrapedV2.superseded_at: now}, synchronize_session=False)
+        session.query(WebPagesScrapedV2).filter(
+            WebPagesScrapedV2.cleaned_key.in_(sorted(dropped))
+        ).update({WebPagesScrapedV2.superseded_at: now}, synchronize_session=False)
     return parsed, home
 
 
-def _write_org_ids(session, org_ids: Mapping[str, Iterable[tuple[str, str]]], sites: dict,
-                   now: dt.datetime) -> int:
+def _write_org_ids(
+    session,
+    org_ids: Mapping[str, Iterable[tuple[str, str]]],
+    sites: dict,
+    now: dt.datetime,
+) -> int:
     """Upsert ``org_site_keys`` for every id whose URL has a home page row.
-    ``sites`` maps a home key to ``(source_url, final_host, run_id)``."""
+
+    Parameters
+    ----------
+    session : sqlalchemy.orm.Session
+        The run's session.
+    org_ids : mapping of str to iterable of tuple of (str, str)
+        A home URL to its ``(id_type, id_value)`` pairs.
+    sites : dict
+        A home key to ``(source_url, final_host, run_id)``.
+    now : datetime.datetime
+        The time written to ``first_seen`` and ``last_seen``, naive UTC.
+
+    Returns
+    -------
+    int
+        The number of id-to-site links written.
+    """
     wanted = {}
     for url, pairs in org_ids.items():
         key = extract_website_name(url) if isinstance(url, str) else None
@@ -413,11 +747,16 @@ def _write_org_ids(session, org_ids: Mapping[str, Iterable[tuple[str, str]]], si
     for (id_type, id_value, key), (source_url, final_host, site_run_id) in wanted.items():
         row = session.get(OrgSiteKey, (id_type, id_value, key))
         if row is None:
-            row = OrgSiteKey(id_type=id_type, id_value=id_value, cleaned_home_key=key, first_seen=now)
+            row = OrgSiteKey(
+                id_type=id_type,
+                id_value=id_value,
+                cleaned_home_key=key,
+                first_seen=now,
+            )
             session.add(row)
         row.source_url = source_url
         row.final_host = final_host
-        row.run_id = site_run_id    # the run that fetched the site, not the run that looked it up
+        row.run_id = site_run_id  # the run that fetched the site, not the run that looked it up
         row.last_seen = now
     return len(wanted)
 
@@ -429,29 +768,80 @@ def _write_org_ids(session, org_ids: Mapping[str, Iterable[tuple[str, str]]], si
 # What the cache lookup reads from each home page row. The text columns are
 # left in the database: a refresh covers tens of thousands of orgs.
 _HOME_COLUMNS = (
-    WebPagesScrapedV2.cleaned_key, WebPagesScrapedV2.last_attempt_result, WebPagesScrapedV2.last_attempt_at,
-    WebPagesScrapedV2.fetched_at, WebPagesScrapedV2.failure_reason, WebPagesScrapedV2.text_quality,
-    WebPagesScrapedV2.num_errors, WebPagesScrapedV2.source_url, WebPagesScrapedV2.final_host,
-    WebPagesScrapedV2.home_url, WebPagesScrapedV2.run_id, WebPagesScrapedV2.refetch_requested_at,
+    WebPagesScrapedV2.cleaned_key,
+    WebPagesScrapedV2.last_attempt_result,
+    WebPagesScrapedV2.last_attempt_at,
+    WebPagesScrapedV2.fetched_at,
+    WebPagesScrapedV2.failure_reason,
+    WebPagesScrapedV2.text_quality,
+    WebPagesScrapedV2.num_errors,
+    WebPagesScrapedV2.source_url,
+    WebPagesScrapedV2.final_host,
+    WebPagesScrapedV2.home_url,
+    WebPagesScrapedV2.run_id,
+    WebPagesScrapedV2.refetch_requested_at,
 )
 
 
 def _chunks(keys: list[str]):
+    """Split keys into lists short enough for one ``IN`` lookup.
+
+    Parameters
+    ----------
+    keys : list of str
+        The cache keys to look up.
+
+    Yields
+    ------
+    list of str
+        At most ``LOOKUP_CHUNK`` keys.
+    """
     for i in range(0, len(keys), LOOKUP_CHUNK):
-        yield keys[i:i + LOOKUP_CHUNK]
+        yield keys[i : i + LOOKUP_CHUNK]
 
 
 def _frame_row(org: _Org, parsed: dict | None, failure_reason: str | None) -> dict:
-    """One row of the returned frame from an org row's ``to_dict()``."""
+    """Build one row of the returned frame.
+
+    Parameters
+    ----------
+    org : _Org
+        The org, as this call names it.
+    parsed : dict or None
+        The org row's ``to_dict()``; None when the org has no row.
+    failure_reason : str or None
+        The home page's ``failure_reason``.
+
+    Returns
+    -------
+    dict
+        The org row's columns with this call's ``home_url``, the home
+        page's ``failure_reason``, and ``combined_text`` set to None unless
+        the verdict is ``ok`` or ``thin``.
+    """
     row = dict(parsed) if parsed is not None else {"cleaned_home_key": org.key}
-    row["home_url"] = org.home_url   # this call's spelling: callers join failures back on it
+    row["home_url"] = org.home_url  # this call's spelling: callers join failures back on it
     if row.get("text_quality") not in mc.COMBINABLE_VERDICTS:
-        row["combined_text"] = None  # nothing a summarizer should read; the stored row keeps the text
+        row["combined_text"] = (
+            None  # nothing a summarizer should read; the stored row keeps the text
+        )
     row["failure_reason"] = failure_reason
     return row
 
 
 def _site(home) -> tuple:
+    """Return what ``org_site_keys`` records about a fetched site.
+
+    Parameters
+    ----------
+    home : WebPagesScrapedV2
+        The home page row, or the home columns read for the cache lookup.
+
+    Returns
+    -------
+    tuple
+        ``(source_url, final_host, run_id)``.
+    """
     return (home.source_url or home.home_url, home.final_host, home.run_id)
 
 
@@ -474,12 +864,63 @@ async def scrape_websites_firecrawl_async(
     credits_per_org: float = CREDITS_PER_ORG,
     clock: Callable[[], dt.datetime] = _utcnow,
 ) -> pd.DataFrame | DryRunReport:
-    """See the module docstring. ``scrape_websites_firecrawl`` is the synchronous form.
+    """Scrape each org's website through Firecrawl into the v2 tables.
 
-    ``urls`` are home URLs; blanks are dropped and a URL repeated under one
-    cache key is taken once. ``org_ids`` maps a home URL, as given in ``urls``,
-    to its ``(id_type, id_value)`` pairs for ``org_site_keys``. ``client`` is
-    for the tests; by default one is built from ``[scraping_vendors]``.
+    The module docstring gives the rules. ``scrape_websites_firecrawl`` is
+    the synchronous form.
+
+    Parameters
+    ----------
+    urls : iterable of str
+        Home URLs. Blanks are dropped and a URL repeated under one cache
+        key is taken once.
+    credit_ceiling : float, optional
+        Credits this run may spend. Required unless ``dry_run``.
+    session : sqlalchemy.orm.Session, optional
+        A session to use; by default one is opened.
+    client : FirecrawlClient, optional
+        For the tests; by default one is built from ``[scraping_vendors]``.
+    max_age_days : float, optional
+        Re-fetch good text older than this; by default good text is never
+        re-fetched.
+    retry_failed_after_days : float, default RETRY_FAILED_AFTER_DAYS
+        Days to wait before retrying a failed home page.
+    max_errors : int, default MAX_ERRORS
+        A home page with no good text is retried each run while its
+        ``num_errors`` is under this.
+    max_per_subpath : int, default MAX_PER_SUBPATH
+        The most subpages kept under one path prefix.
+    single_page_websites : iterable of str, default ()
+        Hosts that get no subpages, on top of ``SINGLE_PAGE_WEBSITES``.
+    n_per_commit : int, default N_PER_COMMIT
+        Orgs written per commit.
+    org_ids : mapping of str to iterable of tuple of (str, str), optional
+        A home URL, as given in ``urls``, to its ``(id_type, id_value)``
+        pairs for ``org_site_keys``.
+    summary_prompt : str, optional
+        The prompt the token budget is counted against; by default
+        ``markdown_clean.COUNTING_PROMPT``.
+    max_tokens : int, default markdown_clean.ORG_TOKEN_CAP
+        The combined text's token budget.
+    dry_run : bool, default False
+        Report what is due and what it would cost; fetch and write nothing.
+    credits_per_org : float, default CREDITS_PER_ORG
+        The estimate a dry run multiplies the due orgs by.
+    clock : callable, default _utcnow
+        Returns the current naive UTC time; for the tests.
+
+    Returns
+    -------
+    pandas.DataFrame or DryRunReport
+        One row per org with ``home_url`` and ``combined_text`` (null when
+        the org has no summarizable text) plus the verdict and attempt
+        columns; or, on a dry run, the report.
+
+    Raises
+    ------
+    ValueError
+        When ``credit_ceiling`` is missing or not positive and ``dry_run``
+        is False.
     """
     orgs, seen = [], set()
     for url in urls:
@@ -488,28 +929,48 @@ async def scrape_websites_firecrawl_async(
             seen.add(key)
             orgs.append(_Org(ensure_url_scheme(url.strip()), key))
     if not dry_run and not (credit_ceiling and credit_ceiling > 0):
-        raise ValueError("scrape_websites_firecrawl needs a credit_ceiling: run it with dry_run=True for an "
-                         "estimate first. Without one a run stops only when the account is out of credits.")
+        raise ValueError(
+            "scrape_websites_firecrawl needs a credit_ceiling: run it with dry_run=True for an "
+            "estimate first. Without one a run stops only when the account is out of credits."
+        )
     prompt_str = summary_prompt or mc.COUNTING_PROMPT
 
     with get_session(session=session) as session:
         keys = [o.key for o in orgs]
         homes = {}
         for chunk in _chunks(keys):
-            for row in session.query(*_HOME_COLUMNS).filter(WebPagesScrapedV2.cleaned_key.in_(chunk)):
+            for row in session.query(*_HOME_COLUMNS).filter(
+                WebPagesScrapedV2.cleaned_key.in_(chunk)
+            ):
                 homes[row.cleaned_key] = row
         start = clock()
         has_org_row = set()
         for chunk in _chunks(keys):
-            has_org_row.update(k for (k,) in session.query(WebPagesParsedV2.cleaned_home_key).filter(
-                WebPagesParsedV2.cleaned_home_key.in_(chunk)))
-        due = [o for o in orgs if o.key not in has_org_row
-               or is_due(homes.get(o.key), start, max_age_days, retry_failed_after_days, max_errors)]
-        logger.info("firecrawl: %s orgs, %s served from the cache, %s to fetch", len(orgs), len(orgs) - len(due), len(due))
+            has_org_row.update(
+                k
+                for (k,) in session.query(WebPagesParsedV2.cleaned_home_key).filter(
+                    WebPagesParsedV2.cleaned_home_key.in_(chunk)
+                )
+            )
+        due = [
+            o
+            for o in orgs
+            if o.key not in has_org_row
+            or is_due(homes.get(o.key), start, max_age_days, retry_failed_after_days, max_errors)
+        ]
+        logger.info(
+            "firecrawl: %s orgs, %s served from the cache, %s to fetch",
+            len(orgs),
+            len(orgs) - len(due),
+            len(due),
+        )
 
         if dry_run:
             client = client or FirecrawlClient.from_config(credit_ceiling=credit_ceiling)
-            report = await client.dry_run([o.home_url for o in due], credits_per_miss=credits_per_org)
+            report = await client.dry_run(
+                [o.home_url for o in due],
+                credits_per_miss=credits_per_org,
+            )
             n_cached = len(orgs) - len(due)
             return replace(report, n_urls=report.n_urls + n_cached, n_cached=n_cached)
 
@@ -519,35 +980,60 @@ async def scrape_websites_firecrawl_async(
         by_key = {o.key: o for o in orgs}
         frame = {o.key: _frame_row(o, None, None) for o in orgs}
         for chunk in _chunks(sorted(has_org_row)):
-            for row in session.query(WebPagesParsedV2).filter(WebPagesParsedV2.cleaned_home_key.in_(chunk)):
+            for row in session.query(WebPagesParsedV2).filter(
+                WebPagesParsedV2.cleaned_home_key.in_(chunk)
+            ):
                 home = homes.get(row.cleaned_home_key)
-                frame[row.cleaned_home_key] = _frame_row(by_key[row.cleaned_home_key], row.to_dict(),
-                                                         home.failure_reason if home is not None else None)
+                frame[row.cleaned_home_key] = _frame_row(
+                    by_key[row.cleaned_home_key],
+                    row.to_dict(),
+                    home.failure_reason if home is not None else None,
+                )
             session.expunge_all()
         sites = {key: _site(home) for key, home in homes.items()}
         had_good_home = {key for key, home in homes.items() if has_good_text(home)}
 
         if due:
             run_id = client.run_id if client is not None else None
-            if not run_id or session.get(ScrapeRun, run_id) is not None:   # a client used for a second run
+            if (
+                not run_id or session.get(ScrapeRun, run_id) is not None,
+            ):  # a client used for a second run
                 run_id = f"fc-{start:%Y%m%dT%H%M%S}-{uuid.uuid4().hex[:8]}"
             if client is None:
                 client = FirecrawlClient.from_config(credit_ceiling=credit_ceiling, run_id=run_id)
             else:
                 client.run_id = client.stats.run_id = run_id
                 client.credit_ceiling = client.credit_ceiling or credit_ceiling
-            session.add(ScrapeRun(
-                run_id=run_id, started_at=start, git_sha=_git_sha(), extractor_version=mc.EXTRACTOR,
-                request_profile=client.request_profile, plan_concurrency=client.limits.concurrency,
-                plan_rpm=int(client.limits.rpm) if client.limits.rpm else None, credit_ceiling=client.credit_ceiling,
-            ))
+            session.add(
+                ScrapeRun(
+                    run_id=run_id,
+                    started_at=start,
+                    git_sha=_git_sha(),
+                    extractor_version=mc.EXTRACTOR,
+                    request_profile=client.request_profile,
+                    plan_concurrency=client.limits.concurrency,
+                    plan_rpm=int(client.limits.rpm) if client.limits.rpm else None,
+                    credit_ceiling=client.credit_ceiling,
+                )
+            )
             session.commit()
             try:
-                await _run(session, client, due, frame, sites, had_good_home, n_per_commit=n_per_commit, clock=clock,
-                           prompt_str=prompt_str, max_tokens=max_tokens, max_per_subpath=max_per_subpath,
-                           single_page_websites=single_page_websites)
+                await _run(
+                    session,
+                    client,
+                    due,
+                    frame,
+                    sites,
+                    had_good_home,
+                    n_per_commit=n_per_commit,
+                    clock=clock,
+                    prompt_str=prompt_str,
+                    max_tokens=max_tokens,
+                    max_per_subpath=max_per_subpath,
+                    single_page_websites=single_page_websites,
+                )
             except Exception:
-                session.rollback()   # or the run row below cannot be read, and its error hides this one
+                session.rollback()  # or the run row below cannot be read, and its error hides this one
                 raise
             finally:
                 run = session.get(ScrapeRun, run_id)
@@ -557,8 +1043,13 @@ async def scrape_websites_firecrawl_async(
                 run.credits_used = client.stats.credits_used
                 run.stop_reason = client.stats.stop_reason
                 session.commit()
-            logger.info("firecrawl: run %s used %g credits over %s pages%s", run_id, client.stats.credits_used,
-                        client.stats.n_pages, f"; stopped: {client.stats.stop_reason}" if client.stats.stop_reason else "")
+            logger.info(
+                "firecrawl: run %s used %g credits over %s pages%s",
+                run_id,
+                client.stats.credits_used,
+                client.stats.n_pages,
+                f"; stopped: {client.stats.stop_reason}" if client.stats.stop_reason else "",
+            )
 
         if org_ids:
             n_ids = _write_org_ids(session, org_ids, sites, clock())
@@ -567,19 +1058,66 @@ async def scrape_websites_firecrawl_async(
         return pd.DataFrame([frame[o.key] for o in orgs])
 
 
-async def _run(session, client: FirecrawlClient, due: list[_Org], frame: dict, sites: dict, had_good_home: set, *,
-               n_per_commit: int, clock, prompt_str: str, max_tokens: int, max_per_subpath: int,
-               single_page_websites) -> None:
+async def _run(
+    session,
+    client: FirecrawlClient,
+    due: list[_Org],
+    frame: dict,
+    sites: dict,
+    had_good_home: set,
+    *,
+    n_per_commit: int,
+    clock,
+    prompt_str: str,
+    max_tokens: int,
+    max_per_subpath: int,
+    single_page_websites,
+) -> None:
     """Fetch the due orgs, a bounded number at a time, and write each as it lands.
+
     Rows are read when an org is written and dropped from the session at each
-    commit, so memory holds one batch whatever the size of the run."""
+    commit, so memory holds one batch whatever the size of the run.
+
+    Parameters
+    ----------
+    session : sqlalchemy.orm.Session
+        The run's session.
+    client : FirecrawlClient
+        The run's client.
+    due : list of _Org
+        The orgs to fetch.
+    frame : dict
+        A home key to its row of the returned frame; updated in place.
+    sites : dict
+        A home key to ``(source_url, final_host, run_id)``; updated in place.
+    had_good_home : set of str
+        Home keys whose stored home page holds good text.
+    n_per_commit : int
+        Orgs written per commit.
+    clock : callable
+        Returns the current naive UTC time.
+    prompt_str : str
+        The summary prompt the token budget is counted against.
+    max_tokens : int
+        The combined text's token budget.
+    max_per_subpath : int
+        The most subpages kept under one path prefix.
+    single_page_websites : iterable of str
+        Hosts that get no subpages, on top of ``SINGLE_PAGE_WEBSITES``.
+    """
     in_flight = asyncio.Semaphore(max(1, client.limits.concurrency))
 
     async def one(org: _Org):
+        """Fetch one org; return the fetch, or the stop or error that ended it."""
         async with in_flight:
             try:
-                return await _fetch_org(client, org, had_good_home=org.key in had_good_home,
-                                        max_per_subpath=max_per_subpath, single_page_websites=single_page_websites)
+                return await _fetch_org(
+                    client,
+                    org,
+                    had_good_home=org.key in had_good_home,
+                    max_per_subpath=max_per_subpath,
+                    single_page_websites=single_page_websites,
+                )
             except RunStopped as stop:
                 return stop
             except Exception as exc:  # noqa: BLE001 - one org must not end the run
@@ -593,11 +1131,17 @@ async def _run(session, client: FirecrawlClient, due: list[_Org], frame: dict, s
             for next_done in asyncio.as_completed(tasks):
                 fetched = await next_done
                 if not isinstance(fetched, _OrgFetch):
-                    continue   # cut off by a stop, or failed: nothing is written and the org stays due
+                    continue  # cut off by a stop, or failed: nothing is written and the org stays due
                 org = fetched.org
-                parsed, home = _write_org(session, fetched, session.get(WebPagesParsedV2, org.key),
-                                          session.get(WebPagesScrapedV2, org.key), now=clock(),
-                                          prompt_str=prompt_str, max_tokens=max_tokens)
+                parsed, home = _write_org(
+                    session,
+                    fetched,
+                    session.get(WebPagesParsedV2, org.key),
+                    session.get(WebPagesScrapedV2, org.key),
+                    now=clock(),
+                    prompt_str=prompt_str,
+                    max_tokens=max_tokens,
+                )
                 frame[org.key] = _frame_row(org, parsed.to_dict(), home.failure_reason)
                 sites[org.key] = _site(home)
                 written += 1
@@ -608,12 +1152,26 @@ async def _run(session, client: FirecrawlClient, due: list[_Org], frame: dict, s
             session.expunge_all()
         finally:
             for task in tasks:
-                task.cancel()   # a write error must not leave fetches spending credits
+                task.cancel()  # a write error must not leave fetches spending credits
 
 
 def scrape_websites_firecrawl(urls: Iterable[str], **kwargs) -> pd.DataFrame | DryRunReport:
-    """``scrape_websites_firecrawl_async`` for synchronous callers. Inside a
-    running event loop (a notebook), await the async form instead."""
+    """Run ``scrape_websites_firecrawl_async`` for synchronous callers.
+
+    Inside a running event loop (a notebook), await the async form instead.
+
+    Parameters
+    ----------
+    urls : iterable of str
+        Home URLs.
+    **kwargs
+        Passed to ``scrape_websites_firecrawl_async``.
+
+    Returns
+    -------
+    pandas.DataFrame or DryRunReport
+        As ``scrape_websites_firecrawl_async``.
+    """
     return asyncio.run(scrape_websites_firecrawl_async(urls, **kwargs))
 
 
@@ -621,14 +1179,43 @@ def scrape_websites_firecrawl(urls: Iterable[str], **kwargs) -> pd.DataFrame | D
 # Command line
 # ---------------------------------------------------------------------------
 
+
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Scrape home URLs through Firecrawl into the v2 tables.")
+    """Run the pipeline from the command line.
+
+    Parameters
+    ----------
+    argv : list of str, optional
+        The arguments; by default ``sys.argv[1:]``.
+
+    Returns
+    -------
+    int
+        The exit code, 0.
+    """
+    parser = argparse.ArgumentParser(
+        description="Scrape home URLs through Firecrawl into the v2 tables."
+    )
     parser.add_argument("--urls", required=True, help="a text file (one URL per line) or a parquet")
     parser.add_argument("--column", default="home_url", help="URL column when --urls is a parquet")
     parser.add_argument("--limit", type=int, default=None)
-    parser.add_argument("--dry-run", action="store_true", help="report what is due and what it would cost; fetch nothing")
-    parser.add_argument("--credit-ceiling", type=float, default=None, help="required unless --dry-run")
-    parser.add_argument("--max-age-days", type=float, default=None, help="refetch text older than this")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report what is due and what it would cost; fetch nothing",
+    )
+    parser.add_argument(
+        "--credit-ceiling",
+        type=float,
+        default=None,
+        help="required unless --dry-run",
+    )
+    parser.add_argument(
+        "--max-age-days",
+        type=float,
+        default=None,
+        help="refetch text older than this",
+    )
     parser.add_argument("--retry-failed-after-days", type=float, default=RETRY_FAILED_AFTER_DAYS)
     parser.add_argument("--max-errors", type=int, default=MAX_ERRORS)
     args = parser.parse_args(argv)
@@ -637,8 +1224,13 @@ def main(argv=None) -> int:
     if args.limit:
         urls = urls[: args.limit]
     out = scrape_websites_firecrawl(
-        urls, credit_ceiling=args.credit_ceiling, dry_run=args.dry_run, max_age_days=args.max_age_days,
-        retry_failed_after_days=args.retry_failed_after_days, max_errors=args.max_errors)
+        urls,
+        credit_ceiling=args.credit_ceiling,
+        dry_run=args.dry_run,
+        max_age_days=args.max_age_days,
+        retry_failed_after_days=args.retry_failed_after_days,
+        max_errors=args.max_errors,
+    )
     if args.dry_run:
         print(out.summary())
     else:
