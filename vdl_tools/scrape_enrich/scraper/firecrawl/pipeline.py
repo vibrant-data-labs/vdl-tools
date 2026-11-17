@@ -580,8 +580,6 @@ def _write_org(
     home_row: WebPagesScrapedV2 | None,
     *,
     now: dt.datetime,
-    prompt_str: str,
-    max_tokens: int,
 ) -> tuple[WebPagesParsedV2, WebPagesScrapedV2]:
     """Write one fetched org into its page rows and its org row.
 
@@ -597,10 +595,6 @@ def _write_org(
         The home page's stored row; None creates one.
     now : datetime.datetime
         The write's time, naive UTC.
-    prompt_str : str
-        The summary prompt the token budget is counted against.
-    max_tokens : int
-        The combined text's token budget.
 
     Returns
     -------
@@ -678,8 +672,6 @@ def _write_org(
             mc.StoredPage(r.subpath, r.page_type, r.response_status_code, r.markdown)
             for r in in_text
         ],
-        prompt_str,
-        max_tokens,
     )
     # Every row in the text carries the cleaner version the text was built with,
     # including rows kept from an earlier run.
@@ -696,7 +688,7 @@ def _write_org(
     parsed.combined_text = combined.org.text or None
     parsed.source_keys = [org.key if sp == "/" else keys[sp] for sp in combined.org.subpaths]
     parsed.extractor = combined.org.extractor
-    parsed.prompt_token_budget = max_tokens
+    parsed.prompt_token_budget = mc.ORG_TOKEN_CAP
     parsed.text_quality = combined.org.verdict
     parsed.combined_at = now
     parsed.stale_reason = None
@@ -858,8 +850,6 @@ async def scrape_websites_firecrawl_async(
     single_page_websites: Iterable[str] = (),
     n_per_commit: int = N_PER_COMMIT,
     org_ids: Mapping[str, Iterable[tuple[str, str]]] | None = None,
-    summary_prompt: str | None = None,
-    max_tokens: int = mc.ORG_TOKEN_CAP,
     dry_run: bool = False,
     credits_per_org: float = CREDITS_PER_ORG,
     clock: Callable[[], dt.datetime] = _utcnow,
@@ -897,11 +887,6 @@ async def scrape_websites_firecrawl_async(
     org_ids : mapping of str to iterable of tuple of (str, str), optional
         A home URL, as given in ``urls``, to its ``(id_type, id_value)``
         pairs for ``org_site_keys``.
-    summary_prompt : str, optional
-        The prompt the token budget is counted against; by default
-        ``markdown_clean.COUNTING_PROMPT``.
-    max_tokens : int, default markdown_clean.ORG_TOKEN_CAP
-        The combined text's token budget.
     dry_run : bool, default False
         Report what is due and what it would cost; fetch and write nothing.
     credits_per_org : float, default CREDITS_PER_ORG
@@ -933,7 +918,6 @@ async def scrape_websites_firecrawl_async(
             "scrape_websites_firecrawl needs a credit_ceiling: run it with dry_run=True for an "
             "estimate first. Without one a run stops only when the account is out of credits."
         )
-    prompt_str = summary_prompt or mc.COUNTING_PROMPT
 
     with get_session(session=session) as session:
         keys = [o.key for o in orgs]
@@ -1027,8 +1011,6 @@ async def scrape_websites_firecrawl_async(
                     had_good_home,
                     n_per_commit=n_per_commit,
                     clock=clock,
-                    prompt_str=prompt_str,
-                    max_tokens=max_tokens,
                     max_per_subpath=max_per_subpath,
                     single_page_websites=single_page_websites,
                 )
@@ -1068,8 +1050,6 @@ async def _run(
     *,
     n_per_commit: int,
     clock,
-    prompt_str: str,
-    max_tokens: int,
     max_per_subpath: int,
     single_page_websites,
 ) -> None:
@@ -1096,10 +1076,6 @@ async def _run(
         Orgs written per commit.
     clock : callable
         Returns the current naive UTC time.
-    prompt_str : str
-        The summary prompt the token budget is counted against.
-    max_tokens : int
-        The combined text's token budget.
     max_per_subpath : int
         The most subpages kept under one path prefix.
     single_page_websites : iterable of str
@@ -1139,8 +1115,6 @@ async def _run(
                     session.get(WebPagesParsedV2, org.key),
                     session.get(WebPagesScrapedV2, org.key),
                     now=clock(),
-                    prompt_str=prompt_str,
-                    max_tokens=max_tokens,
                 )
                 frame[org.key] = _frame_row(org, parsed.to_dict(), home.failure_reason)
                 sites[org.key] = _site(home)
