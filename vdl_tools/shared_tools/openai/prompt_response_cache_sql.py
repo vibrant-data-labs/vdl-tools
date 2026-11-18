@@ -332,8 +332,9 @@ class PromptResponseCacheSQL():
             so they can be returned from cache on future requests. If False,
             results are returned but not stored (no cache fill). Default is
             True.
-        api_backend : {"openai", "vercel"}, optional
-            Direct OpenAI by default, or Vercel's Responses-compatible API.
+        api_backend : {"openai", "vercel", "baseten"}, optional
+            Direct OpenAI by default, or Vercel's or Baseten's
+            Responses-compatible API.
         model_provider : str, optional
             Preferred serving-provider slug for Vercel (e.g. "bedrock").
             Omit to let Vercel choose. Requires api_backend="vercel".
@@ -364,9 +365,9 @@ class PromptResponseCacheSQL():
         self.store_results = store_results
 
         # OpenAI tokenization and default context limits are not valid for
-        # other providers. Let the gateway enforce the selected model's limits.
+        # other providers. Let the provider enforce the selected model's limits.
         context_window, max_output_tokens = (
-            (None, None) if api_backend == "vercel" else get_context_window(self.model)
+            get_context_window(self.model) if api_backend == "openai" else (None, None)
         )
         if context_window:
             prompt_tokens = get_num_tokens(self.prompt.prompt_str, self.model)

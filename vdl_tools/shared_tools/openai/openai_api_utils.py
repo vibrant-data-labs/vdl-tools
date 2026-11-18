@@ -54,22 +54,65 @@ def get_vercel_client():
     return OpenAI(api_key=api_key, base_url=VERCEL_BASE_URL, max_retries=4)
 
 
+BASETEN_BASE_URL = "https://inference.baseten.co/v1"
+
+
+@lru_cache(maxsize=1)
+def get_baseten_client():
+    """Read BASETEN_API_KEY, then [baseten] api_key in config.ini.
+
+    This is Baseten's OpenAI-compatible Model APIs endpoint, not the per-model
+    Truss predict URLs the embedding and classifier code call.
+    """
+    api_key = os.getenv("BASETEN_API_KEY")
+    if not api_key:
+        config = get_configuration()
+        if "baseten" in config:
+            api_key = config["baseten"].get("api_key", "").strip()
+    if not api_key:
+        raise ValueError(
+            "Set BASETEN_API_KEY or [baseten] api_key in config.ini "
+            "to your Baseten API key"
+        )
+    return OpenAI(api_key=api_key, base_url=BASETEN_BASE_URL, max_retries=4)
+
+
+API_BACKENDS = ("openai", "vercel", "baseten")
+
+
+def _check_api_backend(api_backend):
+    if api_backend not in API_BACKENDS:
+        raise ValueError(f"api_backend must be one of {API_BACKENDS}")
+
+
+def _client_for(api_backend):
+    if api_backend == "vercel":
+        return get_vercel_client()
+    if api_backend == "baseten":
+        return get_baseten_client()
+    return CLIENT
+
+
 def completion_request_kwargs(api_backend, model_provider, kwargs):
     """Build routing options without mutating caller-owned nested dictionaries.
 
     model_provider is a preference, allowing Vercel fallback. For a strict
     restriction use extra_body={"providerOptions": {"gateway": {"only": [...]}}}.
     An explicit per-call gateway.order overrides the constructor preference.
+
+    Every backend except direct OpenAI adds ``api_backend`` to the kwargs, so
+    it enters the cache's request hash: the same model name served two ways
+    gets two cache rows. Direct OpenAI adds nothing, keeping its legacy hashes.
     """
-    if api_backend not in {"openai", "vercel"}:
-        raise ValueError("api_backend must be 'openai' or 'vercel'")
+    _check_api_backend(api_backend)
     if model_provider is not None and api_backend != "vercel":
         raise ValueError("model_provider requires api_backend='vercel'")
     result = dict(kwargs or {})
     if result.get("api_backend", api_backend) != api_backend:
         raise ValueError("Set api_backend on the cache constructor, not per call")
-    if api_backend == "vercel":
+    if api_backend != "openai":
         result["api_backend"] = api_backend
+    if api_backend == "vercel":
         if model_provider is not None:
             if not isinstance(model_provider, str) or not model_provider.strip():
                 raise ValueError("model_provider must be a non-empty provider slug")
@@ -216,10 +259,11 @@ def get_completion(
     return_all : bool, optional
         If True, return the full API response; otherwise return only
         `response.output_parsed`. Default is False.
-    api_backend : {"openai", "vercel"}, optional
+    api_backend : {"openai", "vercel", "baseten"}, optional
         Defaults to direct OpenAI. Vercel uses AI_GATEWAY_API_KEY and a
-        creator/model ID. Standard Responses kwargs are forwarded unchanged;
-        send Vercel providerOptions through the SDK's extra_body parameter.
+        creator/model ID. Baseten uses BASETEN_API_KEY and its Model APIs
+        slug. Standard Responses kwargs are forwarded unchanged; send Vercel
+        providerOptions through the SDK's extra_body parameter.
     **kwargs
         Passed through to `responses.parse()` (e.g. response_format).
 
@@ -227,8 +271,7 @@ def get_completion(
     -------
     Parsed completion, or the full response object if `return_all` is True.
     """
-    if api_backend not in {"openai", "vercel"}:
-        raise ValueError("api_backend must be 'openai' or 'vercel'")
+    _check_api_backend(api_backend)
     if api_backend == "vercel" and "/" not in model:
         raise ValueError("Vercel models must use 'creator/model' format")
     if max_text_tokens is not None:
@@ -257,8 +300,7 @@ def get_completion(
         last_message = messages[-1]['content']
         response_kwargs['input'] = last_message
 
-    client = get_vercel_client() if api_backend == "vercel" else CLIENT
-    response = client.responses.parse(**response_kwargs)
+    response = _client_for(api_backend).responses.parse(**response_kwargs)
     if return_all:
         return response
     return response.output_parsed

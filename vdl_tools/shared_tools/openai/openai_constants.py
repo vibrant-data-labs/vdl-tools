@@ -1,4 +1,15 @@
 MODEL_DATA = {
+    # GPT-6 Sol: 922K max input + 128K output = 1.05M window. Same long-prompt
+    # surcharge as the 5.6 family below (over 272K input tokens: 2x input, 1.5x
+    # output for the whole request). Reasoning effort defaults to medium.
+    # See https://developers.openai.com/api/docs/models/gpt-6-sol (read 2026-11-09).
+    "gpt-6-sol": {
+        "model_name": "gpt-6-sol",
+        "max_context_window": 1_050_000,
+        "max_output_tokens": 128_000,
+        "input_cost_per_token": 2.00 / 1_000_000,
+        "output_cost_per_token": 10.00 / 1_000_000,
+    },
     # GPT-5.6 family. Pricing note: prompts over 272K input tokens are billed
     # at 2x input / 1.5x output for the WHOLE request, and cache writes at
     # 1.25x the uncached input rate — neither is expressible in the flat
