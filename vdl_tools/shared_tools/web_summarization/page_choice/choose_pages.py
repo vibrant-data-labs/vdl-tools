@@ -2,7 +2,6 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 
 from dataclasses_json import dataclass_json
-import pandas as pd
 
 from vdl_tools.shared_tools.web_summarization.page_choice.constants import PATHS_TO_KEEP
 from vdl_tools.shared_tools.tools.unique_ids import create_deterministic_md5
@@ -145,82 +144,3 @@ def filter_links(
                 bottom_path = "/".join(bottom_candidate)
                 org_pages_dict[top_path].append(bottom_path)
     return [page for page_list in org_pages_dict.values() for page in page_list]
-
-
-def choose_org_pages(
-    org_pages_records: list[ScrapedPageRecord],
-    keep_paths: tuple[str] = PATHS_TO_KEEP,
-    max_per_subpath: int = 4
-):
-    """Pick the pages to keep for an organization
-    """
-    # FIXME: (ztawil) This is a hack to make this work with the current code but it should be fixed to use the class attrs
-    if isinstance(org_pages_records[0], ScrapedPageRecord):
-        org_pages_records = [x.to_dict() for x in org_pages_records]
-
-    if not keep_paths:
-        return org_pages_records
-
-    # We hash the text so need to be very determininstic when sorting
-    subpaths = [x['subpath'].strip("/") for x in org_pages_records]
-    subpaths = sorted(subpaths, key=deterministic_len_key)
-    print(subpaths)
-    return filter_links(subpaths, keep_paths, max_per_subpath)
-
-
-def filter_pages(
-    df: pd.DataFrame | list[ScrapedPageRecord],
-    keep_paths: set[str] = set(PATHS_TO_KEEP),
-    max_per_subpath: int = 4,
-) -> pd.DataFrame:
-    """Takes a dataframe of scraped pages and filters it down to the pages we want to keep.
-
-    Parameters
-    ----------
-    df : DataFrame
-        A dataframe with the expected columns:
-        [
-            "type",
-            "source",
-            "subpath",
-            "text",        
-        ]
-    keep_paths : set[str]
-        A set of words that must exist somewhere in the path
-    max_per_subpath : int, optional
-        The maximum number of bottom pages that can exist for a top page, by default 4
-
-    Returns
-    -------
-    DataFrame
-        A dataframe filtered down to the pages we want to keep
-    """
-    if isinstance(df, list):
-        df = pd.DataFrame([x.to_dict() for x in df])
-
-    df['subpath'] = df['subpath'].apply(lambda x: x.strip("/"))
-    if not keep_paths:
-        return df
-
-    orgs_and_pages = {}
-    for i, org_group in df.groupby("source"):
-        org_pages_records = org_group.to_dict(orient="records")
-        keep_pages = set(
-            choose_org_pages(
-                org_pages_records=org_pages_records,
-                keep_paths=keep_paths,
-                max_per_subpath=max_per_subpath,
-            )
-        )
-
-        org_pages = []
-        for page_record in org_pages_records:
-            if page_record['subpath'] in keep_pages:
-                org_pages.append(page_record)
-
-        orgs_and_pages[i] = org_pages
-
-    all_records = []
-    for pages in orgs_and_pages.values():
-        all_records.extend(pages)
-    return pd.DataFrame(all_records)

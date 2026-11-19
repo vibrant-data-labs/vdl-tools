@@ -65,9 +65,6 @@ def summarize_scraped_df(
        Source url to summarization
     """
 
-    # filtered_pages_df = filter_pages(scraped_df, keep_paths=filtering_keep_paths)
-    # filtered_pages_df["text"] = filtered_pages_df["text"].apply(clean_scraped_text)
-
     if not is_combined:
         scraped_df["text"] = scraped_df["text"].apply(clean_scraped_text)
         source_grouper = scraped_df.groupby("source")

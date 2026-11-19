@@ -12,12 +12,12 @@ issues are Linear project P-VIB-2. The vendor benchmark that chose Firecrawl sta
 | `markdown_clean.py` | the text rules: browser chrome out, markers once per page, the cleaner, per-org dedupe and the 8k-token cap; `page_text` per page, `org_text` per org; `CLEANER_VERSION` | D2, wired in by D5 |
 | `site_links.py` | `same_site_paths`: links on the host the page was served from, ahead of `filter_links` | D2, used by D7 |
 | `client.py` | `FirecrawlClient`: `POST /v2/scrape` under the account limits, with retries, the target-versus-vendor failure split, the 402/401 stop, the credit ceiling, `dry_run` and the balance before and after a run | D4, used by D7 |
+| `pipeline.py` | `scrape_websites_firecrawl`: per org, home page, picks, subpages, the last-known-good write into the v2 tables, the run record, `dry_run` and the required credit ceiling | D7 |
 | `validation/` | one-off measurements over the pilot artifacts that the adoption decision rests on | D2, D3, D9 |
 | `tests/` | unit, golden and determinism tests; `fixtures/markdown/` holds real pilot pages; `test_client.py` runs the client on an httpx mock transport | |
 
-Still to come here: the per-org pipeline `scrape_websites_firecrawl` (D7, `pipeline.py`).
-The ORM models for the new tables (D6) go with the other models in
-`shared_tools/database_cache/database_models/`.
+The ORM models for the v2 tables (D6) are with the other models in
+`shared_tools/database_cache/database_models/web_scraping.py`.
 
 ## The client (D4)
 
@@ -106,6 +106,56 @@ pytest vdl_tools/scrape_enrich/scraper/firecrawl/tests
 From a worktree, set `PYTHONPATH` to the worktree root first; the editable install points at
 the main checkout. A rule change that alters any golden output fails the tests until
 `CLEANER_VERSION` is bumped and the files are regenerated with `REGENERATE_GOLDEN=1`.
+
+## The pipeline (D7)
+
+`scrape_websites_firecrawl(urls, credit_ceiling=...)`
+([VIB-59](https://linear.app/vibrant-data-labs/issue/VIB-59)) is the Firecrawl counterpart of
+`scrape_websites_psql`. It returns the same frame, one row per org with `home_url` and
+`combined_text` (null when the org has no summarizable text), plus `text_quality`,
+`last_attempt_result` and the home page's `failure_reason`. It writes only the v2 tables.
+
+```
+python -m vdl_tools.scrape_enrich.scraper.firecrawl.pipeline --urls urls.txt --dry-run
+python -m vdl_tools.scrape_enrich.scraper.firecrawl.pipeline --urls urls.txt --credit-ceiling 500
+```
+
+```
+per org that is due
+  |- fetch the home page ........ one credit when the site answers
+  |- pick subpages .............. same_site_paths on the final host, then filter_links
+  |                               none for a single-page site or a parked, walled or garbled home
+  |- fetch the picks ............ same request profile (Q2)
+  |- write page rows ............ last known good: text columns change only on a good fetch
+  |- combine_org ................ this run's picks only; gone pages out, unknown pages keep their text
+  '- write the org row .......... combined_text, source_keys, text_quality, extractor
+```
+
+| Rule | What the code does |
+|---|---|
+| Due | Never fetched; or good and older than `max_age_days`; or the last attempt was a vendor error; or it failed with no text and `num_errors < max_errors`; or it failed and `retry_failed_after_days` (90) have passed. An `invalid_url` is never due. |
+| Good | A 2xx answer whose page verdict is `ok` or `thin`. Only a good fetch replaces good text; the replaced version goes to `web_pages_history_v2`, one per page, when the markdown changed. |
+| `last_attempt_result` | `ok`; `gone` for 404, 410, a dead host or a parked page; `unknown` for blocked, other HTTP errors, vendor errors and 2xx pages that are walls, garbled or empty; `invalid_url`. |
+| `num_errors` | Reset to 0 by a good fetch and a usable combine; unchanged by a vendor error; otherwise incremented. |
+| Home page not good | The org's existing text stays. `gone` sets `stale_reason = home_gone`; `unknown` changes only the attempt columns. |
+| Subpages | A picked page that is `gone` leaves the text, one that is `unknown` keeps its last good text in it, one no longer picked gets `superseded_at`. |
+| Credits | No run without a `credit_ceiling`. `dry_run=True` reports orgs due, estimated credits at 4.67 per org and the balance. A stop ends the run; an org cut off mid-way writes nothing and is due again. `scrape_runs.credits_used` comes from `client.stats`. |
+
+Three choices the plan leaves open, made here:
+
+- **A parked 2xx page counts as `gone`.** The domain is for sale, so the site is gone in the
+  sense that matters; the org's last good text is kept and marked stale.
+- **No subpages for a parked, walled or garbled home page.** `org_text` gives the org the home
+  page's verdict whatever the subpages say, so the pilot paid for pages that could not change
+  the outcome.
+- **A 2xx page that is not good increments `num_errors`.** Otherwise a site that always
+  answers 200 with a bot wall would be refetched, and billed, on every run.
+
+`tests/test_pipeline.py` drives the pipeline against the fake vendor from the client tests
+and an in-memory SQLite holding only the v2 tables, so a write to the in-house tables fails.
+
+Not done yet: the issue's 50 real orgs end to end. That needs the v2 tables on RDS (the D6 migration is
+not applied; D1 comes first) and about 235 credits.
 
 ## Phase 0 rescore: the production text rules (run 2026-10-30, zero credits)
 
