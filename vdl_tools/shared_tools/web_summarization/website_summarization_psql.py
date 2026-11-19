@@ -21,14 +21,14 @@ from vdl_tools.shared_tools.openai.prompt_response_cache_sql import DEFAULT_MODE
 # Verdicts a scrape can carry that mean "not the organization's own content" —
 # see text_quality.py's module docstring for why these are never summarized
 # rather than summarized-and-flagged.
-_SKIP_SUMMARIZING_VERDICTS = ("parked", "blocked", "garbled", "dead", "empty")
+_SKIP_SUMMARIZING_VERDICTS = ("parked", "blocked", "not_found", "garbled", "dead", "empty")
 
 
 def is_summarizable(text, num_errors: int = 0) -> bool:
     """Whether ``text`` is worth spending an LLM call to describe.
 
     False for a scrape that answered but yielded junk — a parked domain, a
-    bot wall, binary mojibake, nothing at all. Asked to describe one of
+    bot wall, a not-found screen, binary mojibake, nothing at all. Asked to describe one of
     these anyway, the summarizer does not reliably say so: it sometimes
     invents a plausible description from the organization's name instead.
     """

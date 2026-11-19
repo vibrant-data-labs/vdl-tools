@@ -1,5 +1,6 @@
 import hashlib
-from uuid import uuid5, NAMESPACE_URL
+import json
+from uuid import NAMESPACE_URL, uuid5
 
 
 def create_deterministic_md5(text):
@@ -24,3 +25,22 @@ def make_uuid(text: str, namespace_name: str, return_hex=False):
     if return_hex:
         return uuid_obj.hex
     return uuid_obj
+
+
+def create_deterministic_sha256(value):
+    """SHA-256 of ``value`` serialized as canonical JSON (sorted keys, ``str`` fallback).
+
+    Parameters
+    ----------
+    value : Any
+        Strings, numbers, lists, tuples or dicts (nested), or anything whose
+        leaves ``str()`` acceptably. Dict order does not affect the hash.
+
+    Returns
+    -------
+    str
+        64 hex characters.
+    """
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, ensure_ascii=False, default=str).encode()
+    ).hexdigest()

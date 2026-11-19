@@ -18,6 +18,7 @@ from vdl_tools.shared_tools.web_summarization.website_summarization_psql import 
 REAL_PAGE = "Real org text about climate work, long enough to clear the thin threshold. " * 5
 WALL = "This website uses a security service to protect against malicious bots."
 PARKED = "This domain is for sale. Buy this domain today. " * 5
+NOT_FOUND = "Page not found. We can't find the page you were looking for. Go to home page"
 GARBLED = "".join(chr(i % 20 + 1) if i % 5 == 0 else "x" for i in range(500))
 
 
@@ -33,6 +34,7 @@ def test_thin_real_content_is_still_summarizable():
 def test_junk_classes_are_not_summarizable():
     assert not is_summarizable(WALL)
     assert not is_summarizable(PARKED)
+    assert not is_summarizable(NOT_FOUND)
     assert not is_summarizable(GARBLED)
     assert not is_summarizable(None)
     assert not is_summarizable("")

@@ -37,6 +37,10 @@ logger.setLevel(logging.DEBUG)
 from typing import Any, Optional
 
 
+class BulkRequestAborted(RuntimeError):
+    """Abort a bulk run after committing responses that have already completed."""
+
+
 # Why `object()` and not `True`/`False`/`None`?
 #
 # We need to distinguish THREE caller states, not two:
@@ -879,6 +883,8 @@ class PromptResponseCacheSQL():
         try:
             completion = self.get_completion(prompt_str, text, **kwargs)
             return completion, False
+        except BulkRequestAborted:
+            raise
         except Exception as ex:
             logger.error("Error getting completion: %s", ex)
             response = {
@@ -1169,12 +1175,15 @@ class PromptResponseCacheSQL():
         def _api_only(given_id_text):
             """Worker: API call only, no session access. Returns (given_id, text, response_or_err, error_flag)."""
             given_id, text = given_id_text
-            response, error = self.get_completion_catch_error(
-                prompt_str=self.prompt.prompt_str,
-                text=text,
-                return_all=True,
-                **kwargs,
-            )
+            try:
+                response, error = self.get_completion_catch_error(
+                    prompt_str=self.prompt.prompt_str,
+                    text=text,
+                    return_all=True,
+                    **kwargs,
+                )
+            except BulkRequestAborted as abort:
+                return given_id, text, abort, True
             return given_id, text, response, error
 
         if len(unfound_rows) == 0:
@@ -1194,7 +1203,11 @@ class PromptResponseCacheSQL():
                     error_rows: list[dict[str, Any]] = []
                     response_dicts_by_given_id: dict[str, dict] = {}
 
+                    abort_error = None
                     for given_id, text, response, error in results:
+                        if isinstance(response, BulkRequestAborted):
+                            abort_error = response
+                            continue  # Unsent/cancelled inputs remain cache misses.
                         if error:
                             logger.warning("No response text for %s", given_id)
                             error_rows.append(
@@ -1227,6 +1240,8 @@ class PromptResponseCacheSQL():
 
                     res.update(response_dicts_by_given_id)
                     n_run += len(results)
+                    if abort_error is not None:
+                        raise abort_error
                 except KeyboardInterrupt:
                     logger.warning("Received KeyboardInterrupt, returning the currently scraped data...")
                     break

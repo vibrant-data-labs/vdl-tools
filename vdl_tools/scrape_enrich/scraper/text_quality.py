@@ -13,6 +13,7 @@ instead. A squatted domain, a bot wall and binary mojibake all produced
 fabricated summaries before this module was consulted at the summarize step.
 """
 
+from vdl_tools.shared_tools.web_summarization.make_page_text import JOIN_CHARS
 import re
 
 # Parked/for-sale pages answer HTTP but carry no org text. Conservative,
@@ -77,6 +78,22 @@ BOT_WALL_MARKERS = [
 # the conservative end of it.
 WALL_MAX_CHARS = 1000
 
+# Soft 404s: HTTP 200 with a not-found body. The fetcher stores no text for a
+# real 4xx answer, so every not-found screen in the cache answered 200 -- nearly
+# always a stale deep path on a live domain (``example.org/foundation.html``).
+# Profiled 2026-10-30 over 135k cached home pages: 84 carry one of these
+# phrases; of the 65 under WALL_MAX_CHARS, 41 of 42 sampled were not-found
+# screens (the one real page lists "Page Not Found" in a site-builder menu).
+# Above it the hits are mostly real pages: a blog widget's "No Results Found ...
+# the page you requested", a template menu with a "404 Error" link.
+NOT_FOUND_MARKERS = [
+    "page not found", "404 not found", "error 404", "404 error",
+    "page you are looking for", "page you're looking for", "page you requested",
+    "we couldn't find the page", "page cannot be found", "page can't be found",
+    "page could not be found", "page doesn't exist",
+    "nothing was found at this location", "requested url was not found",
+]
+
 
 def looks_like_garbled_text(text) -> bool:
     """Whether ``text`` is binary/mojibake rather than real page content."""
@@ -107,6 +124,19 @@ def looks_like_bot_wall(text) -> bool:
     return any(marker in lowered for marker in BOT_WALL_MARKERS)
 
 
+def _is_not_found_screen(text: str) -> bool:
+    """Whether the site's first page is a soft 404 and nothing real follows it.
+
+    Judged on the first ``URL:``/``TEXT:`` block of the combined text, with the
+    length gate on the whole: a brief real home page followed by a not-found
+    subpage is the organization's page (7 of 25 sampled short combined texts,
+    2026-10-30), while a not-found home page with real subpages behind it is a
+    site with content.
+    """
+    if len(text) >= WALL_MAX_CHARS:
+        return False
+    first_page = text.split(JOIN_CHARS, 1)[0].lower()
+    return any(marker in first_page for marker in NOT_FOUND_MARKERS)
 def looks_parked(text) -> bool:
     """Whether ``text`` is a registrar's parked or for-sale page."""
     lowered = str(text).lower()
@@ -116,7 +146,7 @@ def looks_parked(text) -> bool:
 
 
 def classify_text_quality(text, num_errors: int = 0) -> str:
-    """ok | thin | parked | blocked | garbled | dead | empty.
+    """ok | thin | parked | blocked | not_found | garbled | dead | empty.
 
     Anything not "ok" or "thin" needs a human, a re-scrape, or a better source
     before the text feeds an LLM.
@@ -130,6 +160,8 @@ def classify_text_quality(text, num_errors: int = 0) -> str:
         return "parked"
     if looks_like_bot_wall(stripped):
         return "blocked"
+    if _is_not_found_screen(stripped):
+        return "not_found"
     if len(stripped) < THIN_TEXT_CHARS:
         return "thin"
     return "ok"
