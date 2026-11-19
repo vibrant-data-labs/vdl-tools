@@ -124,6 +124,10 @@ def add_venture_backed_flag(
     grant_only = df[id_col].isin(grant_only_uuids)
     is_for_profit = org_types.eq(target)
 
+    # KNOWN ISSUE (climate-landscape#74): the grant-only rule trusts the org-type label. Public
+    # agencies mistyped For Profit (e.g. Kings River Water Quality Coalition, Whatcom
+    # Conservation District) have only grant rounds, so they come out venture-backed here.
+    # Spot-check rows with venture_backed_reason == 'grant-only + for-profit'.
     df[FLAG_COL] = (has_venture | (grant_only & is_for_profit)).astype(bool)
     # The two rules cannot both fire (grant-only orgs have no venture round)
     df[REASON_COL] = ''
