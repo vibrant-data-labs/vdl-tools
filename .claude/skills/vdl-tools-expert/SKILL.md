@@ -96,6 +96,31 @@ sibling repos under `/Users/ericberlow/VDL/` for callers. Project repos referenc
 vdl-tools changes by PR number in their commit messages (e.g. "vdl-tools #191") —
 keep doing that so data artifacts can be traced to the code that made them.
 
+### 7. Publishing a static page to a `*.vibrantdatalabs.org` address
+Full comparison and the proposal for one unified publisher: `docs/PUBLISHING_SITES.md`.
+
+**Default: `vdl_tools.marimo_publish`** (#181), as in philanthropic-prospects' `publish_search.py`:
+`credentials` → `domain --hostname` (finds the `*.vibrantdatalabs.org` cert) → `provision` (CloudFormation:
+private bucket, CloudFront, basic-auth login) → `deploy --src site/ --apply` (no-cache headers + invalidation).
+Needs `AWS_DEFAULT_REGION=us-east-1`. Eric adds the CNAME in Cloudflare by hand, **DNS-only**. It is always
+password-protected; there is no public mode.
+
+**Older public path: `py2mappr.publish`** (public S3 website bucket → CloudFront → **proxied** Cloudflare
+CNAME), used by climate-health-taxonomy and climate-finance-data-infrastructure on 2026-11-18.
+`publisher.s3(bucket)` uploads fine. Traps:
+
+- **`cloudfront_worker` crashes** (`KeyError: 'Items'`) because the account has distributions
+  with no custom domain; it also sets `redirect-to-https`, which **loops behind Cloudflare's
+  proxy** — use `allow-all`. Create the distribution with boto3 directly instead.
+  TODO(skill-audit): fix upstream in `py2mappr/publish/cloudfront_worker.py`.
+- **`config.ini [aws] acm_certificate` is the `*.openmappr.org` cert**, not vibrantdatalabs.
+  Look the cert up in ACM (us-east-1) by `DomainName == "*.vibrantdatalabs.org"`.
+- **`config.ini [cloudflare] api_key` is invalid** (401 as of 2026-11-18). No current site relies
+  on it — every CNAME has been added by hand in the Cloudflare dashboard.
+- `s3_worker` maps content types by extension and raises `KeyError` for anything not in its
+  small table (html, json, png, jpg, gif, svg, sh) — e.g. `.css`, `.js`, `.ico`, `.webp`.
+- CloudFront TTL is ~2–4 min, so re-uploads show up without an invalidation.
+
 ## Where things live (top-level map)
 
 | Area | Module |
